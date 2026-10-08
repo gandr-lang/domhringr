@@ -1,0 +1,79 @@
+#:tombi toml-version = "v1.1.0"
+#:schema https://mise.jdx.dev/schema/mise.json
+# The published mise schema omits several live `settings` keys; strict mode
+# would reject them.
+#:tombi schema.strict = false
+
+min_version = "2026.10.3"
+
+[settings]
+activate_aggressive = true
+experimental = true
+env_shell_expand = true
+minimum_release_age = "1d"
+lockfile = true
+# Rust resolves through mise's rust backend: `rust-toolchain.toml` stays the one
+# channel pin, mise installs it through rustup, sets RUSTUP_TOOLCHAIN from it,
+# and places the rustup proxy dir among its own tool paths, after the shims and
+# ahead of the inherited PATH. No project `_.path` entry: a dir that config puts
+# on PATH sits ahead of every mise tool, and a distribution rustup lives in
+# /usr/bin, which would shadow every pin.
+idiomatic_version_file_enable_tools = ["rust"]
+
+[settings.cargo]
+binstall = true
+# mise's built-in binstall: fetches crate binaries itself, no external
+# cargo-binstall needed — without it, CI falls back to `cargo install`
+# source builds for every cargo pin.
+binstall_native = true
+# mise disables cargo-quickinstall by default (jdx/mise PR 10923), so pins
+# without crate-author binstall artifacts compile from source (~20 min CI
+# lanes). Owner-accepted trust boundary: quickinstall's third-party binaries.
+binstall_quickinstall = true
+
+[settings.npm]
+package_manager = "aube"
+
+[task_config]
+includes = [".config/mise/tasks"]
+
+# Formatter entries and their pins move together; missing commands make treefmt
+# fail at startup. Agent/MCP tools remain project-local rather than accumulated.
+# Every tool that publishes cross-platform release binaries installs through
+# the github backend: a cargo: pin is a source build the moment binstall
+# resolution misses, and that hazard recurs with every upstream default
+# change.
+[tools]
+# Release-only rendering; formatting never reads Git history.
+"github:orhun/git-cliff" = "2.14.2"
+"cargo:dylint-link" = "6.0.4"
+"github:aubepkg/aube" = "2.2.4"
+"github:crate-ci/typos" = "v1.50.0"
+"github:max-sixty/worktrunk" = "v0.75.0"
+"github:nextest-rs/nextest" = "cargo-nextest-0.9.143"
+"github:numtide/treefmt" = "2.5.0"
+"github:j178/prek" = "v0.5.0"
+"github:koalaman/shellcheck" = "0.11.0"
+"github:rvben/rumdl" = "0.2.62"
+"github:tombi-toml/tombi" = "1.5.0"
+# #53: workflow and composite-action lint belongs to the treefmt wall.
+"github:zizmorcore/zizmor" = "1.30.1"
+"npm:@commitlint/cli" = "21.2.2"
+"npm:oxfmt" = "0.65.0"
+node = "26.8.1"
+
+# Dylint driver and linker; both match the library's `dylint_linting` and
+# `dylint_testing` versions. A library producer owns those dependencies;
+# a Git-library consumer follows the versions at its pinned source revision.
+# The dylint release ships Linux-only binaries, so the pins stay cargo: for
+# macOS workstations; CI's native binstall fetches the Linux assets.
+[tools."cargo:cargo-dylint"]
+version = "6.0.4"
+
+# sizelint publishes no release binaries; the one remaining source build.
+[tools."cargo:sizelint"]
+version = "0.1.5"
+
+# Local workflow runner, so a workflow change is testable without a push.
+[tools."github:nektos/act"]
+version = "0.2.89"

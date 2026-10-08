@@ -1,0 +1,124 @@
+#:tombi toml-version = "v1.0.0"
+#:schema https://mise.jdx.dev/schema/mise-task.json
+
+# The wall. Every `check:*` task is one gate; `check` fans out to all of them.
+# A gate enters this file when a weed appears that it would have caught, with
+# the reason beside it, and never pre-emptively.
+
+[check]
+description = "Every gate"
+depends = ["check:*"]
+
+["check:fmt"]
+description = "rustfmt, unchanged"
+run = "cargo fmt --all --check"
+
+["check:clippy"]
+description = "The clippy half of the lint wall"
+run = "cargo clippy --workspace --all-targets --locked"
+
+# The compiler-plugin half of the lint wall, from the pinned Git policy
+# source: specification presence, adequacy grammar, nominal signature
+# boundaries, absence signatures, primitive arithmetic, transparent layout,
+# recursion and ownership cycles. `option_signature` and
+# `primitive_arithmetic` are opt-in upstream and selected by `cfg_attr` on
+# each crate root (`lib.rs`, the two binaries, the integration test); the
+# absence predicate recognizes `Maybe` by a diagnostic item the shape crate
+# registers only under `quenchant_compiler_policy`, which must reach every
+# crate in the graph, hence the encoded rustflags rather than Dylint's own
+# cfg. Incremental compilation is off because the driver reads whole-crate
+# HIR. A toolchain bump invalidates the driver: `rm -rf ~/.dylint_drivers
+# target/dylint` before the wall runs again.
+["check:dylint"]
+description = "quenchant's policy library over the workspace"
+env.CARGO_INCREMENTAL = "0"
+# The plugin links through dylint-link, which renames the artifact with the
+# toolchain suffix Dylint loads by; Cargo's linker variable is per target.
+env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "dylint-link"
+env.CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "dylint-link"
+env.CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER = "dylint-link"
+env.CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER = "dylint-link"
+env.CARGO_ENCODED_RUSTFLAGS = "{% if env.CARGO_ENCODED_RUSTFLAGS is defined %}{% set flags = env.CARGO_ENCODED_RUSTFLAGS %}{% else %}{% set flags = env.RUSTFLAGS | default(value='') | trim | regex_replace(pattern='\\\\s+', rep='\u001f') %}{% endif %}{{ flags }}{% if flags %}\u001f{% endif %}--cfg=quenchant_compiler_policy"
+run = "cargo dylint --lib quenchant_dylints --no-deps -- --workspace --all-targets"
+
+# External workflow consumers use one full revision in Dylint metadata for
+# both the compiler plugin and this executable. Cargo's installation record
+# tracks that revision; --locked uses the source repository's lockfile.
+# A workspace-local install root prevents another consumer's install from
+# replacing the executable between the dependency task and either gate.
+["workflow:install"]
+description = "Install the gate binary at the Dylint metadata revision"
+tools.jq = "1.8.1"
+run = '''
+cargo install --git https://github.com/gandr-lang/quenchant --rev "$(cargo metadata --manifest-path Cargo.toml --no-deps --format-version 1 | jq -er '.metadata.dylint.libraries | map(select(.git == "https://github.com/gandr-lang/quenchant" and .pattern == "crates/quenchant-dylints")) | if length == 1 then .[0].rev | select(type == "string" and test("^[0-9a-f]{40}$")) else error("expected one pinned quenchant library") end')" --locked --bin quenchant-gates --root target/workflow-tools quenchant-gates
+'''
+
+["check:anodized"]
+description = "Report the resolved specification state of the consumer workspace"
+depends = ["workflow:install"]
+env.PATH = "{{ config_root }}/target/workflow-tools/bin:{{ env.PATH }}"
+run = "quenchant-gates anodized --manifest-path Cargo.toml"
+
+["check:witnesses"]
+description = "Resolve adequacy witnesses in the consumer test inventory"
+depends = ["workflow:install"]
+env.PATH = "{{ config_root }}/target/workflow-tools/bin:{{ env.PATH }}"
+run = "quenchant-gates witnesses --manifest-path Cargo.toml"
+
+# `RUSTDOCFLAGS="-D warnings"` makes every rustdoc lint fatal, so a broken
+# intra-doc link — the vocabulary tables are rustdoc the types link into — is a
+# gate failure, not a warning. The clippy wall's `missing_docs_in_private_items`
+# supplies the missing-docs half; this gate supplies the rustdoc-lint half.
+["check:doc"]
+description = "Private-item rustdoc with every rustdoc lint denied"
+env.RUSTDOCFLAGS = "-D warnings"
+run = "cargo doc --workspace --locked --no-deps --document-private-items"
+
+["check:typos"]
+description = "Spelling"
+run = "typos"
+
+["check:tests"]
+description = "Unit and integration tests over every target"
+run = "cargo nextest run --workspace --locked"
+
+# Git writes conflict markers as EXACTLY seven marker characters followed by
+# end-of-line or whitespace plus a label (`<<<<<<< HEAD`, bare `=======`).
+# Anchoring on `([[:space:]]|$)` keeps real markers matched while rejecting
+# longer decorative runs -- setext underlines and `====` delimiter rules are
+# not conflicts. The `:/` pathspec scopes the scan to tracked files under the
+# repository root whatever directory the hook runs from.
+["check:conflict-markers"]
+description = "Detect unresolved Git conflict markers in tracked files"
+run = """
+if git grep -nIE '^(<<<<<<<|=======|>>>>>>>|\\|\\|\\|\\|\\|\\|\\|)([[:space:]]|$)' -- ':/'; then
+  echo 'conflict marker check FAILED: unresolved Git conflict markers found' >&2
+  exit 1
+fi
+echo 'conflict marker check OK: no conflict markers in tracked files'
+"""
+
+# Workflow tools are build-time policy, never package dependencies. Check
+# Cargo's resolved metadata, including renamed and transitive dependencies,
+# so a future publishable package cannot acquire an unpublished tool edge.
+["check:publish"]
+description = "Keep unpublished workflow tools outside the Cargo package graph"
+tools.jq = "1.8.1"
+run = '''
+cargo metadata --manifest-path Cargo.toml --locked --format-version 1 | jq -se 'length == 1 and (.[0] | (.workspace_members | length > 0) and (.packages | length > 0) and all(.packages[]; (.name | test("^quenchant-(dylints|gates)$") | not) and all(.dependencies[]; .name | test("^quenchant-(dylints|gates)$") | not)))'
+'''
+
+["check:hooks"]
+description = "Validate the declared hook floor"
+run = "prek validate-config prek.toml"
+
+["check:format"]
+description = "Shared formatter and configuration wall"
+run = "treefmt --ci"
+
+# npm sidecars and mise.lock move together; a warm install can hide a digest
+# mismatch that fails cold CI bootstrap. --locked refuses that mismatch.
+# Name the npm pins so a workstation does not install unrelated global tools.
+["check:lockfile"]
+description = "Check npm-backed pins install from the committed lockfile"
+run = "mise install --locked npm:oxfmt npm:@commitlint/cli"

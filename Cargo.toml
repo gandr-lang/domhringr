@@ -1,0 +1,207 @@
+[workspace]
+resolver = "3"
+members = ["crates/domhringr"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90.0"
+repository = "https://github.com/gandr-lang/domhringr"
+license = "Apache-2.0 WITH LLVM-exception"
+publish = false
+
+# One table per dependency: what it is, `# features:` with the need behind
+# each enabled feature, `# consumers:`. Defaults are always off; a feature is
+# on only because a build or a test failed without it. Empty until the first
+# crate needs one.
+[workspace.dependencies]
+
+# The lint wall. Every group is denied at priority -1 so an individual `allow`
+# below it wins; every allow states the class it exempts. A lint leaves this
+# wall only with the reason recorded beside it.
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+
+# nursery
+missing_const_for_fn = "allow"
+useless_let_if_seq = "allow"
+
+# pedantic
+similar_names = "allow"
+too_many_lines = "allow"
+uninlined_format_args = "allow"
+
+# style
+needless_raw_string_hashes = "allow"
+needless_return = "allow"
+
+# restriction
+alloc_instead_of_core = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+arithmetic_side_effects = "deny"
+as_conversions = "deny"
+as_pointer_underscore = "deny"
+# Wire fields use explicit little-endian conversions, keeping bytes identical
+# across host and target byte orders. Host-local byte views for checksums or
+# caches use the same conversions instead of `to_ne_bytes` / `from_ne_bytes`;
+# this can require a byte swap on a big-endian host.
+# Reversal: a required external byte contract specifies big-endian or native
+# byte order; revisit `big_endian_bytes` or `host_endian_bytes` respectively.
+big_endian_bytes = "deny"
+cfg_not_test = "deny"
+clone_on_ref_ptr = "deny"
+create_dir = "deny"
+dbg_macro = "deny"
+decimal_literal_representation = "deny"
+default_numeric_fallback = "deny"
+default_union_representation = "deny"
+deref_by_slicing = "deny"
+disallowed_script_idents = "deny"
+doc_include_without_cfg = "deny"
+doc_paragraphs_missing_punctuation = "deny"
+empty_drop = "deny"
+empty_enum_variants_with_brackets = "deny"
+empty_structs_with_brackets = "deny"
+error_impl_error = "deny"
+exhaustive_enums = "allow"
+exhaustive_structs = "allow"
+exit = "deny"
+expect_used = "deny"
+field_scoped_visibility_modifiers = "deny"
+filetype_is_file = "deny"
+float_cmp_const = "deny"
+fn_to_numeric_cast_any = "deny"
+get_unwrap = "deny"
+host_endian_bytes = "deny"
+if_then_some_else_none = "deny"
+impl_trait_in_params = "deny"
+indexing_slicing = "deny"
+infinite_loop = "deny"
+inline_trait_bounds = "deny"
+integer_division = "deny"
+iter_over_hash_type = "deny"
+large_include_file = "deny"
+let_underscore_must_use = "deny"
+lossy_float_literal = "deny"
+map_err_ignore = "deny"
+map_with_unused_argument_over_ranges = "deny"
+mem_forget = "deny"
+missing_assert_message = "deny"
+missing_asserts_for_indexing = "deny"
+missing_docs_in_private_items = "deny"
+missing_inline_in_public_items = "deny"
+mixed_read_write_in_expression = "deny"
+mod_module_files = "deny"
+multiple_unsafe_ops_per_block = "deny"
+mutex_atomic = "deny"
+mutex_integer = "deny"
+non_zero_suggestions = "deny"
+panic = "deny"
+pathbuf_init_then_push = "deny"
+pattern_type_mismatch = "deny"
+precedence_bits = "deny"
+print_stderr = "deny"
+print_stdout = "deny"
+rc_buffer = "deny"
+rc_mutex = "deny"
+redundant_test_prefix = "deny"
+redundant_type_annotations = "deny"
+renamed_function_params = "deny"
+return_and_then = "deny"
+same_name_method = "deny"
+# A block statement keeps its semicolon inside the block.
+# `semicolon_outside_block` together with the pedantic
+# `semicolon_if_nothing_returned` leaves a multi-line block statement whose
+# value is unit with no legal form, and rustfmt produces that form whenever
+# the block's expression does not fit one line. The inside form is the one
+# fixed point both lints and rustfmt agree on.
+semicolon_inside_block = "deny"
+# Shadowing is preferred without exception, so all three shadow lints stay off.
+# `shadow_unrelated` and `shadow_reuse` misfire in practice; `shadow_same` bars
+# only rebinding a value to itself, which the preference permits. All are
+# allowed by default. Reversal: the owner withdraws the preference, and all
+# three return together with the re-binding rule.
+single_char_lifetime_names = "deny"
+std_instead_of_alloc = "deny"
+std_instead_of_core = "deny"
+str_to_string = "deny"
+string_add = "deny"
+string_lit_chars_any = "deny"
+string_slice = "deny"
+suspicious_xor_used_as_pow = "deny"
+tests_outside_test_module = "deny"
+todo = "deny"
+undocumented_unsafe_blocks = "deny"
+unimplemented = "deny"
+unnecessary_safety_comment = "deny"
+unnecessary_self_imports = "deny"
+unreachable = "deny"
+unused_result_ok = "deny"
+unused_trait_names = "deny"
+unwrap_in_result = "deny"
+unwrap_used = "deny"
+use_debug = "deny"
+verbose_file_reads = "deny"
+
+[workspace.lints.rust]
+deprecated_safe = "deny"
+future_incompatible = "deny"
+keyword_idents = "deny"
+let_underscore = "deny"
+nonstandard_style = "deny"
+refining_impl_trait = "deny"
+rust_2018_compatibility = "deny"
+rust_2018_idioms = "deny"
+rust_2021_compatibility = "deny"
+rust_2024_compatibility = "deny"
+# The policy library's lint-selection cfg: `cfg_attr(dylint_lib = …)` on each
+# crate root selects the opt-in quenchant lints under Dylint and is inert
+# everywhere else.
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(dylint_lib, values("quenchant_dylints"))'] }
+unknown_or_malformed_diagnostic_attributes = "deny"
+# Nightly-creep guard: consumer crates have no feature exemption. A library
+# producer scopes its rustc_private expectation to the compiler-plugin crate.
+unstable_features = "deny"
+unused = "deny"
+warnings = "deny"
+
+[workspace.lints.rustdoc]
+all = { level = "deny", priority = -1 }
+# Module and item docs intentionally cross-link to private implementation items;
+# docs are always built with `--document-private-items`, so those targets
+# resolve. Without this allow, the lint rejects that deliberate doc style.
+private_intra_doc_links = "allow"
+
+# The compiler-plugin half of the lint wall: specification presence, adequacy
+# grammar, nominal signature boundaries, transparent layout, recursion and
+# ownership cycles. Loaded from the pinned Git source by `mise run check:dylint`.
+[[workspace.metadata.dylint.libraries]]
+git = "https://github.com/gandr-lang/quenchant"
+rev = "111850988c96b7b33ee898f54c017ca645243e7f"
+pattern = "crates/quenchant-dylints"
+
+# The everyday optimized build. Size-optimized and nothing else, so each crate
+# compiles independently in parallel; the whole-program work lives in `dist`.
+[profile.release]
+opt-level = "s"
+
+# The shipped binary: `cargo build-dist` (`.cargo/config.toml`), which also
+# applies `.cargo/config.dist.toml` (a size-optimized std, immediate abort on
+# panic, fat LTO at link). Serial by construction: one codegen unit per crate
+# and one fat LTO per binary, each re-optimizing the whole graph.
+[profile.dist]
+inherits = "release"
+opt-level = 3
+strip = true
+lto = "fat"
+panic = "abort"
+codegen-units = 1

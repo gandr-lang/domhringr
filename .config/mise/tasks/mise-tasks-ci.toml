@@ -1,0 +1,25 @@
+#:tombi toml-version = "v1.0.0"
+#:schema https://mise.jdx.dev/schema/mise-task.json
+
+# #44: Actions is disabled. Run the workflow, not a shell approximation of it.
+# The installed-CLI lane builds committed HEAD, so commit changes before this
+# gate. A linked worktree's .git file points outside act's copied workspace;
+# a disposable full clone preserves history and keeps generated install pins
+# and container paths out of the developer checkout. The clone is removed on
+# either success or failure. .actrc supplies the vendored native runner image.
+# act does not exercise GitHub's merge queue, permission/allowlist enforcement,
+# cross-run artifact delivery or branch-scoped promotion into main's caches.
+# #53: act cannot execute macOS runners. That lane is retained for hosted CI;
+# the local gate runs every Linux check in the same workflow. Forward flags
+# to act for runner-image selection without changing the committed workflow.
+["ci:act"]
+description = "Run the committed CI workflow locally, including installed-CLI lifecycle"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+git clone --quiet --local --no-hardlinks -- "{{config_root}}" "$scratch/checkout"
+cd "$scratch/checkout"
+act workflow_dispatch --workflows .github/workflows/ci.yml "$@"
+'''

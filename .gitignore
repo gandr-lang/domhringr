@@ -1,0 +1,7 @@
+/target
+.mise.local.toml
+mise.local.lock
+/.rumdl_cache
+# A global ignore may hide `.cargo`; the build aliases and dist config live
+# there and are part of the repository.
+!/.cargo/

@@ -1,0 +1,19 @@
+#:tombi toml-version = "v1.0.0"
+
+[unstable]
+build-std = []
+build-std-features = ["optimize_for_size"]
+profile-rustflags = true
+panic-immediate-abort = true
+
+[profile.dist]
+panic = "immediate-abort"
+rustflags = [
+  # "-Clinker-plugin-lto",
+  "-Cembed-bitcode=yes",
+  "-Clto=fat",
+  "-Zdylib-lto",
+  "-Zfmt-debug=none",
+  "-Zlocation-detail=none",
+  # "-Zvirtual-function-elimination",
+]

@@ -1,0 +1,538 @@
+# <critical>
+# MUST preserve anchor-first CI: maximal sharing, no copied orchestration.
+# New functionality MUST reuse template anchors or add anchors for likely reuse.
+# MUST parameterize differences; performance exceptions require measured evidence.
+# Share exceptional logic through actions; preserve parallelism, caches, and gates.
+# </critical>
+name: CI
+
+on:
+  pull_request: {}
+  workflow_dispatch: {}
+  # The push to main runs no checks: the merge-group run already tested this
+  # exact commit, so a rerun could only disagree through its environment. It
+  # promotes caches instead. Actions caches are restorable only from the run's
+  # own branch, its base, and the default branch, so a merge-group run, on an
+  # ephemeral `gh-readonly-queue/*` ref, writes none that later runs can read.
+  # A queue lane whose cache missed uploads its build state as an artifact,
+  # and the push run's promote jobs save it under main's cache keys.
+  push:
+    branches: [main]
+  merge_group: {}
+
+permissions:
+  contents: read
+
+# pull_request only: cancelling a push-to-main run would cancel the promotion
+# of the caches PR branches read from, mid-merge.
+# merge_group is naturally exempt either way: github.ref there is the
+# queue's own per-entry temporary ref (refs/heads/gh-readonly-queue/...), so
+# each queue entry already gets a distinct concurrency group and can never
+# collide with, or be cancelled by, another one.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+  # Opt back into quickinstall (jdx/mise PR 10923 flipped the default off) and
+  # mise's built-in binstall, in env form so both bind regardless of
+  # settings-file scoping.
+  MISE_CARGO_BINSTALL_QUICKINSTALL: "true"
+  MISE_CARGO_BINSTALL_NATIVE: "true"
+  # CI installs every job tool inside mise-action; skip only workstation tools.
+  # The image checks this list against its own at build time.
+  MISE_DISABLE_TOOLS: "github:orhun/git-cliff,github:max-sixty/worktrunk,github:j178/prek,github:nektos/act"
+  # The Linux image switch: empty selects the bare-runner bootstrap; any other
+  # value selects the image, and every run then pulls the pin-file tag of its
+  # own checkout. A tag that is not published yet is built inside the run that
+  # first needs it, and the image jobs wait for it.
+  DOMHRINGR_CI_IMAGE: ${{ vars.DOMHRINGR_CI_IMAGE }}
+
+jobs:
+  # Definitions only: aliases run in each consuming job's context.
+  template:
+    if: false
+    needs: &rust-needs [changes, ci-image-ref]
+    runs-on: &linux ubuntu-latest
+    # Private-GHCR consumers need package reads on the job; the workflow floor
+    # stays `contents: read` for every job that pulls no image.
+    permissions: &image-read-permissions
+      contents: read
+      packages: read
+    steps:
+      # Checkout stays shallow except where a gate needs history.
+      - &git-checkout
+        name: git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ env.CI_FETCH_DEPTH || '1' }}
+      - &trust-workspace
+        name: trust the workspace for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # Inside the CI image the toolchain is baked; only the caches run. A
+      # lane off the image's platform overrides the switch: no container runs
+      # there whatever the repository variable says, so its toolchain install
+      # is unconditional.
+      #
+      # Cache writing belongs to the push run's promote jobs, and only once
+      # they have downloaded the landing's build state; every other lane
+      # restores. A promote job that found no state skips the setup.
+      - &setup-rust
+        id: setup-rust
+        name: setup rust
+        if: ${{ env.CI_BUILD_STATE == '' || hashFiles('build-state-*.tar') != '' }}
+        uses: ./.github/actions/setup-rust # zizmor: ignore[self-repository]
+        with:
+          install-toolchain: ${{ env.CI_INSTALL_TOOLCHAIN || needs.ci-image-ref.outputs.ref == '' }}
+          cache-save: ${{ hashFiles('build-state-*.tar') != '' }}
+          # Keeping the workspace crates in the cache lets cargo's fingerprints
+          # no-op the unchanged ones on restore.
+          cache-workspace-crates: true
+      # Install the whole CI subset in the cached setup step: later mise
+      # auto-installs otherwise escape that cache.
+      - &install-policy-tools
+        name: install mise-managed policy tools
+        if: &without-image ${{ needs.ci-image-ref.outputs.ref == '' || env.CI_INSTALL_TOOLCHAIN == 'true' }}
+        # The pinned mise must read mise.lock's format version 2; an older one
+        # warns and resolves every tool unlocked. The CI image parses this
+        # step for the version it bakes, so the two cannot drift.
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.10.3
+          cache: false
+      # Policy caches never use a restore prefix: Cargo can consider a library
+      # from another Git revision fresh. The metadata revision is in Cargo.toml.
+      # Save inside the job, before rust-cache prunes target/ at post-job time.
+      - &restore-dylint-drivers
+        name: restore Dylint drivers
+        id: dylint-drivers-restore
+        if: *without-image
+        uses: &cache-restore actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &dylint-drivers ~/.dylint_drivers
+          key: dylint-drivers-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'mise.toml', 'mise.lock') }}
+      - &restore-dylint-library
+        name: restore Dylint library
+        id: dylint-library-restore
+        uses: *cache-restore
+        with:
+          path: &dylint-library target/dylint
+          key: dylint-library-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'mise.toml', 'mise.lock', 'Cargo.toml', 'Cargo.lock') }}
+      - &save-dylint-library
+        name: save Dylint library
+        if: ${{ hashFiles('build-state-*.tar') != '' && steps.dylint-library-restore.outputs.cache-hit != 'true' }}
+        uses: &cache-save actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *dylint-library
+          key: ${{ steps.dylint-library-restore.outputs.cache-primary-key }}
+      - &save-dylint-drivers
+        name: save Dylint drivers
+        if: &promote-drivers ${{ hashFiles('dylint-drivers.tar') != '' && steps.dylint-drivers-restore.outputs.cache-hit != 'true' }}
+        uses: *cache-save
+        with:
+          path: *dylint-drivers
+          key: ${{ steps.dylint-drivers-restore.outputs.cache-primary-key }}
+      # Every lane's nextest `ci` profile writes the same path; the artifact is
+      # named for the runner, so the lanes need no per-job report settings.
+      - &upload-test-report
+        name: upload test report
+        if: always()
+        continue-on-error: true
+        uses: &upload-artifact actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-${{ runner.os }}-${{ runner.arch }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+      # A merge-group lane whose cache missed hands its build state to main as
+      # a tar, uploaded unarchived: an artifact's own zip keeps neither file
+      # modes nor mtimes, and Cargo reuses nothing without both. An unarchived
+      # artifact is named for its file, so each lane's tar carries its job id.
+      # The tar sits in the workspace, since Git Bash's tar reads `D:\…` as a
+      # remote host, and its presence is what the later steps test.
+      - &archive-build-state
+        name: archive build state
+        if: ${{ github.event_name == 'merge_group' && steps.setup-rust.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: tar -cf "build-state-$GITHUB_JOB.tar" target
+      - &upload-build-state
+        name: upload build state
+        if: ${{ hashFiles('build-state-*.tar') != '' }}
+        uses: *upload-artifact
+        with:
+          path: build-state-${{ github.job }}.tar
+          name: build-state-${{ github.job }}
+          if-no-files-found: error
+          retention-days: 1
+      # The push run's side. Only this workflow's merge-group runs are trusted
+      # producers: GitHub sets the event, and only a pull request the owner
+      # queued reaches the queue.
+      - &download-build-state
+        name: download the landing's build state
+        if: ${{ contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), format('build-state-{0}', env.CI_BUILD_STATE)) }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: build-state-${{ env.CI_BUILD_STATE }}
+          run-id: ${{ needs.build-state.outputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - &unpack-build-state
+        name: unpack build state
+        if: &state-found ${{ hashFiles('build-state-*.tar') != '' }}
+        shell: bash
+        run: tar -xf "build-state-$CI_BUILD_STATE.tar"
+      # The dependency cache also holds Cargo's registry; this fills it.
+      - &fetch-dependencies
+        name: fetch locked dependencies
+        if: *state-found
+        run: cargo fetch --locked
+
+  # Always trigger the workflow: a skipped workflow supplies no required
+  # check, whereas a skipped job succeeds. Formatting sees docs-only changes.
+  changes:
+    name: detect changed-file categories
+    if: &not-push ${{ !cancelled() && !failure() && github.event_name != 'push' }}
+    runs-on: *linux
+    outputs:
+      # Missing bases and failed fetches/diffs force Rust checks, never skip
+      # them. The queue always checks its complete merge result.
+      rust: ${{ github.event_name != 'pull_request' || steps.fetch.outcome != 'success' || steps.filter.outcome != 'success' || steps.filter.outputs.rust == 'true' }}
+    env:
+      CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+    steps:
+      - *git-checkout
+      - id: fetch
+        name: fetch the comparison tree
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        run: git fetch --depth=1 origin "$CI_BASE_SHA"
+      - id: filter
+        name: filter changed paths
+        if: ${{ github.event_name == 'pull_request' && steps.fetch.outcome == 'success' }}
+        continue-on-error: true
+        # One pipeline, no shell control flow or third-party filter action.
+        # NUL framing preserves filenames; no-renames retains source deletions.
+        # pipefail makes a failed diff distinguishable from an empty diff.
+        shell: bash
+        run: >-
+          git diff --no-renames --name-only -z "$CI_BASE_SHA" HEAD |
+          jq -rRs '"rust=" + (split("\u0000") | any(length > 0 and ((endswith(".md") or startswith("docs/") or startswith("LICENSE") or . == ".gitignore") | not)) | tostring)'
+          >> "$GITHUB_OUTPUT"
+
+  # Finds the pin-file tag of this checkout and whether it is published. A pull
+  # request from a fork cannot publish with its read-only token, so a missing
+  # tag there selects the bare runner instead of a build. Only the registry's
+  # `manifest unknown` reads as missing; any other lookup error fails the job,
+  # which fails the image reference rather than rebuilding.
+  ci-image-tag:
+    name: find the CI image for this checkout
+    runs-on: *linux
+    permissions: *image-read-permissions
+    outputs:
+      ref: ${{ steps.pin_tag.outputs.tag != '' && (steps.lookup.outputs.found == 'true' || !github.event.pull_request.head.repo.fork) && format('ghcr.io/gandr-lang/domhringr-ci:{0}', steps.pin_tag.outputs.tag) || '' }}
+      build: ${{ steps.pin_tag.outputs.tag != '' && steps.lookup.outputs.found == 'false' && !github.event.pull_request.head.repo.fork }}
+    steps:
+      - *git-checkout
+      - id: pin_tag
+        name: compute the pin-file image tag
+        if: ${{ env.DOMHRINGR_CI_IMAGE != '' }}
+        shell: bash
+        run: .github/docker/image-tag.sh >> "$GITHUB_OUTPUT"
+      - name: log in to GHCR
+        if: &has-tag ${{ steps.pin_tag.outputs.tag != '' }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: lookup
+        name: look up the published image
+        if: *has-tag
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ steps.pin_tag.outputs.tag }}
+        run: |
+          if error=$(docker manifest inspect "ghcr.io/gandr-lang/domhringr-ci:${IMAGE_TAG}" 2>&1 > /dev/null); then
+            echo found=true >> "$GITHUB_OUTPUT"
+          elif [[ $error == *"manifest unknown"* ]]; then
+            echo found=false >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n' "$error" >&2
+            exit 1
+          fi
+
+  # Builds and publishes the missing tag with the image workflow itself.
+  ci-image:
+    name: build the missing CI image
+    needs: ci-image-tag
+    if: ${{ needs.ci-image-tag.outputs.build == 'true' }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-image.yml # zizmor: ignore[self-repository]
+
+  # container cannot read env directly; needs carries the resolved reference.
+  # Every image job needs this job alone, so all of them wait for a build. It
+  # runs even when the build was skipped, and fails rather than skips when the
+  # lookup or the build failed: a skipped required check would pass. A job's
+  # default condition also skips it when any ancestor was skipped, so every
+  # job downstream states `!cancelled() && !failure()`: a skipped build lets
+  # it run, and a failed ancestor still stops it.
+  ci-image-ref:
+    name: resolve the CI image reference
+    needs: [ci-image-tag, ci-image]
+    if: ${{ !cancelled() }}
+    runs-on: *linux
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+    steps:
+      - id: resolve
+        name: resolve the image reference
+        env:
+          TAG_RESULT: ${{ needs.ci-image-tag.result }}
+          BUILD_RESULT: ${{ needs.ci-image.result }}
+          IMAGE_REF: ${{ needs.ci-image-tag.outputs.ref }}
+        run: test "$TAG_RESULT" = success && test "$BUILD_RESULT" != failure && echo "ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+
+  # The workspace's heavy lane: every target built and tested with the
+  # integration tests as processes. The manual event exercises it under act.
+  cargo-test:
+    name: test the workspace (linux)
+    needs: *rust-needs
+    if: &heavy-lane ${{ !cancelled() && !failure() && needs.changes.outputs.rust == 'true' && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
+    runs-on: *linux
+    permissions: *image-read-permissions
+    container: &ci-image ${{ needs.ci-image-ref.outputs.ref }} # zizmor: ignore[unpinned-images]
+    timeout-minutes: 30
+    steps: &workspace-test-steps
+      - *git-checkout
+      - *trust-workspace
+      - *install-policy-tools
+      - *setup-rust
+      - name: build every workspace target
+        run: cargo build --locked --workspace --all-targets
+      - name: test every workspace target
+        run: cargo nextest run --locked --profile ci --workspace
+      - name: check private-item rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --workspace --no-deps --document-private-items
+      - *upload-test-report
+      - *archive-build-state
+      - *upload-build-state
+
+  # Engine SDK, instrumentation, C++/X280, Miri/careful and Windows lanes
+  # have no local surface; macOS arm64 is the second host the factory runs on.
+  cargo-test-macos:
+    name: test the workspace (macos-arm64)
+    needs: *rust-needs
+    if: *heavy-lane
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      CI_INSTALL_TOOLCHAIN: "true"
+    steps: *workspace-test-steps
+
+  cargo-clippy-crate:
+    name: check Clippy wall
+    needs: *rust-needs
+    if: &light-rust-lane ${{ !cancelled() && !failure() && needs.changes.outputs.rust == 'true' && github.event_name != 'push' }}
+    runs-on: *linux
+    permissions: *image-read-permissions
+    container: *ci-image # zizmor: ignore[unpinned-images]
+    steps:
+      - *git-checkout
+      # Restore-only. The workspace crates stay in the restored cache so this
+      # lane's check artifacts no-op.
+      - *install-policy-tools
+      - *setup-rust
+      - name: lint every target
+        run: cargo clippy --locked --workspace --all-targets -- --deny warnings
+  # The external plugin checks all local targets once per landing, beside the
+  # build it would otherwise repeat on every pull request. The image carries
+  # its driver; the bare-runner fallback installs the same pinned tools and
+  # restores the exact compiler- and revision-matched policy artifacts.
+  cargo-dylint-crate:
+    name: check quenchant compiler policy
+    needs: *rust-needs
+    if: *heavy-lane
+    runs-on: *linux
+    permissions: *image-read-permissions
+    container: *ci-image # zizmor: ignore[unpinned-images]
+    steps:
+      - *git-checkout
+      - *install-policy-tools
+      - *setup-rust
+      - *restore-dylint-drivers
+      - *restore-dylint-library
+      - name: lint every workspace target
+        run: mise run check:dylint
+      # This lane hands over its policy caches, not the dependency cache.
+      - name: archive Dylint library
+        if: ${{ github.event_name == 'merge_group' && steps.dylint-library-restore.outputs.cache-hit != 'true' }}
+        run: tar -cf "build-state-$GITHUB_JOB.tar" target/dylint
+      - *upload-build-state
+      - name: archive Dylint drivers
+        if: ${{ github.event_name == 'merge_group' && needs.ci-image-ref.outputs.ref == '' && steps.dylint-drivers-restore.outputs.cache-hit != 'true' }}
+        run: tar -cf dylint-drivers.tar -C "$HOME" .dylint_drivers
+      - name: upload Dylint drivers
+        if: ${{ hashFiles('dylint-drivers.tar') != '' }}
+        uses: *upload-artifact
+        with:
+          path: dylint-drivers.tar
+          name: dylint-drivers
+          if-no-files-found: error
+          retention-days: 1
+
+  # Formatting and workflow security lint share the treefmt pass (#53).
+  format-gate:
+    name: check formatting and lint gates (treefmt)
+    needs: ci-image-ref
+    if: *not-push
+    runs-on: *linux
+    permissions: *image-read-permissions
+    container: *ci-image # zizmor: ignore[unpinned-images]
+    env:
+      CI_FETCH_DEPTH: "0"
+      COMMIT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+    steps:
+      - *git-checkout
+      # Repository gates read Git metadata inside the job container.
+      - *trust-workspace
+      # The pinned toolchain for treefmt's rustfmt pass; restore-only.
+      # Unscoped: `mise install` here pulls the full mise.toml tool list, not
+      # just the formatters treefmt invokes. Measured why scoping is wrong:
+      # with install_args limited to treefmt's own tools, `mise run` in the
+      # next step still auto-installs the rest of mise.toml's tools on demand —
+      # but jdx/mise-action's cache save already ran at the end of *this*
+      # step, before that auto-install happened, so the later cost is never
+      # captured and gets re-paid in full on every run (measured at ~9m37s in
+      # the source repository this shape comes from). Installing everything
+      # here, inside the one step the cache actually covers, is what makes the
+      # cache amortize at all.
+      - *install-policy-tools
+      - *setup-rust
+      - name: treefmt --ci
+        run: mise run treefmt:check
+      - name: conflict marker check
+        run: mise run check:conflict-markers
+      - name: validate npm lock sidecars
+        run: mise run check:lockfile
+      - name: keep workflow tools outside the package graph
+        run: mise run check:publish
+      # One commitlint run per non-merge commit, so the agent-commit rules see
+      # that commit's own author: the config resolves it from
+      # COMMITLINT_COMMIT. A root commit has no parent to range from; its
+      # message is linted alone. Bash, for pipefail: a failed rev-list must
+      # fail the step rather than lint nothing.
+      - name: lint authored commits
+        shell: bash
+        run: |
+          base=${COMMIT_BASE:-}
+          if [[ -z $base ]] && git rev-parse --verify --quiet HEAD^ > /dev/null; then base=HEAD^; fi
+          git rev-list --reverse --no-merges ${base:+"$base.."}HEAD | while read -r commit; do
+            if git rev-parse --verify --quiet "$commit^" > /dev/null; then
+              env COMMITLINT_COMMIT="$commit" mise exec -- commitlint --from "$commit^" --to "$commit"
+            else
+              git log -1 --format=%B "$commit" | env COMMITLINT_COMMIT="$commit" mise exec -- commitlint
+            fi
+          done
+
+  # Only successful merge-group runs at the exact landing SHA supply state.
+  # Official artifact actions plus the GitHub API retain #44's trust boundary;
+  # dawidd6/action-download-artifact remains outside the admitted action set.
+  build-state:
+    name: find the landing's build state
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: *linux
+    permissions:
+      actions: read
+    outputs:
+      run-id: ${{ steps.run.outputs.run-id }}
+      artifacts: ${{ steps.artifacts.outputs.artifacts }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      CI_SHA: ${{ github.sha }}
+    steps:
+      - id: run
+        name: find the successful queue run for this landing
+        run: >-
+          gh api --method GET "repos/$GH_REPO/actions/workflows/ci.yml/runs"
+          -f event=merge_group -f status=success -f head_sha="$CI_SHA"
+          --jq '"run-id=" + ((.workflow_runs[0].id // "") | tostring)'
+          >> "$GITHUB_OUTPUT"
+      - id: artifacts
+        name: list its build-state artifacts
+        if: ${{ steps.run.outputs.run-id != '' }}
+        env:
+          CI_RUN_ID: ${{ steps.run.outputs.run-id }}
+        run: >-
+          gh api "repos/$GH_REPO/actions/runs/$CI_RUN_ID/artifacts"
+          --jq '"artifacts=" + ([.artifacts[] | select(.expired == false) | .name] | tojson)'
+          >> "$GITHUB_OUTPUT"
+
+  promote-cargo-test:
+    name: promote the build state (linux)
+    needs: &promote-needs [build-state, ci-image-ref]
+    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), 'build-state-cargo-test') }}
+    runs-on: *linux
+    permissions: &promote-permissions
+      contents: read
+      packages: read
+      actions: read
+    container: *ci-image # zizmor: ignore[unpinned-images]
+    env:
+      CI_BUILD_STATE: cargo-test
+    steps: &promote-steps
+      - *git-checkout
+      - *trust-workspace
+      - *install-policy-tools
+      - *download-build-state
+      - *setup-rust
+      - *unpack-build-state
+      - *fetch-dependencies
+
+  promote-test-macos:
+    name: promote the build state (macos-arm64)
+    needs: *promote-needs
+    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), 'build-state-cargo-test-macos') }}
+    runs-on: macos-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CI_BUILD_STATE: cargo-test-macos
+      CI_INSTALL_TOOLCHAIN: "true"
+    steps: *promote-steps
+
+  promote-dylint-crate:
+    name: promote the Dylint state
+    needs: *promote-needs
+    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), 'build-state-cargo-dylint-crate') || contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), 'dylint-drivers')) }}
+    runs-on: *linux
+    permissions: *promote-permissions
+    container: *ci-image # zizmor: ignore[unpinned-images]
+    env:
+      CI_BUILD_STATE: cargo-dylint-crate
+    steps:
+      - *git-checkout
+      - *install-policy-tools
+      - *download-build-state
+      - name: download the landing's Dylint drivers
+        if: ${{ needs.ci-image-ref.outputs.ref == '' && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), 'dylint-drivers') }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dylint-drivers
+          run-id: ${{ needs.build-state.outputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - *restore-dylint-drivers
+      - *restore-dylint-library
+      - *unpack-build-state
+      - name: unpack Dylint drivers
+        if: *promote-drivers
+        run: tar -xf dylint-drivers.tar -C "$HOME"
+      - *save-dylint-library
+      - *save-dylint-drivers

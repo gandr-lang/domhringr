@@ -1,0 +1,22 @@
+[package]
+name = "domhringr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Driver for the domhringr factory toolchain"
+readme = "README.md"
+repository.workspace = true
+license.workspace = true
+keywords = ["agents", "domhringr", "factory", "toolchain"]
+categories = ["development-tools"]
+# The one published crate of this workspace: the name is claimed at 0.0.0.
+publish = true
+
+[[bin]]
+name = "domhringr"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints]
+workspace = true

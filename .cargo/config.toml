@@ -1,0 +1,8 @@
+#:tombi toml-version = "v1.0.0"
+
+[alias]
+# NOTE: requires building with +nightly
+build-dist = ["build", "--config=.cargo/config.dist.toml", "--profile=dist"]
+check-dist = ["check", "--config=.cargo/config.dist.toml", "--profile=dist"]
+
+[unstable]

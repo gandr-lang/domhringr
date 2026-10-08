@@ -1,0 +1,85 @@
+#:tombi toml-version = "v1.1.0"
+#:schema https://www.schemastore.org/treefmt.json
+
+# Build output is gitignored, but the explicit exclude keeps `treefmt` from
+# traversing it in environments where the git-walker's `.git` pointer is
+# dangling and the implicit skip does not apply.
+# Runtime state, resolver output and formatter caches are not source.
+excludes = [
+  "target/**",
+  # Verbatim-mandated content: license text and every resolver's lockfile. A
+  # formatter that rewrites a lockfile fights the resolver that owns it, and the
+  # two rewrite each other on every run. `mise.lock` is here because the
+  # vendored `mise.toml` sets `lockfile = true`, so every consumer tracks one;
+  # per-project lockfiles in other formats stay consumer deltas.
+  "**/LICENSE.*.txt",
+  "Cargo.lock",
+  "mise.lock",
+  # mise's npm backend owns these dependency locks and install manifests.
+  ".mise/locks/**",
+  # The tool's own cache, written at the root of every tree rumdl runs in.
+  # Gitignoring is not scoping: the excludes are explicit.
+  ".rumdl_cache",
+]
+
+# Formatter entries and their mise pins move together.
+
+[formatter.rustfmt]
+command = "rustfmt"
+options = ["--edition", "2024"]
+includes = ["*.rs"]
+
+# The mutating formatter takes the lower priority so `fmt` completes before
+# `check` when both cover the same markdown set.
+[formatter."rumdl-format"]
+priority = 0
+command = "rumdl"
+options = ["fmt"]
+includes = ["*.md"]
+
+[formatter."rumdl-verify"]
+priority = 1
+command = "rumdl"
+options = ["check"]
+includes = ["*.md"]
+
+[formatter."tombi-format"]
+priority = 0
+command = "tombi"
+options = ["format"]
+includes = ["*.toml"]
+
+[formatter."tombi-lint"]
+priority = 1
+command = "tombi"
+options = ["lint", "--error-on-warnings"]
+includes = ["*.toml"]
+
+[formatter.oxfmt]
+command = "oxfmt"
+options = ["--config", ".oxfmtrc.json"]
+includes = ["*.json", "*.jsonc", "*.yaml", "*.yml", "*.mjs"]
+
+[formatter.typos]
+command = "typos"
+options = ["--write-changes", "--force-exclude"]
+includes = ["*"]
+
+# Check-only: doc-sprawl size budgets.
+[formatter.sizelint]
+command = "sizelint"
+options = ["check"]
+includes = ["*"]
+
+# Check-only: shell lint at default severity (style included); a per-line directive with its reason is the only sanctioned suppression.
+[formatter.shellcheck]
+command = "shellcheck"
+includes = ["*.sh"]
+
+# #53 intentional delta: one lint pass using the mise pin rather than a
+# separate workflow-lint job. Composite actions cannot hide moved steps.
+[formatter.zizmor]
+priority = 1
+command = "zizmor"
+options = ["--min-severity", "low"]
+includes = [".github/workflows/*.yml", ".github/actions/*/action.yml"]

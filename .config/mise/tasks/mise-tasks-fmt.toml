@@ -1,0 +1,14 @@
+#:tombi toml-version = "v1.0.0"
+#:schema https://mise.jdx.dev/schema/mise-task.json
+
+[treefmt]
+description = "Run treefmt"
+run = "treefmt"
+
+["treefmt:check"]
+description = "Run treefmt in CI mode"
+run = "treefmt --ci"
+
+[changelog]
+description = "Render the root changelog only when preparing a release"
+run = "git-cliff --output CHANGELOG.md"

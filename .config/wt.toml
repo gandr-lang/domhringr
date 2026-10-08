@@ -1,0 +1,4 @@
+# Worktree creation refreshes clone-shared hook runners, including pinned
+# executable paths. Existing checkouts run the same installer during setup.
+[pre-start]
+hooks = "mise exec -- prek install"

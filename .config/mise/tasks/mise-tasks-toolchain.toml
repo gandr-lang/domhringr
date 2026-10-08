@@ -1,0 +1,71 @@
+#:tombi toml-version = "v1.0.0"
+#:schema https://mise.jdx.dev/schema/mise-task.json
+
+# A library producer moves its nightly and Clippy tag from a stable release.
+# An external consumer takes the nightly from a reviewed full workflow commit
+# and changes its Dylint metadata revision in the same operation. The installer
+# reads that metadata too, so no independently editable binary revision exists.
+["toolchain:bump"]
+description = "Move the compiler and its local or external lint source together"
+usage = '''
+arg "[version]" help="stable release for a local library producer, e.g. 1.98.0"
+flag "--workflow-rev <revision>" help="reviewed full 40-hex commit for an external workflow consumer"
+'''
+tools.jq = "1.8.1"
+# Preserve shell parameter length syntax through template rendering.
+run = '''
+{% raw %}#!/usr/bin/env sh
+set -eu
+
+version=${usage_version:-}
+revision=${usage_workflow_rev:-}
+workflow_git=https://github.com/gandr-lang/quenchant
+old_revision=
+if [ -f Cargo.toml ]; then
+  old_revision=$(cargo metadata --manifest-path Cargo.toml --no-deps --format-version 1 | jq -er --arg git "$workflow_git" '[.metadata.dylint.libraries[]? | select(.git == $git and .pattern == "crates/quenchant-dylints")] | if length == 0 then "" elif length == 1 then .[0].rev | select(type == "string" and test("^[0-9a-f]{40}$")) else error("expected one workflow library") end')
+fi
+
+if [ -n "$revision" ]; then
+  if [ -n "$version" ] || [ -z "$old_revision" ]; then
+    echo 'toolchain:bump: --workflow-rev requires external Dylint metadata and no stable version' >&2
+    exit 1
+  fi
+  case "$revision" in
+    *[!0-9a-f]*|'') echo 'toolchain:bump: revision must be lowercase hexadecimal' >&2; exit 1 ;;
+  esac
+  if [ "${#revision}" -ne 40 ]; then
+    echo 'toolchain:bump: revision must be a full 40-hex commit' >&2
+    exit 1
+  fi
+  channel=$(gh api --jq .content "repos/gandr-lang/quenchant/contents/rust-toolchain.toml?ref=$revision" | base64 -d | sed -n 's/^channel = "\([^"]*\)".*/\1/p')
+else
+  if [ -z "$version" ] || [ -n "$old_revision" ]; then
+    echo 'toolchain:bump: external consumers require --workflow-rev; local producers require a stable version' >&2
+    exit 1
+  fi
+  case "$version" in
+    *[!0-9.]*|'') echo 'toolchain:bump: stable version must contain only digits and dots' >&2; exit 1 ;;
+  esac
+  # rust-clippy's release tag names the nightly its clippy_utils was built
+  # against; the bump writes both pins from that one file.
+  channel=$(gh api --jq .content "repos/rust-lang/rust-clippy/contents/rust-toolchain.toml?ref=rust-$version" | base64 -d | sed -n 's/^channel = "\([^"]*\)".*/\1/p')
+fi
+case "$channel" in
+  nightly-*) ;;
+  *) echo 'toolchain:bump: source carries no usable nightly channel' >&2; exit 1 ;;
+esac
+
+# Values enter Perl through environment variables, never program interpolation.
+export WORKFLOW_OLD_REV="$old_revision" WORKFLOW_NEW_REV="$revision" WORKFLOW_CHANNEL="$channel" WORKFLOW_STABLE="$version"
+if [ -n "$revision" ]; then
+  perl -0777 -pi -e 's{(^\[\[workspace\.metadata\.dylint\.libraries\]\]\n)(.*?)(?=^\[|\z)}{my ($head, $body) = ($1, $2); if ($body =~ /^git = "https:\/\/github\.com\/gandr-lang\/quenchant"$/m && $body =~ /^pattern = "crates\/quenchant-dylints"$/m) { $body =~ s/^rev = "\Q$ENV{WORKFLOW_OLD_REV}\E"$/rev = "$ENV{WORKFLOW_NEW_REV}"/m; } "$head$body"}gmse' Cargo.toml
+elif [ -f Cargo.toml ]; then
+  perl -0777 -pi -e 's{(^\[workspace\.dependencies\.clippy_utils\]\n)(.*?)(?=^\[|\z)}{my ($head, $body) = ($1, $2); $body =~ s/^tag = ".*"$/tag = "rust-$ENV{WORKFLOW_STABLE}"/m; "$head$body"}gmse' Cargo.toml
+fi
+perl -pi -e 's/^channel = .*/channel = "$ENV{WORKFLOW_CHANNEL}"/' rust-toolchain.toml
+
+echo "pinned channel $channel; workflow revision ${revision:-local-library}"
+echo 'clear ~/.dylint_drivers and target/dylint, then rerun the full gate wall'
+echo 'external consumers: mise run check'
+{% endraw %}
+'''

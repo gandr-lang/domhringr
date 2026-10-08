@@ -1,0 +1,33 @@
+# Releases own the one root changelog. Ordinary commits never regenerate it;
+# formatter runs are independent of history, network access and PR tokens.
+[changelog]
+header = "# Domhringr changelog\n\n"
+body = """
+{% if version %}## {{ version | trim_start_matches(pat="v") }}{% else %}## Unreleased{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits %}
+- {{ commit.message }} ([{{ commit.id | truncate(length=7, end="") }}](https://github.com/gandr-lang/domhringr/commit/{{ commit.id }}))
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+require_conventional = false
+filter_commits = false
+# Stable releases only; prereleases do not split the release history.
+tag_pattern = '^v[0-9]+\.[0-9]+\.[0-9]+$'
+skip_tags = ".*-.*"
+commit_parsers = [
+  # Link authored commits, never merge-only PR subjects.
+  { field = "merge_commit", pattern = "true", skip = true },
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^revert", group = "Reverts" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^(build|chore|ci|config|refactor|style|test)", group = "Maintenance" },
+]

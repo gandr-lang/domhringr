@@ -1,0 +1,82 @@
+name: "setup rust"
+description: >
+  The rustup toolchain setup every Rust job shares: the rustup cache
+  restore, the toolchain install, the rustup cache save, and the shared
+  Rust dependency cache. The job's checkout step runs first; this
+  action is everything after it.
+inputs:
+  # Save both caches in this job: the one writer per cache lane.
+  cache-save:
+    description: "Save the rustup toolchain and the dependency cache in this job"
+    default: "false"
+  # Keep the workspace crates' artifacts in the dependency cache; cargo's
+  # fingerprints then no-op the unchanged ones on the next restore.
+  # Off when the job runs inside the CI image, which carries the toolchain
+  # already; the dependency cache step still runs either way.
+  install-toolchain:
+    description: "Restore, install, and save the rustup toolchain in this job"
+    default: "true"
+  cache-workspace-crates:
+    description: "Keep the workspace crates in the Rust dependency cache"
+    default: "false"
+outputs:
+  # Whether the dependency cache restored its exact key; a lane hands its
+  # build state to main only on a miss, when main's cache would rotate.
+  cache-hit:
+    description: "The dependency cache restored an exact key match"
+    value: ${{ steps.rust-cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - id: rustup-restore
+      if: ${{ inputs.install-toolchain == 'true' }}
+      name: "restore rustup toolchain"
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        # The key hashes the pin file, so a toolchain bump is a cache
+        # rotation; the install step below reads the same file.
+        path: ~/.rustup/toolchains/*
+        key: rustup-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+    - name: "install rust tools"
+      if: ${{ inputs.install-toolchain == 'true' }}
+      # dtolnay/rust-toolchain takes `toolchain` as a required input and
+      # exits when it is omitted -- it does not read the repo's
+      # rust-toolchain.toml, so it cannot express "install the pin".
+      # Plain rustup with no argument reads the pin file, components and
+      # profile included: the one toolchain every Rust job shares, and a
+      # fast no-op when the cache restore above already holds it.
+      run: |
+        rustup toolchain install
+        rustup show active-toolchain
+      # Composite actions have no default shell: `run` steps must name
+      # their `shell:` explicitly or GitHub rejects the action at setup.
+      shell: bash
+    - name: "save rustup toolchain"
+      if: ${{ inputs.install-toolchain == 'true' && inputs.cache-save == 'true' && steps.rustup-restore.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.rustup/toolchains/*
+        key: ${{ steps.rustup-restore.outputs.cache-primary-key }}
+    - name: "cache Rust dependencies"
+      id: rust-cache
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        # The generation counter carries the cache's content shape. The
+        # root manifest's [profile.test] gives test targets their own
+        # opt-level, so every lane compiles two dependency graphs --
+        # cargo build and cargo clippy under dev, cargo nextest run
+        # under test -- and the cache has to hold both. rust-cache's
+        # key hashes the toolchain, the CARGO_*/RUSTUP_* values and
+        # the lockfiles, never the profile table, so without a bump
+        # the restore stays a full match on an older content shape,
+        # the save is skipped as up-to-date, and every run recompiles
+        # from scratch. Bumping the prefix rotates the lane at once.
+        prefix-key: domhringr-v1-rust-deps
+        # One dependency cache across every Rust job; the gate lane's
+        # block shares this key, so the cache holds the whole
+        # workspace's artifacts under the single toolchain.
+        shared-key: rust-deps
+        cache-all-crates: false
+        cache-workspace-crates: ${{ inputs.cache-workspace-crates }}
+        cache-on-failure: false
+        save-if: ${{ inputs.cache-save == 'true' }}
