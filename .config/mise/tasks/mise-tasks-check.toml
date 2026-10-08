@@ -78,9 +78,30 @@ run = "cargo doc --workspace --locked --no-deps --document-private-items"
 description = "Spelling"
 run = "typos"
 
+# On macOS the application firewall keys its "allow incoming connections"
+# decision on the code signature, and cargo's ad-hoc signature changes with
+# every build, so an unsigned run prompts for each executable that binds a
+# socket and stalls an unattended run. When CODESIGN_IDENTITY names an
+# identity in the login keychain, every executable cargo built is re-signed
+# with it under one identifier before the run, so one allow covers every
+# build. Both the `deps/` outputs and the uplifted binaries are signed: cargo
+# copies a binary from `deps/` to `target/debug/<name>` on every invocation,
+# so a signature on the copy alone is gone by the time a test spawns it.
+# Unset, the executables run as built; CI and Linux never set it.
 ["check:tests"]
 description = "Unit and integration tests over every target"
-run = "cargo nextest run --workspace --locked"
+tools.jq = "1.8.1"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cargo nextest run --workspace --locked --no-run
+if [[ -n "${CODESIGN_IDENTITY:-}" && "$(uname -s)" == "Darwin" ]]; then
+  target=$(cargo metadata --manifest-path Cargo.toml --locked --no-deps --format-version 1 | jq -r '.target_directory')
+  find "$target/debug" "$target/debug/deps" -maxdepth 1 -type f -perm -u+x ! -name '*.*' \
+    -exec codesign --force --sign "$CODESIGN_IDENTITY" --identifier org.gandr-lang.domhringr.test {} +
+fi
+cargo nextest run --workspace --locked
+'''
 
 # Git writes conflict markers as EXACTLY seven marker characters followed by
 # end-of-line or whitespace plus a label (`<<<<<<< HEAD`, bare `=======`).
