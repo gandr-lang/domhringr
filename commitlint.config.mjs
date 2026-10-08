@@ -37,7 +37,7 @@ const trailerLeadingBlank = (parsed) => {
 // Crate-category scopes survive crate splits; infra scopes name non-crate surfaces.
 const SCOPES = [
   "arena",
-  "face",
+  "surface",
   "oracle",
   "pipeline",
   "record",

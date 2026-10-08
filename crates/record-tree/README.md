@@ -8,7 +8,7 @@ A view is the fold of a tree's commits: walked in canonical order (topological, 
 
 A bound peer is reached by endpoint id alone: on the local network through mDNS and direct addresses, across networks through n0's relay and DNS. It binds an ephemeral UDP port, or a fixed one that a firewall rule can name. A sync dials the remote, runs one batch round for one tree, and disconnects; each side reports the network path iroh selected — direct, relayed, or not yet chosen.
 
-The `domhringr-peer` binary (`crates/face-peer`) is the command-line face of this crate.
+The `domhringr-peer` binary (`crates/surface-peer`) is the command-line surface of this crate.
 
 ## Codec decision
 

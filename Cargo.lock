@@ -677,17 +677,6 @@ name = "domhringr"
 version = "0.0.0"
 
 [[package]]
-name = "domhringr-face-peer"
-version = "0.0.0"
-dependencies = [
- "domhringr-record-tree",
- "lexopt",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
 name = "domhringr-record-tree"
 version = "0.0.0"
 dependencies = [
@@ -704,6 +693,17 @@ dependencies = [
  "subduction_crypto",
  "subduction_iroh",
  "subduction_redb_storage",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "domhringr-surface-peer"
+version = "0.0.0"
+dependencies = [
+ "domhringr-record-tree",
+ "lexopt",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

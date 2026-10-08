@@ -14,7 +14,7 @@ arena     the game: arenas, plays, moves and polarity, validity, endings, verdic
 seat      the Player participant: dispatch, report, handoff, retire; the harness shim
 judge     the oracle: letter readout over a model, dialogues, verdict receipts
 strategy  playbooks (Player strategies) and rubrics (Opponent strategies): documents, schemas, loader, grades
-face      what a human or harness touches: the driver, the peer binary, the operator CLI
+surface   what a human or harness touches: the driver, the peer binary, the operator CLI
 ```
 
 ## Vocabulary
@@ -27,9 +27,9 @@ One row per directory: the directory, its package, and what it is.
 
 ```text
 crates/
-├── record-tree/   domhringr-record-tree   the sedimentree: receipts, the fold to a view, a tree stored in redb and synced over iroh
-├── face-driver/   domhringr               the `domhringr` driver: installs components
-└── face-peer/     domhringr-face-peer     the `domhringr-peer` binary: opens, grants on, notes to, views, reads and syncs a tree
+├── record-tree/      domhringr-record-tree    the sedimentree: receipts, the fold to a view, a tree stored in redb and synced over iroh
+├── surface-driver/   domhringr                the `domhringr` driver: installs components
+└── surface-peer/     domhringr-surface-peer   the `domhringr-peer` binary: opens, grants on, notes to, views, reads and syncs a tree
 ```
 
 ## Divergences

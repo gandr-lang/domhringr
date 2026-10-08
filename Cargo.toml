@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/face-driver", "crates/face-peer", "crates/record-tree"]
+members = ["crates/record-tree", "crates/surface-driver", "crates/surface-peer"]
 # Gitignored sibling checkouts that path dependencies reach (`mise run
 # sibling:sync`); never members.
 exclude = ["vendor"]
@@ -35,7 +35,7 @@ default-features = false
 
 # The record library: the tree store, the endpoint, sync.
 # consumers:
-# - face-peer
+# - surface-peer
 [workspace.dependencies.domhringr-record-tree]
 path = "crates/record-tree"
 
@@ -95,7 +95,7 @@ default-features = false
 
 # The peer binary's argument lexer: options and subcommands from `OsString`s.
 # consumers:
-# - face-peer
+# - surface-peer
 [workspace.dependencies.lexopt]
 version = "0.3"
 default-features = false
@@ -140,7 +140,7 @@ default-features = false
 
 # Throwaway state directories for the process-level and library tests.
 # consumers:
-# - face-peer (dev)
+# - surface-peer (dev)
 # - record-tree (dev)
 [workspace.dependencies.tempfile]
 version = "3.27"
@@ -148,7 +148,7 @@ default-features = false
 
 # `derive(Error)` for the record library's and the peer binary's error enums.
 # consumers:
-# - face-peer
+# - surface-peer
 # - record-tree
 [workspace.dependencies.thiserror]
 version = "2.0"
@@ -159,7 +159,7 @@ default-features = false
 # - rt-multi-thread: the peer binary's and the tests' multi-threaded runtime
 # - time: `tokio::time::timeout` behind subduction's call deadlines
 # consumers:
-# - face-peer
+# - surface-peer
 # - record-tree
 [workspace.dependencies.tokio]
 version = "1"

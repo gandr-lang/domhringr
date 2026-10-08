@@ -1,5 +1,5 @@
 [package]
-name = "domhringr-face-peer"
+name = "domhringr-surface-peer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
