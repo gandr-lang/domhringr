@@ -13,13 +13,19 @@
 //! and its author is its verified signer ([`Peer::commit`]). Every peer
 //! holding the same commits folds them into the same [`View`]
 //! ([`Peer::view`]): the tree's owner, the peers granted write authority, the
-//! admitted notes, the paths bound, and the commits refused with their
-//! [`Refusal`]. A receipt is admitted only from an author with authority in
-//! its causal past.
+//! admitted notes, the paths bound, the DNS names claimed, the trees
+//! introduced, and the commits refused with their [`Refusal`]. A receipt is
+//! admitted only from an author with authority in its causal past, and a
+//! claim only from the owner.
 //!
 //! A tree and the paths in it are named by [`Anchor`]s,
-//! `domhringr://<tree>/<path>`; [`Peer::whence`] resolves one by fold to the
-//! [`Target`] its path is bound to, or to unbound ([`Resolution`]).
+//! `domhringr://<authority>/<path>`, whose [`Authority`] is the tree's key, a
+//! DNS name ([`Domain`]) or a label ([`Label`]). [`Peer::whence`] resolves one
+//! by fold to the [`Target`] its path is bound to, or to unbound
+//! ([`Resolution`]): a DNS name through a [`Witness`] — the DNS records
+//! ([`Dns`]) or a map supplied by hand ([`Static`]) — together with the
+//! owner's claim in the witnessed tree, and a label through the introductions
+//! of the tree it is read in ([`Scope`]).
 //!
 //! Binding the peer to an iroh endpoint ([`Peer::bind`]) yields a [`Node`]
 //! reached by endpoint id, which accepts connections ([`Node::accept`]) and
@@ -30,8 +36,8 @@
 //! The substrate is subduction over iroh as published, and the value plane
 //! for the receipt's canonical form; this crate supplies the Tokio spawner and
 //! timer subduction is generic over, the key files, the receipt grammar, the
-//! fold, the anchor form, and the shape of a sync: dial, one batch round,
-//! disconnect.
+//! fold, the anchor form, the witnesses, and the shape of a sync: dial, one
+//! batch round, disconnect.
 
 #![expect(
     clippy::multiple_crate_versions,
@@ -55,17 +61,21 @@ mod fold;
 mod id;
 mod identity;
 mod line;
+mod name;
 mod node;
 mod receipt;
 mod runtime;
 mod store;
 #[cfg(test)]
 mod testing;
+mod witness;
 
 pub use anchor::Anchor;
+pub use anchor::Authority;
 pub use anchor::ParseAnchorError;
 pub use anchor::Path;
 pub use anchor::Resolution;
+pub use anchor::Scope;
 pub use anchor::Target;
 pub use fold::Refusal;
 pub use fold::Unopened;
@@ -81,6 +91,10 @@ pub use identity::Identity;
 pub use identity::IdentityError;
 pub use identity::StateDir;
 pub use identity::TreeKey;
+pub use name::Domain;
+pub use name::Label;
+pub use name::ParseDomainError;
+pub use name::ParseLabelError;
 pub use node::AcceptError;
 pub use node::Accepted;
 pub use node::BindError;
@@ -102,3 +116,8 @@ pub use store::HeadsError;
 pub use store::OpenError;
 pub use store::Peer;
 pub use store::ViewError;
+pub use store::WhenceError;
+pub use witness::Dns;
+pub use witness::Static;
+pub use witness::Witness;
+pub use witness::WitnessError;

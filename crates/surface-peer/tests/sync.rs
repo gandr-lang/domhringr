@@ -2,8 +2,9 @@
 //! peers on one host reach each other at a direct address and sync one tree to
 //! identical heads, the serving peer's store survives a kill, two peers that
 //! exchange a tree's commits fold them to byte-identical views in which a note
-//! is admitted only under a grant in its causal past, and a path bound in a
-//! tree resolves alike on both peers through its anchor.
+//! is admitted only under a grant in its causal past, a path bound in a tree
+//! resolves alike on both peers through its anchor, and a DNS name or a label
+//! in an anchor's place resolves only through a claim or an introduction.
 
 #[cfg(test)]
 mod tests
@@ -20,6 +21,7 @@ mod tests
     use std::time::Instant;
 
     use domhringr_record_tree::Anchor;
+    use domhringr_record_tree::Authority;
 
     /// How long one command may run, or a server may take to print a line.
     const DEADLINE: Duration = Duration::from_secs(30);
@@ -166,14 +168,13 @@ mod tests
         command
     }
 
-    /// Run `command` to completion and return what it printed.
+    /// Run `command` to completion and return its output.
     ///
     /// # Specification
-    /// - ensures: the command exited 0 within [`DEADLINE`].
-    /// - panics: when it cannot start, outlives the deadline (it is killed
-    ///   first), exits non-zero (its standard error is shown), or prints
-    ///   anything but UTF-8.
-    fn finish(command: &mut Command) -> Lines
+    /// - ensures: the command exited within [`DEADLINE`].
+    /// - panics: when it cannot start or outlives the deadline (it is killed
+    ///   first).
+    fn output(command: &mut Command) -> std::process::Output
     {
         let mut child = command
             .stdin(Stdio::null())
@@ -189,7 +190,18 @@ mod tests
             }
             std::thread::sleep(POLL);
         }
-        let output = child.wait_with_output().unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    /// Run `command` to completion and return what it printed.
+    ///
+    /// # Specification
+    /// - ensures: the command exited 0 within [`DEADLINE`].
+    /// - panics: as [`output`], or when it exits non-zero (its standard error
+    ///   is shown) or prints anything but UTF-8.
+    fn finish(command: &mut Command) -> Lines
+    {
+        let output = output(command);
         assert!(
             output.status.success(),
             "{command:?}: {}: {}",
@@ -205,19 +217,60 @@ mod tests
         )
     }
 
+    /// Run `command`, which must fail, and return its diagnostic.
+    ///
+    /// # Specification
+    /// - ensures: the command exited 1, the status of a command line that was
+    ///   read but failed, within [`DEADLINE`], printing nothing to standard
+    ///   output and one line to standard error.
+    /// - panics: as [`output`], or on any other status or output.
+    fn refuse(command: &mut Command) -> String
+    {
+        let output = output(command);
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1_i32),
+            "{command:?} fails once read: {stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{command:?} prints nothing");
+        let mut lines = stderr.lines();
+        let (Some(line), None) = (lines.next(), lines.next())
+        else {
+            panic!("{command:?} writes one diagnostic line: {stderr:?}");
+        };
+        line.into()
+    }
+
     /// Open a tree on `state` and return the anchor `open` printed.
     ///
     /// # Specification
     /// - panics: as [`finish`], or unless `open` printed one line that parses
-    ///   as a bare tree anchor.
+    ///   as a bare tree anchor in the key form.
     fn open(state: &Path) -> String
     {
         let anchor = finish(peer(state).arg("open")).only().clone();
         assert!(
-            matches!(anchor.parse::<Anchor>(), Ok(Anchor::Tree(_))),
+            matches!(
+                anchor.parse::<Anchor>(),
+                Ok(Anchor::Tree(Authority::Key(_)))
+            ),
             "open prints a bare tree anchor: {anchor:?}"
         );
         anchor
+    }
+
+    /// The tree id the bare key-form anchor `anchor` spells.
+    ///
+    /// # Specification
+    /// - panics: unless `anchor` is a bare anchor in the key form.
+    fn tree_id(anchor: &OsStr) -> String
+    {
+        let text = anchor.to_str().expect("an anchor is UTF-8");
+        match text.parse::<Anchor>() {
+            | Ok(Anchor::Tree(Authority::Key(tree))) => tree.to_string(),
+            | other => panic!("not a bare key-form anchor: {text:?}: {other:?}"),
+        }
     }
 
     /// Sync `tree` on `state` with the peer whose `id` printed `remote`,
@@ -657,6 +710,102 @@ mod tests
                 "unbound",
                 "a path nobody bound is unbound"
             );
+        }
+    }
+
+    /// A DNS name in an anchor's place resolves as the key form of the one
+    /// witnessed tree whose root claims it, and a label resolves through the
+    /// introductions of the tree it is read in alone.
+    ///
+    /// # Specification
+    /// - ensures: A opens a tree, claims `example.test` for it, writes a note
+    ///   and binds `x` to it; B pulls the tree, and B's `whence` of
+    ///   `domhringr://example.test/x`, witnessed by hand by A's tree, prints
+    ///   what the key form prints, the note's commit, while the bare name
+    ///   prints `tree` and A's anchor. B opens a tree of its own, which claims
+    ///   nothing; witnessed by it the name exits 1 with `domhringr-peer:
+    ///   unclaimed example.test`. A introduces B's tree as `b` in its own, and
+    ///   A's `whence` of `domhringr://b/` in A's tree prints `tree` and B's
+    ///   anchor; read in no tree it exits 1. A pulls B's tree; read in it,
+    ///   which introduced nothing, `domhringr://b/` exits 1 with
+    ///   `domhringr-peer: unintroduced b`. A's view lists the claim and the
+    ///   introduction. Every witness is given by hand, so no step asks DNS.
+    /// - panics: on any contract violation.
+    #[test]
+    fn a_named_anchor_resolves_through_its_claim_or_introduction()
+    {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (a, b) = (a.path(), b.path());
+        let (a_id, b_id) = (finish(peer(a).arg("id")), finish(peer(b).arg("id")));
+        let (a_port, b_port) = (free_port(), free_port());
+        let tree = open(a);
+        let claimed = finish(peer(a).args(["claim", tree.as_str(), "example.test"]));
+        claimed.assert_ids();
+        let noted = finish(peer(a).args(["note", tree.as_str(), "named"]));
+        noted.assert_ids();
+        let x = format!("{tree}x");
+        let bound = finish(peer(a).args(["bind", x.as_str(), "commit", noted.only()]));
+        bound.assert_ids();
+        pull((b, &b_id), (a, &a_id), &a_port, OsStr::new(&tree));
+
+        let witnessed = |anchor: &str, witness: &str| {
+            let witness = format!("example.test={}", tree_id(OsStr::new(witness)));
+            let mut command = peer(b);
+            let _args = command.args(["whence", anchor, "--witness", witness.as_str()]);
+            command
+        };
+        let by_key = finish(peer(b).args(["whence", x.as_str()]));
+        assert_eq!(
+            by_key.only(),
+            &format!("commit {}", noted.only()),
+            "the key form resolves to the bound note"
+        );
+        assert_eq!(
+            finish(&mut witnessed("domhringr://example.test/x", &tree)),
+            by_key,
+            "the DNS form resolves as the key form of the witnessed tree that claims it"
+        );
+        assert_eq!(
+            finish(&mut witnessed("domhringr://example.test/", &tree)).only(),
+            &format!("tree {tree}"),
+            "the bare name resolves to the claiming tree"
+        );
+        let fresh = open(b);
+        assert_eq!(
+            refuse(&mut witnessed("domhringr://example.test/x", &fresh)),
+            "domhringr-peer: unclaimed example.test",
+            "a witnessed tree that never claimed the name resolves nothing"
+        );
+
+        let introduced = finish(peer(a).args(["introduce", tree.as_str(), "b", fresh.as_str()]));
+        introduced.assert_ids();
+        let label = |scope: &str| {
+            let mut command = peer(a);
+            let _args = command.args(["whence", "domhringr://b/", "--in", scope]);
+            command
+        };
+        assert_eq!(
+            finish(&mut label(&tree)).only(),
+            &format!("tree {fresh}"),
+            "read in the tree that introduced it, the label names the introduced tree"
+        );
+        assert_eq!(
+            refuse(peer(a).args(["whence", "domhringr://b/"])),
+            "domhringr-peer: unscoped b",
+            "a label read in no tree resolves nothing"
+        );
+        pull((a, &a_id), (b, &b_id), &b_port, OsStr::new(&fresh));
+        assert_eq!(
+            refuse(&mut label(&fresh)),
+            "domhringr-peer: unintroduced b",
+            "read in the introduced tree, which introduced nothing, the label is unknown"
+        );
+        let view = finish(peer(a).args(["view", tree.as_str()]));
+        for fact in [
+            "claim example.test".to_owned(),
+            format!("introduce b {fresh}"),
+        ] {
+            assert!(view.0.contains(&fact), "the view lists {fact:?}: {view:?}");
         }
     }
 }

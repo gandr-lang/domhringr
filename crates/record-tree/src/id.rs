@@ -14,7 +14,7 @@ use subduction_core::peer::id::PeerId;
 const HEX_DIGITS: usize = 64;
 
 /// Characters in the text form of a tree id.
-const TREE_CHARACTERS: usize = 52;
+pub const TREE_CHARACTERS: usize = 52;
 
 /// The z-base-32 alphabet: the symbols iroh writes a key in for a DNS label,
 /// in value order.

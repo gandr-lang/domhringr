@@ -12,27 +12,31 @@
 //!
 //! ```text
 //! receipt := open 0x01 · word 1 · bytes tree (32) · bytes operation (16) · kind · close
-//! kind    := open 0x01 · bytes proof (64) · close              Open
-//!          | open 0x02 · bytes grantee (32) · close            Grant
-//!          | open 0x03 · bytes text (UTF-8) · close            Note
-//!          | open 0x04 · bytes path (UTF-8) · target · close   Bind
-//! target  := open 0x01 · bytes commit (32) · close             Commit
-//!          | open 0x02 · bytes tree (32) · close               Tree
-//!          | open 0x03 · bytes endpoint (32) · close           Endpoint
-//!          | open 0x04 · bytes datum (UTF-8) · close           Datum
+//! kind    := open 0x01 · bytes proof (64) · close                       Open
+//!          | open 0x02 · bytes grantee (32) · close                     Grant
+//!          | open 0x03 · bytes text (UTF-8) · close                     Note
+//!          | open 0x04 · bytes path (UTF-8) · target · close            Bind
+//!          | open 0x05 · bytes domain (ASCII) · close                   Claim
+//!          | open 0x06 · bytes tree (32) · bytes label (UTF-8) · close  Introduce
+//! target  := open 0x01 · bytes commit (32) · close                      Commit
+//!          | open 0x02 · bytes tree (32) · close                        Tree
+//!          | open 0x03 · bytes endpoint (32) · close                    Endpoint
+//!          | open 0x04 · bytes datum (UTF-8) · close                    Datum
 //! ```
 //!
-//! A tree, in the receipt's header or as a target, and an endpoint are
-//! ed25519 verifying keys; a path is its segments joined by `/`.
+//! A tree, in the receipt's header, as a target or as the tree introduced,
+//! and an endpoint are ed25519 verifying keys; a path is its segments joined
+//! by `/`; a domain is a DNS name as [`Domain`] admits it, and a label one as
+//! [`Label`] admits it.
 //!
 //! The decoder admits exactly what the encoder writes, so a receipt has one
 //! blob. A constructor whose tag or payload it does not admit — another
 //! receipt tag or version, an unknown kind or target, an id of the wrong
 //! length, a tree or endpoint that is not a verifying key, text that is not
-//! UTF-8, a path with an empty segment — is refused as that constructor
-//! ([`ValueError::UnexpectedConstructor`] at its open record): the value
-//! plane's refusals name token shapes, and this is the one that names the
-//! constructor a codec turns away.
+//! UTF-8, a path with an empty segment, a malformed domain or label — is
+//! refused as that constructor ([`ValueError::UnexpectedConstructor`] at its
+//! open record): the value plane's refusals name token shapes, and this is the
+//! one that names the constructor a codec turns away.
 
 use alloc::string::String;
 
@@ -57,6 +61,8 @@ use crate::id::EndpointKey;
 use crate::id::PeerKey;
 use crate::id::TreeId;
 use crate::identity::TreeKey;
+use crate::name::Domain;
+use crate::name::Label;
 
 /// The receipt format this crate writes, and the only one it reads.
 const VERSION: u64 = 1;
@@ -75,6 +81,12 @@ const NOTE: u8 = 0x03;
 
 /// The constructor tag of [`Kind::Bind`].
 const BIND: u8 = 0x04;
+
+/// The constructor tag of [`Kind::Claim`].
+const CLAIM: u8 = 0x05;
+
+/// The constructor tag of [`Kind::Introduce`].
+const INTRODUCE: u8 = 0x06;
 
 /// The constructor tag of [`Target::Commit`].
 const COMMIT: u8 = 0x01;
@@ -210,6 +222,23 @@ pub enum Kind
         /// What it is bound to.
         target: Target,
     },
+    /// The author, the tree's owner, claims `domain` names the tree: with a
+    /// witness naming the tree's key for the domain, the claim lets the domain
+    /// stand for the key.
+    Claim
+    {
+        /// The DNS name claimed.
+        domain: Domain,
+    },
+    /// The author introduces `tree` by `label`, a petname that resolves in
+    /// this tree alone.
+    Introduce
+    {
+        /// The tree introduced.
+        tree: TreeId,
+        /// The petname it is introduced by.
+        label: Label,
+    },
 }
 
 /// The payload of a commit: which tree it belongs to, the operation it is,
@@ -330,6 +359,52 @@ impl Receipt
         Ok(Self::new(tree, operation, Kind::Bind { path, target }))
     }
 
+    /// A fresh [`Kind::Claim`] of `domain` for `tree`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records a claim of `domain`, and
+    ///   carries a fresh fence ([`Operation::random`]); the fold admits it only
+    ///   when the tree's owner is the author of the commit carrying it.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn claim(
+        tree: TreeId,
+        domain: Domain,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Claim { domain }))
+    }
+
+    /// A fresh [`Kind::Introduce`] in `tree` of `introduced` by `label`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the introduction of
+    ///   `introduced` by `label`, and carries a fresh fence
+    ///   ([`Operation::random`]).
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn introduce(
+        tree: TreeId,
+        label: Label,
+        introduced: TreeId,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Introduce {
+            tree: introduced,
+            label,
+        }))
+    }
+
     /// The tree the receipt names.
     ///
     /// # Specification
@@ -417,8 +492,10 @@ impl Receipt
     ///   receipt, a trailing record, a foreign receipt tag and version, short
     ///   ids, a tree that is not a key, an unknown kind, a short proof,
     ///   non-UTF-8 text, an empty or malformed path, an unknown target, a
-    ///   target that is not a key, and an extra payload each meet their own
-    ///   refusal, beside the round trip of every kind and every target.
+    ///   target that is not a key, a malformed domain, a malformed label, an
+    ///   introduced tree that is not a key, and an extra payload each meet
+    ///   their own refusal, beside the round trip of every kind and every
+    ///   target.
     /// - witness: `receipt::tests::every_kind_round_trips`
     /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     pub(crate) fn decode(blob: &Blob) -> Result<Self, ValueError>
@@ -442,11 +519,12 @@ impl CanonicalValue for Receipt
     /// - [`ValueError`]: the sink refused a record.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — the flat forms of a note and of a bind are compared
-    ///   byte for byte with records written independently, and every kind
-    ///   round-trips.
+    /// - hypothesis: L3 — the flat forms of a note, a bind, a claim and an
+    ///   introduction are compared byte for byte with records written
+    ///   independently, and every kind round-trips.
     /// - witness: `receipt::tests::a_note_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_bind_encodes_to_its_fixed_layout`
+    /// - witness: `receipt::tests::a_claim_and_an_introduction_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::every_kind_round_trips`
     #[inline]
     fn emit_tokens<Sink>(
@@ -482,6 +560,17 @@ impl CanonicalValue for Receipt
                 sink.bytes(TokenBytes::from(path.as_bytes()))?;
                 target.emit_tokens(sink)?;
             },
+            | Kind::Claim { ref domain } => {
+                sink.open(ConstructorTag::from(CLAIM))?;
+                let domain: &str = domain.as_ref();
+                sink.bytes(TokenBytes::from(domain.as_bytes()))?;
+            },
+            | Kind::Introduce { tree, ref label } => {
+                sink.open(ConstructorTag::from(INTRODUCE))?;
+                sink.bytes(TokenBytes::from(tree.key().as_bytes().as_slice()))?;
+                let label: &str = label.as_ref();
+                sink.bytes(TokenBytes::from(label.as_bytes()))?;
+            },
         }
         sink.close()?;
         sink.close()
@@ -496,10 +585,13 @@ impl CanonicalValue for Receipt
     ///   record for another receipt tag, another version, a tree of the wrong
     ///   length or that is not a verifying key, or a fence of the wrong length;
     ///   at the kind's open record for an unknown kind, a proof or grantee of
-    ///   the wrong length, text that is not UTF-8, or a path that is not UTF-8
-    ///   or has an empty segment; at the target's open record as [`Target`]'s
-    ///   decoder refuses; and the reader's own refusals for a record of the
-    ///   wrong kind, a truncated stream or an exhausted budget.
+    ///   the wrong length, text that is not UTF-8, a path that is not UTF-8 or
+    ///   has an empty segment, a domain that is not a DNS name [`Domain`]
+    ///   admits, an introduced tree of the wrong length or that is not a
+    ///   verifying key, or a label that is not UTF-8 or not one [`Label`]
+    ///   admits; at the target's open record as [`Target`]'s decoder refuses;
+    ///   and the reader's own refusals for a record of the wrong kind, a
+    ///   truncated stream or an exhausted budget.
     /// - panics: none.
     ///
     /// # Errors
@@ -551,6 +643,26 @@ impl CanonicalValue for Receipt
                     .map_err(|_empty_segment| opened.refused())?;
                 let target = Target::decode_tokens(reader)?;
                 Kind::Bind { path, target }
+            },
+            | CLAIM => {
+                let domain = <&[u8]>::from(reader.read_bytes()?);
+                let domain = core::str::from_utf8(domain).map_err(|_not_ascii| opened.refused())?;
+                let domain = domain
+                    .parse::<Domain>()
+                    .map_err(|_not_a_domain| opened.refused())?;
+                Kind::Claim { domain }
+            },
+            | INTRODUCE => {
+                let tree = opened.key(reader)?;
+                let label = <&[u8]>::from(reader.read_bytes()?);
+                let label = core::str::from_utf8(label).map_err(|_not_utf8| opened.refused())?;
+                let label = label
+                    .parse::<Label>()
+                    .map_err(|_not_a_label| opened.refused())?;
+                Kind::Introduce {
+                    tree: TreeId::new(tree),
+                    label,
+                }
             },
             | _unknown => return Err(opened.refused()),
         };
@@ -756,6 +868,9 @@ mod tests
     /// A peer key a grant names.
     const PEER: &str = "7065657270656572706565727065657270656572706565727065657270656572";
 
+    /// The z-base-32 spelling of the all-zero key, which no label may be.
+    const ZERO: &str = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
+
     /// The tree the receipts name.
     ///
     /// # Specification
@@ -783,6 +898,13 @@ mod tests
             Receipt::open(&tree_key(), peer).unwrap(),
             Receipt::grant(tree(), peer).unwrap(),
             Receipt::note(tree(), String::from("a note, with ünïcode")).unwrap(),
+            Receipt::claim(tree(), "gandr-lang.example.org".parse().unwrap()).unwrap(),
+            Receipt::introduce(
+                tree(),
+                "my friend, größer".parse().unwrap(),
+                elsewhere_key().tree(),
+            )
+            .unwrap(),
         ];
         for target in targets {
             let path = "concept/sub concept/größe".parse().unwrap();
@@ -865,6 +987,48 @@ mod tests
     }
 
     #[test]
+    fn a_claim_and_an_introduction_encode_to_their_fixed_layouts()
+    {
+        let header = || {
+            let mut header = vec![0x01_u8, 0x01];
+            header.extend_from_slice(&[0x02, 1, 0, 0, 0, 0, 0, 0, 0]);
+            header.extend_from_slice(&[0x03, 32, 0, 0, 0, 0, 0, 0, 0]);
+            header.extend_from_slice(tree().key().as_bytes());
+            header.extend_from_slice(&[0x03, 16, 0, 0, 0, 0, 0, 0, 0]);
+            header.extend_from_slice(&[0x0f; 16]);
+            header
+        };
+        let claim = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Claim {
+            domain: "a.bc".parse().unwrap(),
+        });
+        let mut expected = header();
+        expected.extend_from_slice(&[0x01, 0x05]);
+        expected.extend_from_slice(&[0x03, 4, 0, 0, 0, 0, 0, 0, 0, b'a', b'.', b'b', b'c']);
+        expected.extend_from_slice(&[0x05, 0x05]);
+        assert_eq!(
+            claim.encode().unwrap().as_slice(),
+            expected.as_slice(),
+            "open receipt, version word, tree, fence, open claim, domain, two closes"
+        );
+        let introduced = elsewhere_key().tree();
+        let introduction = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Introduce {
+            tree: introduced,
+            label: "b".parse().unwrap(),
+        });
+        let mut expected = header();
+        expected.extend_from_slice(&[0x01, 0x06]);
+        expected.extend_from_slice(&[0x03, 32, 0, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(introduced.key().as_bytes());
+        expected.extend_from_slice(&[0x03, 1, 0, 0, 0, 0, 0, 0, 0, b'b']);
+        expected.extend_from_slice(&[0x05, 0x05]);
+        assert_eq!(
+            introduction.encode().unwrap().as_slice(),
+            expected.as_slice(),
+            "open receipt, version word, tree, fence, open introduce, tree, label, two closes"
+        );
+    }
+
+    #[test]
     fn a_malformed_blob_is_refused_by_name()
     {
         let open = |tag: u8| vec![0x01_u8, tag];
@@ -912,6 +1076,31 @@ mod tests
             records
         };
         let target = |tag: u8, payload: &[u8]| vec![open(tag), bytes(payload), close()];
+        let claim = |domain: &[u8]| {
+            vec![
+                open(1),
+                word(1),
+                bytes(&tree),
+                bytes(&fence),
+                open(5),
+                bytes(domain),
+                close(),
+                close(),
+            ]
+        };
+        let introduce = |introduced: &[u8], label: &[u8]| {
+            vec![
+                open(1),
+                word(1),
+                bytes(&tree),
+                bytes(&fence),
+                open(6),
+                bytes(introduced),
+                bytes(label),
+                close(),
+                close(),
+            ]
+        };
 
         assert!(
             refused(&note(b"hi")).is_ok(),
@@ -920,6 +1109,14 @@ mod tests
         assert!(
             refused(&bind(b"a/b", target(1, &[9; 32]))).is_ok(),
             "the well-formed bind decodes"
+        );
+        assert!(
+            refused(&claim(b"example.test")).is_ok(),
+            "the well-formed claim decodes"
+        );
+        assert!(
+            refused(&introduce(&tree, b"b")).is_ok(),
+            "the well-formed introduction decodes"
         );
         assert_eq!(
             refused(&[]),
@@ -959,8 +1156,8 @@ mod tests
         receipt[3] = bytes(&[0x0f; 17]);
         assert_eq!(refused(&receipt), Err(constructor(1, 0)), "a long fence");
         let mut receipt = note(b"hi");
-        receipt[4] = open(5);
-        assert_eq!(refused(&receipt), Err(constructor(5, 4)), "an unknown kind");
+        receipt[4] = open(7);
+        assert_eq!(refused(&receipt), Err(constructor(7, 4)), "an unknown kind");
         let mut receipt = note(b"hi");
         receipt[4] = open(1);
         receipt[5] = bytes(&[0x70; 63]);
@@ -1003,6 +1200,36 @@ mod tests
             Err(constructor(4, 6)),
             "a datum that is not UTF-8"
         );
+        for domain in [
+            &b"Example.test"[..],
+            b"localhost",
+            b"",
+            b"example..test",
+            b"example.test.",
+            b"exa_mple.test",
+            &[0x61, 0x2e, 0xff],
+        ] {
+            assert_eq!(
+                refused(&claim(domain)),
+                Err(constructor(5, 4)),
+                "the domain {domain:?} is uppercase, undotted, empty, malformed or not ASCII"
+            );
+        }
+        for label in [&b""[..], b"a/b", b"a.b", &[0x61, 0xff], ZERO.as_bytes()] {
+            assert_eq!(
+                refused(&introduce(&tree, label)),
+                Err(constructor(6, 4)),
+                "the label {label:?} is empty, holds a slash or a dot, is not UTF-8, or is a tree \
+                 id"
+            );
+        }
+        for introduced in [&tree[.. 31], &not_a_key] {
+            assert_eq!(
+                refused(&introduce(introduced, b"b")),
+                Err(constructor(6, 4)),
+                "an introduced tree that is short or not a verifying key"
+            );
+        }
         let mut receipt = note(b"hi");
         receipt.insert(6, bytes(b"more"));
         assert_eq!(

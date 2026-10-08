@@ -23,6 +23,7 @@ use sedimentree_core::loose_commit::id::CommitId;
 use subduction_core::peer::id::PeerId;
 use subduction_crypto::verified_meta::VerifiedMeta;
 
+use crate::anchor::Anchor;
 use crate::anchor::Path;
 use crate::anchor::Resolution;
 use crate::anchor::Target;
@@ -30,12 +31,15 @@ use crate::id::PeerKey;
 use crate::id::TreeId;
 use crate::line::Field;
 use crate::line::OneLine;
+use crate::name::Domain;
+use crate::name::Label;
 use crate::receipt::Kind;
 use crate::receipt::Operation;
 use crate::receipt::Receipt;
 
 /// What a peer makes of a tree: its owner, the peers granted write authority,
-/// the admitted notes, the paths bound, and the commits refused.
+/// the admitted notes, the paths bound, the DNS names claimed, the trees
+/// introduced, and the commits refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View
 {
@@ -48,6 +52,11 @@ pub struct View
     /// Each bound path's binding: the admitted bind last in canonical order,
     /// its author and its target.
     bindings: BTreeMap<Path, (PeerKey, Target)>,
+    /// The DNS names an admitted claim names.
+    claims: BTreeSet<Domain>,
+    /// Each introduced label's introduction: the admitted introduction last in
+    /// canonical order, its author and the tree it names.
+    introductions: BTreeMap<Label, (PeerKey, TreeId)>,
     /// The refused commits and why, in canonical order.
     refused: Vec<(CommitId, Refusal)>,
 }
@@ -127,6 +136,29 @@ impl View
         }
     }
 
+    /// The DNS names the tree's owner claims, in name order.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub const fn claims(&self) -> &BTreeSet<Domain>
+    {
+        &self.claims
+    }
+
+    /// Each introduced label's introduction — its author and the tree it
+    /// names — in label order.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub const fn introductions(&self) -> &BTreeMap<Label, (PeerKey, TreeId)>
+    {
+        &self.introductions
+    }
+
     /// The refused commits and why, in canonical order.
     ///
     /// # Specification
@@ -143,21 +175,25 @@ impl fmt::Display for View
 {
     /// Write the view as lines: `owner <key>`, one `member <key>` per member
     /// in key order, one `note <key> <text>` per note in canonical order, one
-    /// `bind <path> <target>` per bound path in path order, and one
-    /// `refused <commit> <reason>` per refusal in canonical order.
+    /// `bind <path> <target>` per bound path in path order, one `claim
+    /// <domain>` per claimed name in name order, one `introduce <label>
+    /// <anchor>` per introduced label in label order, the anchor the
+    /// introduced tree's key form, and one `refused <commit> <reason>` per
+    /// refusal in canonical order.
     ///
     /// # Specification
     /// - ensures: every line ends in a newline, and each fact stays one line: a
-    ///   backslash in a note, a path or a datum is written `\\` and a control
-    ///   character as its Rust escape (`\n`, `\u{7}`), and a space in a path as
-    ///   `\u{20}`, so equal views print equal bytes and distinct facts print
-    ///   distinct lines.
+    ///   backslash in a note, a path, a label or a datum is written `\\` and a
+    ///   control character as its Rust escape (`\n`, `\u{7}`), and a space in a
+    ///   path or a label as `\u{20}`, so equal views print equal bytes and
+    ///   distinct facts print distinct lines.
     /// - panics: none.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a view with a member, notes, a multi-line note, a
-    ///   path with a space bound to a datum with a newline, and a refusal is
-    ///   printed and compared line for line.
+    ///   path with a space bound to a datum with a newline, two claims, two
+    ///   introductions, one by a label with a space, and a refusal is printed
+    ///   and compared line for line.
     /// - witness: `fold::tests::a_view_prints_one_line_per_fact`
     #[inline]
     fn fmt(
@@ -178,6 +214,14 @@ impl fmt::Display for View
             f.write_str("bind ")?;
             write!(OneLine::new(f, Field::Inner), "{path}")?;
             writeln!(f, " {target}")?;
+        }
+        for domain in &self.claims {
+            writeln!(f, "claim {domain}")?;
+        }
+        for (label, &(_author, tree)) in &self.introductions {
+            f.write_str("introduce ")?;
+            write!(OneLine::new(f, Field::Inner), "{label}")?;
+            writeln!(f, " {}", Anchor::key(tree))?;
         }
         for &(commit, ref refusal) in &self.refused {
             writeln!(f, "refused {commit} {refusal}")?;
@@ -212,6 +256,9 @@ pub enum Refusal
     BadProof,
     /// An Open that is not the tree's.
     SecondOpen,
+    /// A claim whose author is not the tree's owner: only the owner names the
+    /// tree by a DNS name, whatever authority a grant gave.
+    NotOwner,
 }
 
 impl fmt::Display for Refusal
@@ -232,6 +279,7 @@ impl fmt::Display for Refusal
             | Self::Duplicate { .. } => "duplicate operation",
             | Self::NoAuthority => "no authority",
             | Self::BadProof => "bad proof",
+            | Self::NotOwner => "not owner",
             | Self::SecondOpen => "second open",
         })
     }
@@ -286,16 +334,20 @@ struct Carry
 ///   commit is admitted iff it is the tree's Open — of the commits with no
 ///   parents whose receipt is an Open of `tree` with a proof that verifies
 ///   under `tree` for its author ([`OpenProof::verify`]), the first in
-///   canonical order, whose author is the owner — or its author is the owner,
-///   or an admitted grant to its author is among its ancestors.
+///   canonical order, whose author is the owner — or it is a claim whose author
+///   is the owner, or it is a grant, a note, a bind or an introduction whose
+///   author is the owner or has an admitted grant among its ancestors.
 /// - ensures: a refused commit is listed with the first refusal that holds,
 ///   checked in this order: [`Refusal::Undecodable`], [`Refusal::WrongTree`],
 ///   [`Refusal::Duplicate`] (an admitted commit earlier in canonical order
 ///   carries the same operation), then for an Open [`Refusal::BadProof`] when
-///   its proof fails and [`Refusal::SecondOpen`] when it is not the tree's, and
-///   [`Refusal::NoAuthority`] for a grant, a note or a bind.
+///   its proof fails and [`Refusal::SecondOpen`] when it is not the tree's,
+///   [`Refusal::NotOwner`] for a claim, and [`Refusal::NoAuthority`] for a
+///   grant, a note, a bind or an introduction.
 /// - ensures: each path's binding is the admitted bind of that path last in
-///   canonical order.
+///   canonical order, each label's introduction the admitted introduction of
+///   that label last in canonical order, and the claims the domains of every
+///   admitted claim.
 /// - fails: [`Unopened`] when no commit is the tree's Open.
 /// - panics: none.
 /// - intension: when parents claim a cycle no topological order exists; the
@@ -312,8 +364,10 @@ struct Carry
 ///   and a merge is folded from three arrival orders and compared exactly; each
 ///   refusal reason, the causal reading of a grant, the first-wins duplicate,
 ///   the smallest-root Open, a forged and a replayed proof, the last-wins bind
-///   from every arrival order, an unopened tree and a parent cycle are each
-///   pinned by a case of their own.
+///   from every arrival order, the owner-only claim refused to a member and a
+///   non-member, the last-wins introduction and an introduction refused to a
+///   non-member, an unopened tree and a parent cycle are each pinned by a case
+///   of their own.
 /// - witness: `fold::tests::a_view_is_the_same_whatever_order_commits_arrive_in`
 /// - witness: `fold::tests::a_note_by_a_non_member_is_refused`
 /// - witness: `fold::tests::a_note_by_a_peer_granted_in_its_causal_past_is_admitted`
@@ -323,6 +377,8 @@ struct Carry
 /// - witness: `fold::tests::an_open_proved_by_another_key_is_refused`
 /// - witness: `fold::tests::the_later_bind_in_canonical_order_wins`
 /// - witness: `fold::tests::a_bind_by_a_non_member_is_refused`
+/// - witness: `fold::tests::a_claim_by_anyone_but_the_owner_is_refused`
+/// - witness: `fold::tests::the_later_introduction_of_a_label_rebinds_it`
 /// - witness: `fold::tests::an_undecodable_blob_is_refused_and_an_unopened_tree_has_no_view`
 /// - witness: `fold::tests::a_parent_cycle_is_placed_in_commit_id_order`
 ///
@@ -371,7 +427,11 @@ pub fn fold(
         let proof = match receipt {
             | Ok(ref receipt) if receipt.tree() == tree => match *receipt.kind() {
                 | Kind::Open { proof } => Some(proof.verify(tree, author)),
-                | Kind::Grant { .. } | Kind::Note { .. } | Kind::Bind { .. } => None,
+                | Kind::Grant { .. }
+                | Kind::Note { .. }
+                | Kind::Bind { .. }
+                | Kind::Claim { .. }
+                | Kind::Introduce { .. } => None,
             },
             | Ok(_) | Err(_) => None,
         };
@@ -404,6 +464,8 @@ pub fn fold(
         members: BTreeSet::new(),
         notes: Vec::new(),
         bindings: BTreeMap::new(),
+        claims: BTreeSet::new(),
+        introductions: BTreeMap::new(),
         refused: Vec::new(),
     };
     let mut ready: BTreeSet<Position> = nodes
@@ -459,9 +521,23 @@ pub fn fold(
                             let _rebound = view.bindings.insert(path, (node.author, target));
                             None
                         },
-                        | Kind::Grant { .. } | Kind::Note { .. } | Kind::Bind { .. } => {
-                            Some(Refusal::NoAuthority)
+                        | Kind::Claim { domain } if node.author == owner => {
+                            let _claimed_before = view.claims.insert(domain);
+                            None
                         },
+                        | Kind::Claim { .. } => Some(Refusal::NotOwner),
+                        | Kind::Introduce {
+                            tree: introduced,
+                            label,
+                        } if authorized => {
+                            let _reintroduced =
+                                view.introductions.insert(label, (node.author, introduced));
+                            None
+                        },
+                        | Kind::Grant { .. }
+                        | Kind::Note { .. }
+                        | Kind::Bind { .. }
+                        | Kind::Introduce { .. } => Some(Refusal::NoAuthority),
                     };
                     if refusal.is_none() {
                         admit(&mut admitted, operation, node.commit);
@@ -578,6 +654,7 @@ mod tests
     use crate::anchor::Resolution;
     use crate::anchor::Target;
     use crate::id::TreeId;
+    use crate::name::Label;
     use crate::receipt::Kind;
     use crate::receipt::Operation;
     use crate::receipt::Receipt;
@@ -991,6 +1068,99 @@ mod tests
     }
 
     #[test]
+    fn a_claim_by_anyone_but_the_owner_is_refused()
+    {
+        let (a, b, c) = (owner(), other(), MemorySigner::from_bytes(&[5; 32]));
+        let claim = |domain: &str| Receipt::claim(tree(), domain.parse().unwrap()).unwrap();
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let granted = commit(&a, tree(), &[&opened], &grant(&b)).await;
+            let noted = commit(&b, tree(), &[&granted], &note("member".into())).await;
+            let by_member = commit(&b, tree(), &[&noted], &claim("member.test")).await;
+            let by_stranger = commit(&c, tree(), &[&noted], &claim("stranger.test")).await;
+            let by_owner = commit(&a, tree(), &[&noted], &claim("example.test")).await;
+            let view = fold(tree(), vec![
+                opened,
+                granted,
+                noted,
+                by_member.clone(),
+                by_stranger.clone(),
+                by_owner,
+            ])
+            .unwrap();
+            assert_eq!(
+                view.notes(),
+                [(key(&b), String::from("member"))],
+                "the member holds write authority"
+            );
+            assert_eq!(
+                *view.claims(),
+                BTreeSet::from(["example.test".parse().unwrap()]),
+                "the owner's claim alone is admitted"
+            );
+            assert_eq!(view.refused().len(), 2, "{:?}", view.refused());
+            for refused in [&by_member, &by_stranger] {
+                assert!(
+                    view.refused().contains(&(id(refused), Refusal::NotOwner)),
+                    "a claim by a member or by a stranger is refused as not the owner's"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn the_later_introduction_of_a_label_rebinds_it()
+    {
+        let (a, b, c) = (owner(), other(), MemorySigner::from_bytes(&[5; 32]));
+        let (first, second, third) = (
+            elsewhere_key().tree(),
+            TreeId::new(iroh::SecretKey::from_bytes(&[6; 32]).public()),
+            TreeId::new(iroh::SecretKey::from_bytes(&[7; 32]).public()),
+        );
+        let label = |text: &str| text.parse::<Label>().unwrap();
+        let introduce =
+            |text: &str, introduced: TreeId| Receipt::introduce(tree(), label(text), introduced);
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let introduced = commit(&a, tree(), &[&opened], &introduce("b", first).unwrap()).await;
+            let reintroduced = introduce("b", second).unwrap();
+            let reintroduced = commit(&a, tree(), &[&introduced], &reintroduced).await;
+            let granted = commit(&a, tree(), &[&reintroduced], &grant(&b)).await;
+            let by_member = introduce("my friend", third).unwrap();
+            let by_member = commit(&b, tree(), &[&granted], &by_member).await;
+            let by_stranger = introduce("b", third).unwrap();
+            let by_stranger = commit(&c, tree(), &[&by_member], &by_stranger).await;
+            let arrived = vec![
+                opened,
+                introduced,
+                reintroduced,
+                granted,
+                by_member,
+                by_stranger.clone(),
+            ];
+            let mut reversed = arrived.clone();
+            reversed.reverse();
+            for order in [arrived, reversed] {
+                let view = fold(tree(), order).unwrap();
+                assert_eq!(
+                    *view.introductions(),
+                    BTreeMap::from([
+                        (label("b"), (key(&a), second)),
+                        (label("my friend"), (key(&b), third)),
+                    ]),
+                    "the later introduction of b rebinds it, and a member introduces under its \
+                     grant"
+                );
+                assert_eq!(
+                    view.refused(),
+                    [(id(&by_stranger), Refusal::NoAuthority)],
+                    "a stranger's introduction is refused for want of authority"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn an_undecodable_blob_is_refused_and_an_unopened_tree_has_no_view()
     {
         let a = owner();
@@ -1063,6 +1233,7 @@ mod tests
         let (author, member) = (key(&owner()), key(&other()));
         let refused = CommitId::new([7; 32]);
         let bound = CommitId::new([8; 32]);
+        let elsewhere = elsewhere_key().tree();
         let view = View {
             owner: author,
             members: BTreeSet::from([member]),
@@ -1080,16 +1251,27 @@ mod tests
                     (member, Target::Commit(bound)),
                 ),
             ]),
+            claims: BTreeSet::from([
+                "example.test".parse().unwrap(),
+                "a.example.test".parse().unwrap(),
+            ]),
+            introductions: BTreeMap::from([
+                ("my friend".parse::<Label>().unwrap(), (member, elsewhere)),
+                ("b".parse::<Label>().unwrap(), (author, tree())),
+            ]),
             refused: vec![(refused, Refusal::NoAuthority)],
         };
+        let (mine, theirs) = (tree(), elsewhere);
         assert_eq!(
             view.to_string(),
             format!(
                 "owner {author}\nmember {member}\nnote {author} plain text\nnote {member} \
                  two\\nlines, a \\\\ and a bell\\u{{7}}\nbind a\\u{{20}}b/c datum \
-                 one\\nline, spaced\nbind x commit {bound}\nrefused {refused} no authority\n"
+                 one\\nline, spaced\nbind x commit {bound}\nclaim a.example.test\nclaim \
+                 example.test\nintroduce b domhringr://{mine}/\nintroduce my\\u{{20}}friend \
+                 domhringr://{theirs}/\nrefused {refused} no authority\n"
             ),
-            "one line per fact, control characters escaped, a path's spaces too"
+            "one line per fact, control characters escaped, a path's and a label's spaces too"
         );
     }
 }

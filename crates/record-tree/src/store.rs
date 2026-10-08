@@ -1,6 +1,7 @@
 //! The tree store: a subduction peer over one redb file, committing receipts
 //! into sedimentrees, reading their heads, and folding them into views.
 
+use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
 use std::path::PathBuf;
@@ -25,16 +26,24 @@ use subduction_redb_storage::RedbStorage;
 use subduction_redb_storage::RedbStorageError;
 
 use crate::anchor::Anchor;
+use crate::anchor::Authority;
 use crate::anchor::Resolution;
+use crate::anchor::Scope;
+use crate::anchor::Target;
 use crate::fold::Unopened;
 use crate::fold::View;
 use crate::fold::fold;
+use crate::id::PeerKey;
 use crate::id::TreeId;
 use crate::identity::Identity;
 use crate::identity::StateDir;
+use crate::name::Domain;
+use crate::name::Label;
 use crate::receipt::Receipt;
 use crate::runtime::TokioSpawner;
 use crate::runtime::TokioTimer;
+use crate::witness::Witness;
+use crate::witness::WitnessError;
 
 /// The connection type every peer speaks: subduction messages over iroh.
 pub type Transport = MessageTransport<IrohTransport>;
@@ -293,38 +302,231 @@ impl Peer
         Ok(view)
     }
 
-    /// Resolve `anchor` by folding its tree's stored commits.
+    /// Resolve `anchor` by folding what the store holds, asking `witness` for
+    /// the candidate trees of a DNS name and reading a label in `scope`.
     ///
     /// # Specification
-    /// - ensures: for a path anchor, what its path resolves to in the tree's
-    ///   view ([`View::resolve`]): the binding the fold admitted last in
-    ///   canonical order, or [`Resolution::Unbound`]; a bare tree anchor names
-    ///   no path, which no bind binds, so it is unbound. The answer reads only
-    ///   the local store: nothing is synced.
-    /// - fails: as [`Peer::view`] for the anchor's tree.
+    /// - ensures: the anchor's authority names a tree first. A key names its
+    ///   own tree. A DNS name names the one tree, among those `witness` names
+    ///   for it, whose local view holds the owner's claim of it
+    ///   ([`View::claims`]); a tree the store does not hold claims nothing
+    ///   here. A label names the tree the introductions of `scope`'s tree name
+    ///   for it ([`View::introductions`]), and the introductions of no other
+    ///   tree are read.
+    /// - ensures: then a path anchor resolves to what its path resolves to in
+    ///   the named tree's view ([`View::resolve`]): the binding the fold
+    ///   admitted last in canonical order, or [`Resolution::Unbound`]. A bare
+    ///   anchor named by a DNS name or a label resolves to the claim or the
+    ///   introduction naming its tree: [`Resolution::Bound`] to
+    ///   [`Target::Tree`], under the owner who claimed or the author who
+    ///   introduced. A bare key anchor names no path and nothing binds a key,
+    ///   so it resolves to [`Resolution::Unbound`] once its tree folds.
+    /// - ensures: `witness` is consulted only for a DNS name and `scope` only
+    ///   for a label. Nothing is synced and nothing dialed: the answer reads
+    ///   the local store and the witness alone.
+    /// - fails: [`WhenceError::Witness`] when the witness cannot be read,
+    ///   [`WhenceError::Unwitnessed`] when it names no tree for the domain,
+    ///   [`WhenceError::Unclaimed`] when no tree it names claims the domain
+    ///   here, [`WhenceError::Ambiguous`] when more than one does,
+    ///   [`WhenceError::Unscoped`] for a label read in no tree,
+    ///   [`WhenceError::Unintroduced`] for a label the scope's tree does not
+    ///   introduce, and [`WhenceError::View`] when a tree the resolution must
+    ///   fold has no view: the key's tree, the scope's tree, the tree a label
+    ///   names for a path anchor, or a witnessed tree whose commits cannot be
+    ///   read.
     /// - panics: none.
     ///
     /// # Errors
-    /// - [`ViewError::Load`]: the storage read fails.
-    /// - [`ViewError::Unopened`]: the anchor's tree has no Open.
+    /// - [`WhenceError::Witness`]: the witness cannot be read.
+    /// - [`WhenceError::Unwitnessed`]: the witness names no tree.
+    /// - [`WhenceError::Unclaimed`]: no witnessed tree claims the domain.
+    /// - [`WhenceError::Ambiguous`]: several witnessed trees claim it.
+    /// - [`WhenceError::Unscoped`]: a label is read in no tree.
+    /// - [`WhenceError::Unintroduced`]: the scope's tree does not introduce the
+    ///   label.
+    /// - [`WhenceError::View`]: a tree the resolution folds has no view.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — after an Open, a note and a bind committed through
-    ///   the store, the bound path resolves to the note's commit under the
-    ///   peer's key, an unbound path and the bare tree are unbound, and an
-    ///   anchor in a tree the store has never seen is unopened.
+    /// - hypothesis: L3 — in a store holding two trees, the key form resolves a
+    ///   bound path, an unbound path and the bare tree, and an unknown tree is
+    ///   refused; a DNS anchor resolves through the one witnessed tree that
+    ///   claims it, to the same binding as the key form and, bare, to that
+    ///   tree, while a witness naming an unclaiming, an unheld or no tree, or
+    ///   two claiming trees, is refused by its own reason; a label resolves in
+    ///   the tree that introduced it, bare and through a path, and is refused
+    ///   read in the introduced tree, read in no tree, or read in a tree the
+    ///   store does not hold.
     /// - witness: `store::tests::whence_resolves_an_anchor_by_fold`
+    /// - witness: `store::tests::a_dns_anchor_resolves_through_the_claim_of_the_tree_its_witness_names`
+    /// - witness: `store::tests::a_witnessed_tree_without_the_claim_is_unclaimed`
+    /// - witness: `store::tests::two_witnessed_trees_claiming_one_domain_are_ambiguous`
+    /// - witness: `store::tests::an_empty_witness_is_unwitnessed`
+    /// - witness: `store::tests::a_label_resolves_in_the_tree_that_introduced_it_alone`
     #[inline]
-    pub async fn whence(
+    pub async fn whence<W>(
         &self,
         anchor: &Anchor,
-    ) -> Result<Resolution, ViewError>
+        witness: &W,
+        scope: Scope,
+    ) -> Result<Resolution, WhenceError>
+    where
+        W: Witness + Sync,
     {
-        let view = self.view(anchor.tree()).await?;
-        Ok(match *anchor {
-            | Anchor::Tree(_) => Resolution::Unbound,
-            | Anchor::Path { ref path, .. } => view.resolve(path),
+        match *anchor.authority() {
+            | Authority::Key(tree) => {
+                let view = self.folded(tree).await?;
+                Ok(match *anchor {
+                    | Anchor::Tree(_) => Resolution::Unbound,
+                    | Anchor::Path { ref path, .. } => view.resolve(path),
+                })
+            },
+            | Authority::Domain(ref domain) => {
+                let (tree, view) = self.claimant(domain, witness).await?;
+                Ok(match *anchor {
+                    | Anchor::Tree(_) => Resolution::Bound(view.owner(), Target::Tree(tree)),
+                    | Anchor::Path { ref path, .. } => view.resolve(path),
+                })
+            },
+            | Authority::Label(ref label) => {
+                let (introducer, tree) = self.introduced(label, scope).await?;
+                match *anchor {
+                    | Anchor::Tree(_) => Ok(Resolution::Bound(introducer, Target::Tree(tree))),
+                    | Anchor::Path { ref path, .. } => {
+                        let view = self.folded(tree).await?;
+                        Ok(view.resolve(path))
+                    },
+                }
+            },
+        }
+    }
+
+    /// Fold `tree` for a resolution.
+    ///
+    /// # Specification
+    /// - ensures: the tree's view, as [`Peer::view`] folds it.
+    /// - fails: [`WhenceError::View`] naming `tree`, carrying why it has no
+    ///   view.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`WhenceError::View`]: the tree has no view.
+    async fn folded(
+        &self,
+        tree: TreeId,
+    ) -> Result<View, WhenceError>
+    {
+        self.view(tree)
+            .await
+            .map_err(|source| WhenceError::View { tree, source })
+    }
+
+    /// The one tree, among those `witness` names for `domain`, whose local
+    /// view holds the owner's claim of `domain`, with that view.
+    ///
+    /// # Specification
+    /// - ensures: each witnessed tree is folded once; a tree the store does not
+    ///   hold (unopened here) claims nothing.
+    /// - fails: [`WhenceError::Witness`], [`WhenceError::Unwitnessed`],
+    ///   [`WhenceError::Unclaimed`], [`WhenceError::Ambiguous`] carrying every
+    ///   claiming tree, and [`WhenceError::View`] for a witnessed tree whose
+    ///   commits cannot be read, as [`Peer::whence`] states them.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`WhenceError::Witness`]: the witness cannot be read.
+    /// - [`WhenceError::Unwitnessed`]: the witness names no tree.
+    /// - [`WhenceError::Unclaimed`]: no witnessed tree claims the domain.
+    /// - [`WhenceError::Ambiguous`]: several witnessed trees claim it.
+    /// - [`WhenceError::View`]: a witnessed tree's commits cannot be read.
+    async fn claimant<W>(
+        &self,
+        domain: &Domain,
+        witness: &W,
+    ) -> Result<(TreeId, View), WhenceError>
+    where
+        W: Witness + Sync,
+    {
+        let candidates = witness
+            .lookup(domain)
+            .await
+            .map_err(|source| WhenceError::Witness {
+                domain: domain.clone(),
+                source,
+            })?;
+        if candidates.is_empty() {
+            return Err(WhenceError::Unwitnessed {
+                domain: domain.clone(),
+            });
+        }
+        let mut claimants = BTreeMap::new();
+        for tree in candidates {
+            match self.view(tree).await {
+                | Ok(view) if view.claims().contains(domain) => {
+                    drop(claimants.insert(tree, view));
+                },
+                | Ok(_) | Err(ViewError::Unopened(_)) => {},
+                | Err(source @ ViewError::Load(_)) => {
+                    return Err(WhenceError::View { tree, source });
+                },
+            }
+        }
+        let mut claimants = claimants.into_iter();
+        let Some((tree, view)) = claimants.next()
+        else {
+            return Err(WhenceError::Unclaimed {
+                domain: domain.clone(),
+            });
+        };
+        let Some((other, _view)) = claimants.next()
+        else {
+            return Ok((tree, view));
+        };
+        let claimants = [tree, other]
+            .into_iter()
+            .chain(claimants.map(|(tree, _view)| tree))
+            .collect();
+        Err(WhenceError::Ambiguous {
+            domain: domain.clone(),
+            claimants,
         })
+    }
+
+    /// The introduction of `label` in `scope`'s tree: its author and the tree
+    /// it names.
+    ///
+    /// # Specification
+    /// - ensures: the introduction of `label` the fold of `scope`'s tree
+    ///   admitted last in canonical order; no other tree is read.
+    /// - fails: [`WhenceError::Unscoped`] when `scope` names no tree,
+    ///   [`WhenceError::View`] when its tree has no view, and
+    ///   [`WhenceError::Unintroduced`] when that view introduces no `label`.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`WhenceError::Unscoped`]: no tree is named to read the label in.
+    /// - [`WhenceError::View`]: the scope's tree has no view.
+    /// - [`WhenceError::Unintroduced`]: the scope's tree does not introduce the
+    ///   label.
+    async fn introduced(
+        &self,
+        label: &Label,
+        scope: Scope,
+    ) -> Result<(PeerKey, TreeId), WhenceError>
+    {
+        let Scope::In(within) = scope
+        else {
+            return Err(WhenceError::Unscoped {
+                label: label.clone(),
+            });
+        };
+        let view = self.folded(within).await?;
+        match view.introductions().get(label) {
+            | Some(&(introducer, tree)) => Ok((introducer, tree)),
+            | None => Err(WhenceError::Unintroduced {
+                label: label.clone(),
+                within,
+            }),
+        }
     }
 
     /// Read `tree`'s heads from the store.
@@ -403,6 +605,69 @@ pub enum ViewError
     Unopened(#[from] Unopened),
 }
 
+/// Why an anchor does not resolve.
+#[derive(Debug, thiserror::Error)]
+pub enum WhenceError
+{
+    /// A tree the resolution folds has no view.
+    #[error("cannot fold the tree {tree}")]
+    View
+    {
+        /// The tree folded.
+        tree: TreeId,
+        /// Why it has no view.
+        source: ViewError,
+    },
+    /// The witness of a DNS name cannot be read.
+    #[error("cannot read the witness of {domain}")]
+    Witness
+    {
+        /// The DNS name whose witness was read.
+        domain: Domain,
+        /// Why it cannot be read.
+        source: WitnessError,
+    },
+    /// The witness names no tree for the DNS name.
+    #[error("unwitnessed {domain}")]
+    Unwitnessed
+    {
+        /// The DNS name.
+        domain: Domain,
+    },
+    /// No tree the witness names claims the DNS name in its local view.
+    #[error("unclaimed {domain}")]
+    Unclaimed
+    {
+        /// The DNS name.
+        domain: Domain,
+    },
+    /// More than one tree the witness names claims the DNS name.
+    #[error("ambiguous {domain}")]
+    Ambiguous
+    {
+        /// The DNS name.
+        domain: Domain,
+        /// Every witnessed tree claiming it.
+        claimants: BTreeSet<TreeId>,
+    },
+    /// A label anchor names no tree to be read in.
+    #[error("unscoped {label}")]
+    Unscoped
+    {
+        /// The label.
+        label: Label,
+    },
+    /// The tree a label is read in introduces no tree by it.
+    #[error("unintroduced {label}")]
+    Unintroduced
+    {
+        /// The label.
+        label: Label,
+        /// The tree it was read in.
+        within: TreeId,
+    },
+}
+
 /// Why a tree's heads cannot be read.
 #[derive(Debug, thiserror::Error)]
 #[error("cannot read the tree's heads")]
@@ -421,13 +686,18 @@ mod tests
 
     use super::Peer;
     use super::ViewError;
+    use super::WhenceError;
     use crate::anchor::Anchor;
+    use crate::anchor::Authority;
     use crate::anchor::Resolution;
+    use crate::anchor::Scope;
     use crate::anchor::Target;
     use crate::fold::Refusal;
     use crate::id::TreeId;
     use crate::identity::Identity;
     use crate::identity::StateDir;
+    use crate::name::Domain;
+    use crate::name::Label;
     use crate::receipt::Receipt;
     use crate::testing::commit;
     use crate::testing::elsewhere_key;
@@ -436,7 +706,9 @@ mod tests
     use crate::testing::other;
     use crate::testing::owner;
     use crate::testing::runtime;
+    use crate::testing::seal_on;
     use crate::testing::tree_key;
+    use crate::witness::Static;
 
     /// The tree every test commits to.
     ///
@@ -445,6 +717,24 @@ mod tests
     fn tree() -> TreeId
     {
         tree_key().tree()
+    }
+
+    /// The DNS name the resolution tests claim and witness.
+    ///
+    /// # Specification
+    /// trivial.
+    fn example() -> Domain
+    {
+        "example.test".parse().unwrap()
+    }
+
+    /// A tree no test's store holds.
+    ///
+    /// # Specification
+    /// trivial.
+    fn unheld() -> TreeId
+    {
+        TreeId::new(iroh::SecretKey::from_bytes(&[6; 32]).public())
     }
 
     /// The commit id the store must assign to `receipt`: the BLAKE3 digest of
@@ -634,9 +924,10 @@ mod tests
         let root = tempfile::tempdir().unwrap();
         let state = StateDir::from(root.path().to_path_buf());
         let path = |text: &str| Anchor::Path {
-            tree: tree(),
+            authority: Authority::Key(tree()),
             path: text.parse().unwrap(),
         };
+        let nobody = Static::default();
         runtime().block_on(async {
             let peer = open(&state);
             let me = peer.identity().peer_key();
@@ -645,28 +936,299 @@ mod tests
             let noted = peer.commit(tree(), note("bound".into())).await.unwrap();
             let bind = Receipt::bind(tree(), "x".parse().unwrap(), Target::Commit(noted));
             peer.commit(tree(), bind.unwrap()).await.unwrap();
+            let whence = |anchor: Anchor| {
+                let peer = &peer;
+                let nobody = &nobody;
+                async move { peer.whence(&anchor, nobody, Scope::Unscoped).await }
+            };
             assert_eq!(
-                peer.whence(&path("x")).await.unwrap(),
+                whence(path("x")).await.unwrap(),
                 Resolution::Bound(me, Target::Commit(noted)),
                 "the bound path resolves to the note's commit under the binder's key"
             );
             assert_eq!(
-                peer.whence(&path("x/y")).await.unwrap(),
+                whence(path("x/y")).await.unwrap(),
                 Resolution::Unbound,
                 "a path below a bound one is a path of its own, unbound"
             );
             assert_eq!(
-                peer.whence(&Anchor::Tree(tree())).await.unwrap(),
+                whence(Anchor::key(tree())).await.unwrap(),
                 Resolution::Unbound,
                 "the bare tree names no path, so nothing binds it"
             );
+            let elsewhere = elsewhere_key().tree();
             let unknown = Anchor::Path {
-                tree: elsewhere_key().tree(),
+                authority: Authority::Key(elsewhere),
                 path: "x".parse().unwrap(),
             };
             assert!(
-                matches!(peer.whence(&unknown).await, Err(ViewError::Unopened(_))),
+                matches!(
+                    whence(unknown).await,
+                    Err(WhenceError::View { tree, source: ViewError::Unopened(_) }) if tree == elsewhere
+                ),
                 "an anchor in a tree never seen has no view to resolve in"
+            );
+            drop(peer);
+        });
+    }
+
+    #[test]
+    fn a_dns_anchor_resolves_through_the_claim_of_the_tree_its_witness_names()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let (a, b, unheld) = (tree(), elsewhere_key().tree(), unheld());
+        let witness = [(example(), b), (example(), a), (example(), unheld)]
+            .into_iter()
+            .collect::<Static>();
+        runtime().block_on(async {
+            let peer = open(&state);
+            let me = peer.identity().peer_key();
+            peer.commit(a, Receipt::open(&tree_key(), me).unwrap())
+                .await
+                .unwrap();
+            peer.commit(b, Receipt::open(&elsewhere_key(), me).unwrap())
+                .await
+                .unwrap();
+            let noted = peer.commit(a, note("bound".into())).await.unwrap();
+            let bind = Receipt::bind(a, "x".parse().unwrap(), Target::Commit(noted));
+            peer.commit(a, bind.unwrap()).await.unwrap();
+            let claim = Receipt::claim(a, example()).unwrap();
+            peer.commit(a, claim).await.unwrap();
+            let whence = |anchor: &str| {
+                let anchor = anchor.parse::<Anchor>().unwrap();
+                let (peer, witness) = (&peer, &witness);
+                async move { peer.whence(&anchor, witness, Scope::Unscoped).await }
+            };
+            let keyed = Anchor::Path {
+                authority: Authority::Key(a),
+                path: "x".parse().unwrap(),
+            };
+            let by_key = peer
+                .whence(&keyed, &witness, Scope::Unscoped)
+                .await
+                .unwrap();
+            assert_eq!(
+                whence("domhringr://example.test/x").await.unwrap(),
+                by_key,
+                "the DNS form resolves as the key form of the one witnessed tree that claims it"
+            );
+            assert_eq!(
+                by_key,
+                Resolution::Bound(me, Target::Commit(noted)),
+                "to the bound note"
+            );
+            assert_eq!(
+                whence("domhringr://example.test/y").await.unwrap(),
+                Resolution::Unbound,
+                "an unbound path under the name is unbound"
+            );
+            assert_eq!(
+                whence("domhringr://example.test/").await.unwrap(),
+                Resolution::Bound(me, Target::Tree(a)),
+                "the bare name resolves to the claiming tree under its owner"
+            );
+            drop(peer);
+        });
+    }
+
+    #[test]
+    fn a_witnessed_tree_without_the_claim_is_unclaimed()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let a = tree();
+        let anchor = "domhringr://example.test/x".parse::<Anchor>().unwrap();
+        let unclaimed = |result: Result<Resolution, WhenceError>| matches!(result, Err(WhenceError::Unclaimed { domain }) if domain == example());
+        runtime().block_on(async {
+            let peer = open(&state);
+            let me = peer.identity().peer_key();
+            peer.commit(a, Receipt::open(&tree_key(), me).unwrap())
+                .await
+                .unwrap();
+            let noted = peer.commit(a, note("bound".into())).await.unwrap();
+            let bind = Receipt::bind(a, "x".parse().unwrap(), Target::Commit(noted));
+            peer.commit(a, bind.unwrap()).await.unwrap();
+            let witness = core::iter::once((example(), a)).collect::<Static>();
+            assert!(
+                unclaimed(peer.whence(&anchor, &witness, Scope::Unscoped).await),
+                "a witness naming a tree that never claimed the name is refused"
+            );
+            let other_name = Receipt::claim(a, "other.test".parse().unwrap()).unwrap();
+            peer.commit(a, other_name).await.unwrap();
+            assert!(
+                unclaimed(peer.whence(&anchor, &witness, Scope::Unscoped).await),
+                "a claim of another name claims nothing here"
+            );
+            let granted = Receipt::grant(a, key(&other())).unwrap();
+            let granted = peer.commit(a, granted).await.unwrap();
+            let squat = Receipt::claim(a, example()).unwrap().encode().unwrap();
+            let squat = seal_on(&other(), a, BTreeSet::from([granted]), squat).await;
+            Storage::<Sendable>::save_loose_commit(&peer.storage, a.sedimentree(), squat.clone())
+                .await
+                .unwrap();
+            assert!(
+                peer.view(a)
+                    .await
+                    .unwrap()
+                    .refused()
+                    .contains(&(id(&squat), Refusal::NotOwner)),
+                "a member's claim of the name is refused by the fold"
+            );
+            assert!(
+                unclaimed(peer.whence(&anchor, &witness, Scope::Unscoped).await),
+                "so the member's claim does not make the name resolve"
+            );
+            let elsewhere = core::iter::once((example(), unheld())).collect::<Static>();
+            assert!(
+                unclaimed(peer.whence(&anchor, &elsewhere, Scope::Unscoped).await),
+                "a witnessed tree the store does not hold claims nothing here"
+            );
+            drop(peer);
+        });
+    }
+
+    #[test]
+    fn two_witnessed_trees_claiming_one_domain_are_ambiguous()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let (a, b) = (tree(), elsewhere_key().tree());
+        let anchor = "domhringr://example.test/".parse::<Anchor>().unwrap();
+        runtime().block_on(async {
+            let peer = open(&state);
+            let me = peer.identity().peer_key();
+            peer.commit(a, Receipt::open(&tree_key(), me).unwrap())
+                .await
+                .unwrap();
+            peer.commit(b, Receipt::open(&elsewhere_key(), me).unwrap())
+                .await
+                .unwrap();
+            for claimant in [a, b] {
+                let claim = Receipt::claim(claimant, example()).unwrap();
+                peer.commit(claimant, claim).await.unwrap();
+            }
+            let both = [(example(), a), (example(), b)]
+                .into_iter()
+                .collect::<Static>();
+            assert!(
+                matches!(
+                    peer.whence(&anchor, &both, Scope::Unscoped).await,
+                    Err(WhenceError::Ambiguous { domain, claimants })
+                        if domain == example() && claimants == BTreeSet::from([a, b])
+                ),
+                "two witnessed trees claiming the name are refused, naming both"
+            );
+            let one = core::iter::once((example(), b)).collect::<Static>();
+            assert_eq!(
+                peer.whence(&anchor, &one, Scope::Unscoped).await.unwrap(),
+                Resolution::Bound(me, Target::Tree(b)),
+                "a witness naming one of them resolves to it"
+            );
+            drop(peer);
+        });
+    }
+
+    #[test]
+    fn an_empty_witness_is_unwitnessed()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let a = tree();
+        let anchor = "domhringr://example.test/".parse::<Anchor>().unwrap();
+        let unwitnessed = |result: Result<Resolution, WhenceError>| matches!(result, Err(WhenceError::Unwitnessed { domain }) if domain == example());
+        runtime().block_on(async {
+            let peer = open(&state);
+            let me = peer.identity().peer_key();
+            peer.commit(a, Receipt::open(&tree_key(), me).unwrap())
+                .await
+                .unwrap();
+            peer.commit(a, Receipt::claim(a, example()).unwrap())
+                .await
+                .unwrap();
+            assert!(
+                unwitnessed(
+                    peer.whence(&anchor, &Static::default(), Scope::Unscoped)
+                        .await
+                ),
+                "a witness naming nothing refuses the name, claimed or not"
+            );
+            let other_name =
+                core::iter::once(("other.test".parse().unwrap(), a)).collect::<Static>();
+            assert!(
+                unwitnessed(peer.whence(&anchor, &other_name, Scope::Unscoped).await),
+                "a witness naming trees for another name alone names none for this one"
+            );
+            drop(peer);
+        });
+    }
+
+    #[test]
+    fn a_label_resolves_in_the_tree_that_introduced_it_alone()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let (a, b, unheld) = (tree(), elsewhere_key().tree(), unheld());
+        let label = |text: &str| text.parse::<Label>().unwrap();
+        let nobody = Static::default();
+        runtime().block_on(async {
+            let peer = open(&state);
+            let me = peer.identity().peer_key();
+            peer.commit(a, Receipt::open(&tree_key(), me).unwrap())
+                .await
+                .unwrap();
+            peer.commit(b, Receipt::open(&elsewhere_key(), me).unwrap())
+                .await
+                .unwrap();
+            let noted = peer.commit(b, Receipt::note(b, "in b".into()).unwrap())
+                .await
+                .unwrap();
+            let bind = Receipt::bind(b, "x".parse().unwrap(), Target::Commit(noted));
+            peer.commit(b, bind.unwrap()).await.unwrap();
+            let introduction = Receipt::introduce(a, label("b"), b).unwrap();
+            peer.commit(a, introduction).await.unwrap();
+            let whence = |anchor: &str, scope: Scope| {
+                let anchor = anchor.parse::<Anchor>().unwrap();
+                let (peer, nobody) = (&peer, &nobody);
+                async move { peer.whence(&anchor, nobody, scope).await }
+            };
+            assert_eq!(
+                whence("domhringr://b/", Scope::In(a)).await.unwrap(),
+                Resolution::Bound(me, Target::Tree(b)),
+                "read in the tree that introduced it, the label names the introduced tree"
+            );
+            assert_eq!(
+                whence("domhringr://b/x", Scope::In(a)).await.unwrap(),
+                Resolution::Bound(me, Target::Commit(noted)),
+                "and a path under it resolves in the introduced tree"
+            );
+            assert!(
+                matches!(
+                    whence("domhringr://b/", Scope::In(b)).await,
+                    Err(WhenceError::Unintroduced { label: read, within }) if read == label("b") && within == b
+                ),
+                "read in the introduced tree, which introduced nothing, the label is unknown"
+            );
+            assert!(
+                matches!(
+                    whence("domhringr://c/", Scope::In(a)).await,
+                    Err(WhenceError::Unintroduced { label: read, .. }) if read == label("c")
+                ),
+                "a label nobody introduced is unknown"
+            );
+            assert!(
+                matches!(
+                    whence("domhringr://b/", Scope::Unscoped).await,
+                    Err(WhenceError::Unscoped { label: read }) if read == label("b")
+                ),
+                "a label read in no tree has nowhere to resolve"
+            );
+            assert!(
+                matches!(
+                    whence("domhringr://b/", Scope::In(unheld)).await,
+                    Err(WhenceError::View { tree, source: ViewError::Unopened(_) }) if tree == unheld
+                ),
+                "a label read in a tree the store does not hold has no view to be read in"
             );
             drop(peer);
         });
