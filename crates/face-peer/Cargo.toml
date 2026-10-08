@@ -1,0 +1,28 @@
+[package]
+name = "domhringr-face-peer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The domhringr peer binary: commits to, reads and syncs a sedimentree over iroh"
+readme = "README.md"
+repository.workspace = true
+license.workspace = true
+keywords = ["domhringr", "iroh", "peer", "sedimentree", "sync"]
+categories = ["command-line-utilities", "network-programming"]
+publish.workspace = true
+
+[[bin]]
+name = "domhringr-peer"
+path = "src/main.rs"
+
+[dependencies]
+domhringr-record-tree = { workspace = true }
+lexopt = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

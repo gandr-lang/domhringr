@@ -1,0 +1,33 @@
+[package]
+name = "domhringr-record-tree"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The domhringr record library: a sedimentree stored on disk and synced with a peer over iroh"
+readme = "README.md"
+repository.workspace = true
+license.workspace = true
+keywords = ["domhringr", "iroh", "sedimentree", "subduction", "sync"]
+categories = ["network-programming"]
+publish.workspace = true
+
+[dependencies]
+data-encoding = { workspace = true }
+future_form = { workspace = true }
+futures = { workspace = true }
+iroh = { workspace = true }
+iroh-mdns-address-lookup = { workspace = true }
+sedimentree_core = { workspace = true }
+subduction_core = { workspace = true }
+subduction_crypto = { workspace = true }
+subduction_iroh = { workspace = true }
+subduction_redb_storage = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+blake3 = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

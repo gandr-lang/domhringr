@@ -1,20 +1,149 @@
 [workspace]
 resolver = "3"
-members = ["crates/face-driver"]
+members = ["crates/face-driver", "crates/face-peer", "crates/record-tree"]
 
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.90.0"
+rust-version = "1.91.0"
 repository = "https://github.com/gandr-lang/domhringr"
 license = "Apache-2.0 WITH LLVM-exception"
 publish = false
 
 # One table per dependency: what it is, `# features:` with the need behind
 # each enabled feature, `# consumers:`. Defaults are always off; a feature is
-# on only because a build or a test failed without it. Empty until the first
-# crate needs one.
+# on only because a build or a test failed without it.
 [workspace.dependencies]
+
+# The reference BLAKE3: the tests' independent oracle for commit ids.
+# consumers:
+# - record-tree (dev)
+[workspace.dependencies.blake3]
+version = "1.8"
+default-features = false
+
+# Hex text for tree and peer ids, decoded into fixed buffers.
+# consumers:
+# - record-tree
+[workspace.dependencies.data-encoding]
+version = "2.11"
+default-features = false
+
+# The record library: the tree store, the endpoint, sync.
+# consumers:
+# - face-peer
+[workspace.dependencies.domhringr-record-tree]
+path = "crates/record-tree"
+
+# The `Sendable` future form subduction's runtime glue is generic over.
+# consumers:
+# - record-tree
+[workspace.dependencies.future_form]
+version = "0.3"
+default-features = false
+
+# Boxed futures and abortable tasks for the spawner subduction drives.
+# features:
+# - alloc: `BoxFuture`, `Abortable` and `AbortHandle`
+# consumers:
+# - record-tree
+[workspace.dependencies.futures]
+version = "0.3"
+default-features = false
+features = ["alloc"]
+
+# QUIC endpoints dialed by public key, with relay and hole punching.
+# features:
+# - tls-ring: the crypto provider the `N0` preset requires
+# - portmapper: UPnP / NAT-PMP port mapping, so a peer behind a home router is
+#   directly reachable across networks
+# consumers:
+# - record-tree
+[workspace.dependencies.iroh]
+version = "1.3"
+default-features = false
+features = ["portmapper", "tls-ring"]
+
+# mDNS address lookup: a peer is reached by endpoint id on the LAN without
+# infrastructure.
+# consumers:
+# - record-tree
+[workspace.dependencies.iroh-mdns-address-lookup]
+version = "0.6"
+default-features = false
+
+# The peer binary's argument lexer: options and subcommands from `OsString`s.
+# consumers:
+# - face-peer
+[workspace.dependencies.lexopt]
+version = "0.3"
+default-features = false
+
+# The sedimentree: tree and commit identities, blobs.
+# consumers:
+# - record-tree
+[workspace.dependencies.sedimentree_core]
+version = "0.15"
+default-features = false
+
+# The subduction sync protocol: the peer, its builder, storage policy.
+# consumers:
+# - record-tree
+[workspace.dependencies.subduction_core]
+version = "0.19"
+default-features = false
+
+# The ed25519 signer subduction authenticates and signs commits with.
+# consumers:
+# - record-tree
+[workspace.dependencies.subduction_crypto]
+version = "0.10"
+default-features = false
+
+# Subduction over iroh: the dialing and accepting handshakes, the transport.
+# features:
+# - server: `accept_one`, the accepting side of the handshake
+# consumers:
+# - record-tree
+[workspace.dependencies.subduction_iroh]
+version = "0.11"
+default-features = false
+features = ["server"]
+
+# Durable tree storage: one redb file per peer.
+# consumers:
+# - record-tree
+[workspace.dependencies.subduction_redb_storage]
+version = "0.3"
+default-features = false
+
+# Throwaway state directories for the process-level and library tests.
+# consumers:
+# - face-peer (dev)
+# - record-tree (dev)
+[workspace.dependencies.tempfile]
+version = "3.27"
+default-features = false
+
+# `derive(Error)` for the record library's and the peer binary's error enums.
+# consumers:
+# - face-peer
+# - record-tree
+[workspace.dependencies.thiserror]
+version = "2.0"
+default-features = false
+
+# The async runtime under iroh, subduction and the peer binary.
+# features:
+# - rt-multi-thread: the peer binary's and the tests' multi-threaded runtime
+# - time: `tokio::time::timeout` behind subduction's call deadlines
+# consumers:
+# - face-peer
+# - record-tree
+[workspace.dependencies.tokio]
+version = "1"
+default-features = false
+features = ["rt-multi-thread", "time"]
 
 # The lint wall. Every group is denied at priority -1 so an individual `allow`
 # below it wins; every allow states the class it exempts. A lint leaves this
