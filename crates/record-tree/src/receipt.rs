@@ -1,21 +1,43 @@
 //! Receipts: the payload every commit carries, and its encoding.
 //!
-//! A receipt is one byte of format version followed by its body: the tree,
-//! the operation fence and the kind, in that order. A commit's blob is
-//! exactly these bytes; its author is the commit's verified signer, never a
-//! field.
+//! A receipt is the value plane's canonical value of a format version, the
+//! tree it belongs to, the operation fence, and the kind, in that order. A
+//! commit's blob is the receipt's flat form ([`gandr_storage_values`]'s
+//! `encode_flat`): the token body a value-plane chunk frames, so a receipt
+//! stored today commits through the value plane's chunk DAG later without
+//! re-encoding. Its author is the commit's verified signer, never a field.
 //!
-//! The body's codec is a stand-in, confined to [`Receipt::encode`] and
-//! [`Receipt::decode`] until receipts encode through the value plane: the
-//! postcard wire format of a private mirror of the receipt ([`Wire`]) —
-//! fixed field order, the tree and peer keys as their raw 32 bytes, the
-//! operation as its raw 16 bytes, the kind as a varint variant index, a
-//! note's text as a varint length and its UTF-8 bytes, and no
-//! self-describing framing.
+//! In the value plane's token records (open, word, bytes, close), a receipt
+//! is:
+//!
+//! ```text
+//! receipt := open 0x01 · word 1 · bytes tree (32) · bytes operation (16) · kind · close
+//! kind    := open 0x01 · close                          Open
+//!          | open 0x02 · bytes grantee (32) · close     Grant
+//!          | open 0x03 · bytes text (UTF-8) · close     Note
+//! ```
+//!
+//! The decoder admits exactly what the encoder writes, so a receipt has one
+//! blob. A constructor whose tag or payload it does not admit — another
+//! receipt tag or version, an unknown kind, an id of the wrong length, text
+//! that is not UTF-8 — is refused as that constructor
+//! ([`ValueError::UnexpectedConstructor`] at its open record): the value
+//! plane's refusals name token shapes, and this is the one that names the
+//! constructor a codec turns away.
 
 use alloc::string::String;
-use alloc::vec::Vec;
 
+use gandr_storage_values::CanonicalValue;
+use gandr_storage_values::CanonicalWord;
+use gandr_storage_values::ConstructorTag;
+use gandr_storage_values::TokenBody;
+use gandr_storage_values::TokenBytes;
+use gandr_storage_values::TokenOffset;
+use gandr_storage_values::TokenReader;
+use gandr_storage_values::TokenSink;
+use gandr_storage_values::ValueError;
+use gandr_storage_values::decode_flat;
+use gandr_storage_values::encode_flat;
 use sedimentree_core::blob::Blob;
 use sedimentree_core::id::SedimentreeId;
 use subduction_core::peer::id::PeerId;
@@ -24,7 +46,19 @@ use crate::id::PeerKey;
 use crate::id::TreeId;
 
 /// The receipt format this crate writes, and the only one it reads.
-const VERSION: u8 = 1;
+const VERSION: u64 = 1;
+
+/// The receipt's constructor tag.
+const RECEIPT: u8 = 0x01;
+
+/// The constructor tag of [`Kind::Open`].
+const OPEN: u8 = 0x01;
+
+/// The constructor tag of [`Kind::Grant`].
+const GRANT: u8 = 0x02;
+
+/// The constructor tag of [`Kind::Note`].
+const NOTE: u8 = 0x03;
 
 /// An operation's idempotency fence: sixteen bytes drawn at random when the
 /// receipt is made. Two receipts carrying the same fence are one operation.
@@ -90,85 +124,6 @@ pub struct Receipt
     operation: Operation,
     /// The transition.
     kind: Kind,
-}
-
-/// The stand-in codec's view of a receipt body: postcard writes these fields
-/// in this order. It borrows a note's text, so encoding copies nothing but
-/// the fixed-size keys and decoding allocates only the text a receipt owns.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Wire<'text>
-{
-    /// The tree id's raw bytes.
-    tree: [u8; 32],
-    /// The fence's raw bytes.
-    operation: [u8; 16],
-    /// The transition, its text borrowed from the bytes it is read from.
-    #[serde(borrow)]
-    kind: WireKind<'text>,
-}
-
-/// The stand-in codec's view of a [`Kind`], variant for variant in the same
-/// order.
-#[derive(serde::Serialize, serde::Deserialize)]
-enum WireKind<'text>
-{
-    /// [`Kind::Open`].
-    Open,
-    /// [`Kind::Grant`], the grantee's peer id as its raw bytes.
-    Grant
-    {
-        /// The grantee's peer id.
-        to: [u8; 32],
-    },
-    /// [`Kind::Note`], its text borrowed.
-    Note
-    {
-        /// The note's text.
-        text: &'text str,
-    },
-}
-
-impl<'text> Wire<'text>
-{
-    /// The wire view of `receipt`, borrowing its text.
-    ///
-    /// # Specification
-    /// trivial.
-    fn of(receipt: &'text Receipt) -> Self
-    {
-        let kind = match receipt.kind {
-            | Kind::Open => WireKind::Open,
-            | Kind::Grant { to } => WireKind::Grant {
-                to: *to.peer_id().as_bytes(),
-            },
-            | Kind::Note { ref text } => WireKind::Note { text },
-        };
-        Self {
-            tree: *receipt.tree.sedimentree().as_bytes(),
-            operation: receipt.operation.0,
-            kind,
-        }
-    }
-
-    /// The receipt this wire view spells, owning its text.
-    ///
-    /// # Specification
-    /// trivial.
-    fn into_receipt(self) -> Receipt
-    {
-        let kind = match self.kind {
-            | WireKind::Open => Kind::Open,
-            | WireKind::Grant { to } => Kind::Grant {
-                to: PeerKey::new(PeerId::new(to)),
-            },
-            | WireKind::Note { text } => Kind::Note { text: text.into() },
-        };
-        Receipt::new(
-            TreeId::from_sedimentree(SedimentreeId::new(self.tree)),
-            Operation(self.operation),
-            kind,
-        )
-    }
 }
 
 impl Receipt
@@ -291,82 +246,203 @@ impl Receipt
         (self.tree, self.operation, self.kind)
     }
 
-    /// Encode the receipt into the blob a commit carries.
+    /// Encode the receipt into the blob a commit carries: its flat form.
     ///
     /// # Specification
-    /// - ensures: the blob is the version byte followed by the stand-in codec's
-    ///   encoding of the tree, the fence and the kind, in that order;
-    ///   [`Receipt::decode`] reads it back to an equal receipt, and equal
-    ///   receipts encode to equal bytes.
-    /// - fails: [`EncodeError`] when the codec refuses a value; no field of a
-    ///   receipt is of a kind it refuses.
+    /// - ensures: the blob is the value plane's flat form of the receipt, the
+    ///   records the module grammar lists; [`Receipt::decode`] reads it back to
+    ///   an equal receipt, and equal receipts encode to equal bytes.
+    /// - fails: the value plane's overflow refusal for a note too long for a
+    ///   reader to address; a receipt embeds no committed pointer and always
+    ///   emits one balanced value, so no other refusal arises.
     /// - panics: none.
     ///
     /// # Errors
-    /// - [`EncodeError`]: the codec refused to serialize.
+    /// - [`ValueError`]: the flat encoder refused the receipt.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — every kind is encoded and decoded back equal, and one
-    ///   encoding is compared byte for byte with independently written bytes,
-    ///   which pins the field order and the absence of framing.
+    ///   encoding is compared byte for byte with independently written records,
+    ///   which pins the grammar.
     /// - witness: `receipt::tests::every_kind_round_trips`
     /// - witness: `receipt::tests::a_note_encodes_to_its_fixed_layout`
-    pub(crate) fn encode(&self) -> Result<Blob, EncodeError>
+    pub(crate) fn encode(&self) -> Result<Blob, ValueError>
     {
-        let wire = (VERSION, Wire::of(self));
-        let size = postcard::experimental::serialized_size(&wire).map_err(EncodeError)?;
-        let bytes = postcard::to_extend(&wire, Vec::with_capacity(size)).map_err(EncodeError)?;
-        Ok(Blob::new(bytes))
+        let flat = encode_flat(self)?;
+        Ok(Blob::new(flat.as_ref().to_vec()))
     }
 
     /// Decode the receipt a commit's blob carries.
     ///
     /// # Specification
-    /// - ensures: accepts exactly the blobs [`Receipt::encode`] produces: one
-    ///   receipt has one encoding, so a blob padded with trailing bytes or
-    ///   spelling a varint in more bytes than it needs is refused.
-    /// - fails: [`DecodeError::Empty`] for an empty blob,
-    ///   [`DecodeError::Version`] for any version byte but this format's,
-    ///   [`DecodeError::Body`] for a body the codec cannot read (too short, an
-    ///   unknown kind, text that is not UTF-8), [`DecodeError::Trailing`] for
-    ///   bytes after the receipt, and [`DecodeError::NonCanonical`] for a body
-    ///   longer than the receipt's own encoding.
+    /// - ensures: accepts exactly the blobs [`Receipt::encode`] produces, so
+    ///   one receipt has one blob.
+    /// - fails: the value plane's refusals for a blob that is not one
+    ///   well-formed value with nothing after it, and
+    ///   [`ValueError::UnexpectedConstructor`] for a constructor the receipt
+    ///   grammar does not admit.
     /// - panics: none.
     ///
     /// # Errors
-    /// - [`DecodeError::Empty`]: the blob is empty.
-    /// - [`DecodeError::Version`]: the format version is not this one.
-    /// - [`DecodeError::Body`]: the codec cannot read the body.
-    /// - [`DecodeError::Trailing`]: bytes follow the receipt.
-    /// - [`DecodeError::NonCanonical`]: the body is not the canonical encoding.
+    /// - [`ValueError`]: the blob is not a receipt's flat form.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — the empty blob, a foreign version, a truncated body,
-    ///   an unknown kind, non-UTF-8 text, a trailing byte and an overlong
-    ///   varint each meet their own refusal, beside the round trip of every
-    ///   kind.
+    /// - hypothesis: L3 — the empty blob, a foreign record kind, a truncated
+    ///   receipt, a trailing record, a foreign receipt tag and version, short
+    ///   ids, an unknown kind, non-UTF-8 text and an extra payload each meet
+    ///   their own refusal, beside the round trip of every kind.
     /// - witness: `receipt::tests::every_kind_round_trips`
     /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
-    pub(crate) fn decode(blob: &Blob) -> Result<Self, DecodeError>
+    pub(crate) fn decode(blob: &Blob) -> Result<Self, ValueError>
     {
-        let Some((&version, body)) = blob.as_slice().split_first()
-        else {
-            return Err(DecodeError::Empty);
+        decode_flat(TokenBody::from(blob.as_slice()))
+    }
+}
+
+impl CanonicalValue for Receipt
+{
+    /// Walk the receipt into `sink` in the module grammar's order.
+    ///
+    /// # Specification
+    /// - ensures: on success `sink` received exactly one balanced value: the
+    ///   receipt constructor holding the version word, the tree and fence
+    ///   bytes, and the kind constructor with its payload.
+    /// - fails: propagates the sink's refusal unchanged.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: the sink refused a record.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the flat form of a note is compared byte for byte
+    ///   with records written independently, and every kind round-trips.
+    /// - witness: `receipt::tests::a_note_encodes_to_its_fixed_layout`
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    #[inline]
+    fn emit_tokens<Sink>(
+        &self,
+        sink: &mut Sink,
+    ) -> Result<(), ValueError>
+    where
+        Sink: TokenSink + ?Sized,
+    {
+        sink.open(ConstructorTag::from(RECEIPT))?;
+        sink.word(CanonicalWord::from(VERSION))?;
+        sink.bytes(TokenBytes::from(
+            self.tree.sedimentree().as_bytes().as_slice(),
+        ))?;
+        sink.bytes(TokenBytes::from(self.operation.0.as_slice()))?;
+        match self.kind {
+            | Kind::Open => sink.open(ConstructorTag::from(OPEN))?,
+            | Kind::Grant { to } => {
+                sink.open(ConstructorTag::from(GRANT))?;
+                sink.bytes(TokenBytes::from(to.peer_id().as_bytes().as_slice()))?;
+            },
+            | Kind::Note { ref text } => {
+                sink.open(ConstructorTag::from(NOTE))?;
+                sink.bytes(TokenBytes::from(text.as_bytes()))?;
+            },
+        }
+        sink.close()?;
+        sink.close()
+    }
+
+    /// Read one receipt from `reader`.
+    ///
+    /// # Specification
+    /// - ensures: on success the receipt whose emission the records are, and
+    ///   the reader stands after the receipt's close.
+    /// - fails: [`ValueError::UnexpectedConstructor`] at the receipt's open
+    ///   record for another receipt tag, another version, or a tree or fence of
+    ///   the wrong length; at the kind's open record for an unknown kind, a
+    ///   grantee of the wrong length, or text that is not UTF-8; and the
+    ///   reader's own refusals for a record of the wrong kind, a truncated
+    ///   stream or an exhausted budget.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — each refusal is met by a body built record by record,
+    ///   and every kind round-trips.
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    #[inline]
+    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    {
+        let receipt = Opened::read(reader)?;
+        if u8::from(receipt.tag) != RECEIPT || u64::from(reader.read_word()?) != VERSION {
+            return Err(receipt.refused());
+        }
+        let tree = <&[u8]>::from(reader.read_bytes()?);
+        let tree = <[u8; 32]>::try_from(tree).map_err(|_wrong_length| receipt.refused())?;
+        let operation = <&[u8]>::from(reader.read_bytes()?);
+        let operation =
+            <[u8; 16]>::try_from(operation).map_err(|_wrong_length| receipt.refused())?;
+        let opened = Opened::read(reader)?;
+        let kind = match u8::from(opened.tag) {
+            | OPEN => Kind::Open,
+            | GRANT => {
+                let to = <&[u8]>::from(reader.read_bytes()?);
+                let to = <[u8; 32]>::try_from(to).map_err(|_wrong_length| opened.refused())?;
+                Kind::Grant {
+                    to: PeerKey::new(PeerId::new(to)),
+                }
+            },
+            | NOTE => {
+                let text = <&[u8]>::from(reader.read_bytes()?);
+                let text = core::str::from_utf8(text).map_err(|_not_utf8| opened.refused())?;
+                Kind::Note { text: text.into() }
+            },
+            | _unknown => return Err(opened.refused()),
         };
-        if version != VERSION {
-            return Err(DecodeError::Version { found: version });
+        reader.read_close()?;
+        reader.read_close()?;
+        let tree = TreeId::from_sedimentree(SedimentreeId::new(tree));
+        Ok(Self::new(tree, Operation(operation), kind))
+    }
+}
+
+/// A constructor's open record, as the receipt decoder read it.
+#[derive(Clone, Copy, Debug)]
+struct Opened
+{
+    /// The constructor's tag.
+    tag: ConstructorTag,
+    /// The open record's position.
+    at: TokenOffset,
+}
+
+impl Opened
+{
+    /// Read the next record as an open record.
+    ///
+    /// # Specification
+    /// - ensures: on success the tag read and the position of its record.
+    /// - fails: the reader's refusals for any other record or none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: the next record is not an open record.
+    fn read(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    {
+        let at = reader.position();
+        let tag = reader.read_tag()?;
+        Ok(Self { tag, at })
+    }
+
+    /// The refusal of this constructor: its tag or its payload is not one the
+    /// receipt grammar admits.
+    ///
+    /// # Specification
+    /// trivial.
+    const fn refused(self) -> ValueError
+    {
+        ValueError::UnexpectedConstructor {
+            found: self.tag,
+            position: self.at,
         }
-        let (wire, rest) = postcard::take_from_bytes::<Wire<'_>>(body)
-            .map_err(|failure| DecodeError::Body(BodyError(failure)))?;
-        if !rest.is_empty() {
-            return Err(DecodeError::Trailing);
-        }
-        let canonical = postcard::experimental::serialized_size(&wire)
-            .map_err(|failure| DecodeError::Body(BodyError(failure)))?;
-        if canonical != body.len() {
-            return Err(DecodeError::NonCanonical);
-        }
-        Ok(wire.into_receipt())
     }
 }
 
@@ -376,53 +452,18 @@ impl Receipt
 #[repr(transparent)]
 pub struct RandomError(#[source] getrandom::Error);
 
-/// Why a receipt cannot be encoded.
-#[derive(Debug, thiserror::Error)]
-#[error("cannot encode the receipt")]
-#[repr(transparent)]
-pub struct EncodeError(#[source] postcard::Error);
-
-/// Why the codec cannot read a receipt body; its source carries the codec's
-/// own reason.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("the codec cannot read the receipt body")]
-#[repr(transparent)]
-pub struct BodyError(#[source] postcard::Error);
-
-/// Why a blob is not a receipt.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum DecodeError
-{
-    /// The blob is empty.
-    #[error("the blob is empty")]
-    Empty,
-    /// The format version is not the one this crate reads.
-    #[error("receipt format version {found} is not version {VERSION}")]
-    Version
-    {
-        /// The version byte the blob carries.
-        found: u8,
-    },
-    /// The codec cannot read the body.
-    #[error("the receipt body is malformed")]
-    Body(#[source] BodyError),
-    /// Bytes follow the receipt.
-    #[error("bytes follow the receipt")]
-    Trailing,
-    /// The body is longer than the receipt's canonical encoding.
-    #[error("the receipt is not canonically encoded")]
-    NonCanonical,
-}
-
 #[cfg(test)]
 mod tests
 {
     use alloc::string::String;
+    use alloc::vec::Vec;
 
+    use gandr_storage_values::ConstructorTag;
+    use gandr_storage_values::TokenKind;
+    use gandr_storage_values::TokenOffset;
+    use gandr_storage_values::ValueError;
     use sedimentree_core::blob::Blob;
 
-    use super::BodyError;
-    use super::DecodeError;
     use super::Kind;
     use super::Operation;
     use super::Receipt;
@@ -485,66 +526,126 @@ mod tests
     #[test]
     fn a_note_encodes_to_its_fixed_layout()
     {
-        let operation = Operation([0x0f; 16]);
-        let receipt = Receipt::new(tree(), operation, Kind::Note {
+        let receipt = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Note {
             text: String::from("hi"),
         });
-        let mut expected = vec![1_u8];
+        let mut expected = vec![0x01_u8, 0x01];
+        expected.extend_from_slice(&[0x02, 1, 0, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[0x03, 32, 0, 0, 0, 0, 0, 0, 0]);
         expected.extend_from_slice(b"receiptreceiptreceiptreceiptrece");
+        expected.extend_from_slice(&[0x03, 16, 0, 0, 0, 0, 0, 0, 0]);
         expected.extend_from_slice(&[0x0f; 16]);
-        expected.extend_from_slice(&[2, 2, b'h', b'i']);
+        expected.extend_from_slice(&[0x01, 0x03]);
+        expected.extend_from_slice(&[0x03, 2, 0, 0, 0, 0, 0, 0, 0, b'h', b'i']);
+        expected.extend_from_slice(&[0x05, 0x05]);
         assert_eq!(
             receipt.encode().unwrap().as_slice(),
             expected.as_slice(),
-            "version, tree, fence, kind index, text length, text: nothing else"
+            "open receipt, version word, tree, fence, open note, text, two closes"
         );
     }
 
     #[test]
     fn a_malformed_blob_is_refused_by_name()
     {
-        let [open, _grant, note] = every_kind();
-        let open = open.encode().unwrap().as_slice().to_vec();
-        let note = note.encode().unwrap().as_slice().to_vec();
-        let refused = |bytes: Vec<u8>| Receipt::decode(&Blob::new(bytes)).unwrap_err();
+        let open = |tag: u8| vec![0x01_u8, tag];
+        let word = |value: u64| [&[0x02_u8][..], &value.to_le_bytes()].concat();
+        let bytes = |payload: &[u8]| {
+            let length = u64::try_from(payload.len()).unwrap().to_le_bytes();
+            [&[0x03_u8][..], &length, payload].concat()
+        };
+        let close = || vec![0x05_u8];
+        let refused = |records: &[Vec<u8>]| Receipt::decode(&Blob::new(records.concat()));
+        let tree = [0x72_u8; 32];
+        let fence = [0x0f_u8; 16];
+        let at = TokenOffset::from;
+        let constructor = |tag: u8, record: u32| ValueError::UnexpectedConstructor {
+            found: ConstructorTag::from(tag),
+            position: at(record),
+        };
+        let note = |text: &[u8]| {
+            vec![
+                open(1),
+                word(1),
+                bytes(&tree),
+                bytes(&fence),
+                open(3),
+                bytes(text),
+                close(),
+                close(),
+            ]
+        };
 
-        assert_eq!(refused(Vec::new()), DecodeError::Empty);
-        let mut version = open.clone();
-        version[0] = 2;
-        assert_eq!(refused(version), DecodeError::Version { found: 2 });
-        let (_kind, truncated) = open.split_last().unwrap();
         assert!(
-            matches!(
-                refused(truncated.to_vec()),
-                DecodeError::Body(BodyError(postcard::Error::DeserializeUnexpectedEnd))
-            ),
-            "a truncated body"
+            refused(&note(b"hi")).is_ok(),
+            "the well-formed note decodes"
         );
-        let mut kind = open.clone();
-        *kind.last_mut().unwrap() = 3;
-        assert!(
-            matches!(refused(kind), DecodeError::Body(_)),
-            "an unknown kind"
+        assert_eq!(
+            refused(&[]),
+            Err(ValueError::TruncatedStream { position: at(0) }),
+            "an empty blob"
         );
-        let mut text = note;
-        *text.last_mut().unwrap() = 0xff;
-        assert!(
-            matches!(
-                refused(text),
-                DecodeError::Body(BodyError(postcard::Error::DeserializeBadUtf8))
-            ),
+        assert_eq!(
+            refused(&[vec![0x6e]]),
+            Err(ValueError::UnknownTokenKind { position: at(0) }),
+            "a blob that is not token records"
+        );
+        let mut receipt = note(b"hi");
+        receipt[0] = open(2);
+        assert_eq!(
+            refused(&receipt),
+            Err(constructor(2, 0)),
+            "a foreign receipt tag"
+        );
+        let mut receipt = note(b"hi");
+        receipt[1] = word(2);
+        assert_eq!(
+            refused(&receipt),
+            Err(constructor(1, 0)),
+            "a foreign version"
+        );
+        let mut receipt = note(b"hi");
+        receipt[2] = bytes(&[0x72; 31]);
+        assert_eq!(refused(&receipt), Err(constructor(1, 0)), "a short tree id");
+        let mut receipt = note(b"hi");
+        receipt[3] = bytes(&[0x0f; 17]);
+        assert_eq!(refused(&receipt), Err(constructor(1, 0)), "a long fence");
+        let mut receipt = note(b"hi");
+        receipt[4] = open(4);
+        assert_eq!(refused(&receipt), Err(constructor(4, 4)), "an unknown kind");
+        let mut receipt = note(b"hi");
+        receipt[4] = open(2);
+        receipt[5] = bytes(&[0x70; 31]);
+        assert_eq!(refused(&receipt), Err(constructor(2, 4)), "a short grantee");
+        assert_eq!(
+            refused(&note(&[0x68, 0xff])),
+            Err(constructor(3, 4)),
             "text that is not UTF-8"
         );
-        let mut trailing = open.clone();
-        trailing.push(0);
-        assert_eq!(refused(trailing), DecodeError::Trailing);
-        let mut overlong = open;
-        *overlong.last_mut().unwrap() = 0x80;
-        overlong.push(0);
+        let mut receipt = note(b"hi");
+        receipt.insert(6, bytes(b"more"));
         assert_eq!(
-            refused(overlong),
-            DecodeError::NonCanonical,
-            "the Open index spelled as a two-byte varint"
+            refused(&receipt),
+            Err(ValueError::UnexpectedToken {
+                expected: TokenKind::Close,
+                found: TokenKind::Bytes,
+                position: at(6),
+            }),
+            "a payload the kind does not carry"
+        );
+        let mut receipt = note(b"hi");
+        receipt.pop();
+        assert_eq!(
+            refused(&receipt),
+            Err(ValueError::TruncatedStream { position: at(7) }),
+            "a receipt left open"
+        );
+        let mut receipt = note(b"hi");
+        receipt.push(close());
+        assert_eq!(
+            refused(&receipt),
+            Err(ValueError::TrailingTokens { position: at(8) }),
+            "a record after the receipt"
         );
     }
 }

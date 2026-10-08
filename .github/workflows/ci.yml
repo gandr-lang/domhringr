@@ -73,6 +73,30 @@ jobs:
       - &trust-workspace
         name: trust the workspace for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # The value plane is a path dependency into `vendor/gandr`: every job
+      # that runs cargo checks the gandr sibling out there, at the revision
+      # the root manifest pins in `[workspace.metadata.siblings]`, before its
+      # first cargo step. Under act both steps are skipped: `mise run ci:act`
+      # materialises the sibling in its clone, and act copies it with the tree.
+      - &read-sibling-pins
+        id: siblings
+        name: read the sibling pins
+        if: ${{ !env.ACT }}
+        shell: bash
+        run: |
+          gandr=$(sed -n '/^\[workspace\.metadata\.siblings\]$/,/^\[/s/^gandr = "\([0-9a-f]*\)"$/\1/p' Cargo.toml)
+          test -n "$gandr"
+          echo "gandr=$gandr" >> "$GITHUB_OUTPUT"
+      - &checkout-gandr
+        name: check out the gandr sibling
+        if: ${{ !env.ACT }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gandr-lang/gandr
+          ref: ${{ steps.siblings.outputs.gandr }}
+          path: vendor/gandr
+          token: ${{ secrets.GANDR_TOKEN }}
+          persist-credentials: false
       # Inside the CI image the toolchain is baked; only the caches run. A
       # lane off the image's platform overrides the switch: no container runs
       # there whatever the repository variable says, so its toolchain install
@@ -310,6 +334,8 @@ jobs:
       - *git-checkout
       - *trust-workspace
       - *install-policy-tools
+      - *read-sibling-pins
+      - *checkout-gandr
       - *setup-rust
       - name: build every workspace target
         run: cargo build --locked --workspace --all-targets
@@ -347,6 +373,8 @@ jobs:
       # Restore-only. The workspace crates stay in the restored cache so this
       # lane's check artifacts no-op.
       - *install-policy-tools
+      - *read-sibling-pins
+      - *checkout-gandr
       - *setup-rust
       - name: lint every target
         run: cargo clippy --locked --workspace --all-targets -- --deny warnings
@@ -364,6 +392,8 @@ jobs:
     steps:
       - *git-checkout
       - *install-policy-tools
+      - *read-sibling-pins
+      - *checkout-gandr
       - *setup-rust
       - *restore-dylint-drivers
       - *restore-dylint-library
@@ -413,6 +443,8 @@ jobs:
       # here, inside the one step the cache actually covers, is what makes the
       # cache amortize at all.
       - *install-policy-tools
+      - *read-sibling-pins
+      - *checkout-gandr
       - *setup-rust
       - name: treefmt --ci
         run: mise run treefmt:check
@@ -491,6 +523,8 @@ jobs:
       - *trust-workspace
       - *install-policy-tools
       - *download-build-state
+      - *read-sibling-pins
+      - *checkout-gandr
       - *setup-rust
       - *unpack-build-state
       - *fetch-dependencies

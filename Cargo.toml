@@ -1,11 +1,15 @@
 [workspace]
 resolver = "3"
 members = ["crates/face-driver", "crates/face-peer", "crates/record-tree"]
+# Gitignored sibling checkouts that path dependencies reach (`mise run
+# sibling:sync`); never members.
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.91.0"
+# The floor gandr-storage-values inherits from the git `anodized` dependency.
+rust-version = "1.95.0"
 repository = "https://github.com/gandr-lang/domhringr"
 license = "Apache-2.0 WITH LLVM-exception"
 publish = false
@@ -52,6 +56,16 @@ version = "0.3"
 default-features = false
 features = ["alloc"]
 
+# The value plane's canonical token form: a receipt's flat bytes, the body a
+# chunk of the value plane frames, so a receipt stored today commits through
+# the chunk DAG later without re-encoding. The gandr sibling sits at
+# `vendor/gandr` at the revision `[workspace.metadata.siblings]` pins.
+# consumers:
+# - record-tree
+[workspace.dependencies.gandr-storage-values]
+path = "vendor/gandr/crates/storage-values"
+default-features = false
+
 # The operating system's random source: a receipt's operation fence.
 # consumers:
 # - record-tree
@@ -86,31 +100,12 @@ default-features = false
 version = "0.3"
 default-features = false
 
-# The receipt codec's stand-in, confined to `Receipt::encode` and
-# `Receipt::decode` until receipts encode through the value plane.
-# consumers:
-# - record-tree
-[workspace.dependencies.postcard]
-version = "1.1"
-default-features = false
-
 # The sedimentree: tree and commit identities, blobs.
 # consumers:
 # - record-tree
 [workspace.dependencies.sedimentree_core]
 version = "0.15"
 default-features = false
-
-# `derive(Serialize, Deserialize)` for the stand-in codec's private mirror
-# of a receipt.
-# features:
-# - derive: the derives on the mirror and its kind
-# consumers:
-# - record-tree
-[workspace.dependencies.serde]
-version = "1.0"
-default-features = false
-features = ["derive"]
 
 # The subduction sync protocol: the peer, its builder, storage policy.
 # consumers:
@@ -343,6 +338,12 @@ private_intra_doc_links = "allow"
 git = "https://github.com/gandr-lang/quenchant"
 rev = "111850988c96b7b33ee898f54c017ca645243e7f"
 pattern = "crates/quenchant-dylints"
+
+# Sibling checkouts a path dependency reaches under `vendor/`, each at the
+# revision this tree builds against. `mise run sibling:sync` materialises
+# them; CI checks each one out at its revision before the first cargo step.
+[workspace.metadata.siblings]
+gandr = "d117d7a14824ccf6fee9655f04852dd3ea3eb450"
 
 # The everyday optimized build. Size-optimized and nothing else, so each crate
 # compiles independently in parallel; the whole-program work lives in `dist`.

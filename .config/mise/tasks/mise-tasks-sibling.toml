@@ -1,0 +1,39 @@
+#:tombi toml-version = "v1.0.0"
+#:schema https://mise.jdx.dev/schema/mise-task.json
+
+# The value plane is a path dependency into vendor/gandr, gitignored and
+# excluded from the workspace, so every gate that copies the tree copies the
+# sibling with it. A development checkout links vendor/gandr to the gandr
+# checkout beside the main checkout (a linked worktree resolves its main
+# checkout through Git), whatever revision that checkout stands at. --clone
+# makes a real clone of it at the revision [workspace.metadata.siblings] pins
+# instead; `ci:act` puts one in its disposable clone. A clone already in place
+# is never overwritten.
+["sibling:sync"]
+description = "Materialise vendor/gandr from the pin in [workspace.metadata.siblings]"
+usage = '''
+flag "--clone" help="clone the sibling at the pinned revision rather than link the working checkout"
+arg "[tree]" help="the checkout whose vendor/ receives the sibling; this one by default"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+tree=${usage_tree:-{{config_root}}}
+rev=$(sed -n '/^\[workspace\.metadata\.siblings\]$/,/^\[/s/^gandr = "\([0-9a-f]*\)"$/\1/p' "$tree/Cargo.toml")
+test -n "$rev"
+common=$(git -C "{{config_root}}" rev-parse --path-format=absolute --git-common-dir)
+source="$(dirname "$(dirname "$common")")/gandr"
+target="$tree/vendor/gandr"
+if [[ -e $target && ! -L $target ]]; then
+  echo "sibling:sync: $target is a checkout, not a link; remove it to materialise it again" >&2
+  exit 1
+fi
+mkdir -p "$tree/vendor"
+rm -f "$target"
+if [[ ${usage_clone:-false} == true ]]; then
+  git clone --quiet --local --no-hardlinks -- "$source" "$target"
+  git -C "$target" checkout --quiet "$rev"
+else
+  ln -s "$source" "$target"
+fi
+'''

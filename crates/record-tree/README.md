@@ -10,9 +10,17 @@ A bound peer is reached by endpoint id alone: on the local network through mDNS 
 
 The `domhringr-peer` binary (`crates/face-peer`) is the command-line face of this crate.
 
-## Receipt codec
+## Codec decision
 
-Pending the value plane: receipts will encode through its canonical value stream once that crate is available as a path dependency. Until then postcard (with serde's derive) stands in, confined to `Receipt::encode` and `Receipt::decode` and a private mirror of the receipt; no public type carries a serde or postcard trait, so the swap changes those two functions, the error sources they report, and the manifest, and nothing else.
+**Receipts: the value plane's flat form, `gandr-storage-values` at the pinned sibling revision.** `Receipt` implements the value plane's `CanonicalValue`: it walks itself into the canonical token records (the grammar heads `src/receipt.rs`), and a commit's blob is the flat form `encode_flat` writes, read back by `decode_flat`. The flat form was chosen so a receipt stored today commits through the value plane's chunk DAG later without re-encoding: it is the token stream `cam_commit` cuts, and for a receipt that fits one chunk it is exactly the body that chunk frames. The decoder admits exactly what the encoder writes, so a receipt has one blob and one commit id.
+
+Two identities name a receipt and neither stands in for the other. The `CommitId` is sedimentree's: the BLAKE3 digest of the blob, the flat bytes alone. A value-plane `ContentPtr` names the framed chunk: BLAKE3 over the chunk image, the plane's domain and frame header included. A commit is found by its `CommitId`; a `ContentPtr` arrives when the receipt is committed into the value plane.
+
+- postcard over a serde mirror of the receipt: the stand-in this replaces; a compact wire format, but bytes the value plane would re-encode, and a second canonical form beside the plane's.
+- sedimentree's `codec`: the format of its signed payloads (schema header, issuer key, fields, signature) with big-endian integers; it already seals the commit that carries the blob, and as a receipt form it would be a second canonical form in another byte order.
+- a hand-rolled fixed layout: one more canonical form to keep in step with the value plane's.
+
+Reversal: the value plane changing its token grammar or flat form incompatibly, at which point the receipt version word moves with it; or receipts leaving the record plane for the value plane's store, where the blob becomes a `ContentPtr` and the commit id stops being the receipt's digest.
 
 ## Dependency decisions
 

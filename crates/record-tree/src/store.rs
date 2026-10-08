@@ -6,6 +6,7 @@ use alloc::sync::Arc;
 use std::path::PathBuf;
 
 use future_form::Sendable;
+use gandr_storage_values::ValueError;
 use sedimentree_core::blob::Blob;
 use sedimentree_core::crypto::digest::Digest;
 use sedimentree_core::depth::CountLeadingZeroBytes;
@@ -29,7 +30,6 @@ use crate::fold::fold;
 use crate::id::TreeId;
 use crate::identity::Identity;
 use crate::identity::StateDir;
-use crate::receipt::EncodeError;
 use crate::receipt::Receipt;
 use crate::runtime::TokioSpawner;
 use crate::runtime::TokioTimer;
@@ -219,7 +219,8 @@ impl Peer
     ///   commit; no fragment is built for it.
     ///
     /// # Errors
-    /// - [`CommitError::Encode`]: the codec refused the receipt.
+    /// - [`CommitError::Encode`]: the value plane refused to encode the
+    ///   receipt.
     /// - [`CommitError::Read`]: the tree's heads cannot be read.
     /// - [`CommitError::Write`]: the commit cannot be stored.
     ///
@@ -343,9 +344,9 @@ pub enum OpenError
 #[derive(Debug, thiserror::Error)]
 pub enum CommitError
 {
-    /// The codec refused the receipt.
-    #[error(transparent)]
-    Encode(EncodeError),
+    /// The value plane refused to encode the receipt.
+    #[error("cannot encode the receipt")]
+    Encode(#[source] ValueError),
     /// The tree's heads cannot be read.
     #[error("cannot read the tree")]
     Read(#[source] HeadsError),

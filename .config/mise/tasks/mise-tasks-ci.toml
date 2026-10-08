@@ -12,6 +12,11 @@
 # #53: act cannot execute macOS runners. That lane is retained for hosted CI;
 # the local gate runs every Linux check in the same workflow. Forward flags
 # to act for runner-image selection without changing the committed workflow.
+# The gandr sibling is a real clone at the revision the root manifest pins,
+# materialised in the disposable clone's vendor/ (`sibling:sync --clone`) so
+# act copies it with the tree; vendor/ is gitignored, so the copy keeps
+# ignored paths (--use-gitignore=false), and the workflow's own checkout of
+# the sibling, which needs a token, is skipped under act.
 ["ci:act"]
 description = "Run the committed CI workflow locally, including installed-CLI lifecycle"
 run = '''
@@ -20,6 +25,7 @@ set -euo pipefail
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 git clone --quiet --local --no-hardlinks -- "{{config_root}}" "$scratch/checkout"
+mise run sibling:sync --clone "$scratch/checkout"
 cd "$scratch/checkout"
-act workflow_dispatch --workflows .github/workflows/ci.yml "$@"
+act workflow_dispatch --workflows .github/workflows/ci.yml --use-gitignore=false "$@"
 '''

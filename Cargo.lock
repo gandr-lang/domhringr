@@ -71,6 +71,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "anodized"
+version = "0.6.0"
+source = "git+https://github.com/silvanshade/anodized?rev=981bc892c979fd59c46aaaa2dc3075b8184f035f#981bc892c979fd59c46aaaa2dc3075b8184f035f"
+dependencies = [
+ "anodized-macros",
+]
+
+[[package]]
+name = "anodized-core"
+version = "0.6.0"
+source = "git+https://github.com/silvanshade/anodized?rev=981bc892c979fd59c46aaaa2dc3075b8184f035f#981bc892c979fd59c46aaaa2dc3075b8184f035f"
+dependencies = [
+ "bitflags",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "anodized-macros"
+version = "0.6.0"
+source = "git+https://github.com/silvanshade/anodized?rev=981bc892c979fd59c46aaaa2dc3075b8184f035f#981bc892c979fd59c46aaaa2dc3075b8184f035f"
+dependencies = [
+ "anodized-core",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -665,12 +695,11 @@ dependencies = [
  "data-encoding",
  "future_form",
  "futures",
+ "gandr-storage-values",
  "getrandom 0.4.3",
  "iroh",
  "iroh-mdns-address-lookup",
- "postcard",
  "sedimentree_core",
- "serde",
  "subduction_core",
  "subduction_crypto",
  "subduction_iroh",
@@ -969,6 +998,19 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "gandr-storage-chunker"
+version = "0.0.0"
+
+[[package]]
+name = "gandr-storage-values"
+version = "0.0.0"
+dependencies = [
+ "anodized",
+ "blake3",
+ "gandr-storage-chunker",
 ]
 
 [[package]]

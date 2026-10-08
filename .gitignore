@@ -1,4 +1,6 @@
 /target
+# Sibling checkouts `mise run sibling:sync` materialises.
+/vendor
 .mise.local.toml
 mise.local.lock
 /.rumdl_cache

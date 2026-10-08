@@ -17,6 +17,7 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::fmt::Write as _;
 
+use gandr_storage_values::ValueError;
 use sedimentree_core::loose_commit::LooseCommit;
 use sedimentree_core::loose_commit::id::CommitId;
 use subduction_core::peer::id::PeerId;
@@ -24,7 +25,6 @@ use subduction_crypto::verified_meta::VerifiedMeta;
 
 use crate::id::PeerKey;
 use crate::id::TreeId;
-use crate::receipt::DecodeError;
 use crate::receipt::Kind;
 use crate::receipt::Operation;
 use crate::receipt::Receipt;
@@ -142,7 +142,7 @@ impl fmt::Display for View
 pub enum Refusal
 {
     /// The blob is not a receipt.
-    Undecodable(DecodeError),
+    Undecodable(ValueError),
     /// The receipt belongs to another tree.
     WrongTree
     {
@@ -203,7 +203,7 @@ struct Node
     /// The commit's verified signer.
     author: PeerKey,
     /// The receipt the commit's blob carries, or why it carries none.
-    receipt: Result<Receipt, DecodeError>,
+    receipt: Result<Receipt, ValueError>,
     /// The commits held in the tree that this one names as parents.
     parents: Vec<Position>,
     /// Those parents not placed yet.
@@ -480,6 +480,8 @@ mod tests
     use alloc::string::String;
     use alloc::vec::Vec;
 
+    use gandr_storage_values::TokenOffset;
+    use gandr_storage_values::ValueError;
     use sedimentree_core::blob::Blob;
     use sedimentree_core::loose_commit::id::CommitId;
     use subduction_crypto::signer::memory::MemorySigner;
@@ -489,7 +491,6 @@ mod tests
     use super::View;
     use super::fold;
     use crate::id::TreeId;
-    use crate::receipt::DecodeError;
     use crate::receipt::Kind;
     use crate::receipt::Operation;
     use crate::receipt::Receipt;
@@ -794,7 +795,9 @@ mod tests
                 view.refused(),
                 [(
                     id(&garbage),
-                    Refusal::Undecodable(DecodeError::Version { found: b'n' })
+                    Refusal::Undecodable(ValueError::UnknownTokenKind {
+                        position: TokenOffset::ZERO
+                    })
                 )],
                 "a blob that is not a receipt is refused with the decoder's reason"
             );

@@ -4,7 +4,8 @@
 //! A peer is a state directory ([`StateDir`]) holding two ed25519 identities
 //! ([`Identity`]) and a redb tree store ([`Peer`]). A commit carries a
 //! [`Receipt`] — the tree it belongs to, an operation fence, and the
-//! transition it records ([`Kind`]) — encoded as its blob; its id is the
+//! transition it records ([`Kind`]) — whose blob is the receipt's flat form
+//! in the value plane ([`gandr_storage_values`]); its id is the
 //! BLAKE3 digest of that blob, its parents are the tree's heads, and its
 //! author is its verified signer ([`Peer::commit`]). Every peer holding the
 //! same commits folds them into the same [`View`] ([`Peer::view`]): the
@@ -17,10 +18,10 @@
 //! and dials other peers to sync a tree ([`Node::sync`]), each reporting the
 //! network path iroh selected ([`SelectedPath`]).
 //!
-//! The substrate is subduction over iroh as published; this crate supplies
-//! the Tokio spawner and timer subduction is generic over, the identity
-//! files, the receipt codec, the fold, and the shape of a sync: dial, one
-//! batch round, disconnect.
+//! The substrate is subduction over iroh as published, and the value plane
+//! for the receipt's canonical form; this crate supplies the Tokio spawner and
+//! timer subduction is generic over, the identity files, the receipt grammar,
+//! the fold, and the shape of a sync: dial, one batch round, disconnect.
 
 #![expect(
     clippy::multiple_crate_versions,
@@ -70,9 +71,6 @@ pub use node::SelectedPath;
 pub use node::SyncError;
 pub use node::Synced;
 pub use node::UdpPort;
-pub use receipt::BodyError;
-pub use receipt::DecodeError;
-pub use receipt::EncodeError;
 pub use receipt::Kind;
 pub use receipt::Operation;
 pub use receipt::RandomError;

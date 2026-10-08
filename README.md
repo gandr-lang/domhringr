@@ -9,9 +9,10 @@ A software factory: seats (agent sessions) that talk to each other over [iroh](h
 ## Build
 
 ```sh
-mise install        # the pinned toolchain and tools
-mise run check      # every gate: format, clippy, dylint, rustdoc, tests, typos
-cargo build-dist    # the shipped binary: fat LTO, size-optimized std
+mise install           # the pinned toolchain and tools
+mise run sibling:sync  # vendor/gandr: link the gandr checkout beside this one
+mise run check         # every gate: format, clippy, dylint, rustdoc, tests, typos
+cargo build-dist       # the shipped binary: fat LTO, size-optimized std
 ```
 
 `cargo build --release` is the everyday optimized build; `cargo build-dist` (`.cargo/config.toml`) is the whole-program one.
