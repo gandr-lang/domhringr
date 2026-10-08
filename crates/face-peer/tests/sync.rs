@@ -425,10 +425,12 @@ mod tests
     ///
     /// # Specification
     /// - ensures: the server announced `server`'s ids, admitted the dialer and
-    ///   printed a parseable path line for it; the dialer printed a direct path
-    ///   to the server's fixed port, as two peers on one host reach each other;
-    ///   the server is killed on return, freeing the store.
-    /// - panics: on any contract violation.
+    ///   printed a parseable path line for it; the dialer printed a parseable
+    ///   path line naming a selected path: a direct one reaches the server's
+    ///   fixed port, a relayed one is accepted and printed, since iroh does not
+    ///   promise a direct path even on one host; the server is killed on
+    ///   return, freeing the store.
+    /// - panics: on any contract violation, a pending path among them.
     fn pull(
         dialer: (&Path, &Lines),
         server: (&Path, &Lines),
@@ -449,8 +451,9 @@ mod tests
                 port.0,
                 "the dialer reaches the server at its fixed port"
             ),
-            | other @ (PathLine::Relay(_) | PathLine::Pending) => {
-                panic!("two peers on one host take a direct path: {other:?}")
+            | PathLine::Relay(url) => println!("the dialer stayed on the relay {url}"),
+            | PathLine::Pending => {
+                panic!("a connection that carried a sync round has a selected path")
             },
         }
         let _admitted = serving.admitted(dialer.1);
@@ -470,7 +473,7 @@ mod tests
     ///   after A and B each pull the other, both views are byte-identical:
     ///   owner A, member B, A's notes and B's second note in canonical order,
     ///   B's first note refused. Every pull serves on a fixed port and reads a
-    ///   direct path to it.
+    ///   selected path: direct to that port, or relayed.
     /// - panics: on any contract violation.
     #[test]
     fn two_peers_fold_one_tree_to_identical_views()

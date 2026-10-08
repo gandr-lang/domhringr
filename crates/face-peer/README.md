@@ -17,6 +17,6 @@ Ids are 64 hex digits. The state directory's keys and store are created on first
 
 `view` prints `owner <peer-id>`, then `member <peer-id>` for each peer granted write authority, `note <peer-id> <text>` for each admitted note in canonical order (a note's backslashes and control characters escaped), and `refused <commit-id> <reason>` for each commit the fold refuses: `wrong tree`, `undecodable`, `duplicate operation`, `no authority`, or `second open`.
 
-`serve --port` binds iroh's UDP sockets, IPv4 and IPv6, at that port so a firewall rule can name it; without it the port is ephemeral. A path line reads `path <peer-id> direct <address>`, `path <peer-id> relay <url>`, or `path <peer-id> pending`: `serve` prints the path selected when it admits a peer, `sync` the one selected once its round ends, having given iroh up to two seconds to move a relayed connection to a direct path.
+`serve --port` binds iroh's UDP sockets, IPv4 and IPv6, at that port so a firewall rule can name it; without it the port is ephemeral. A path line reads `path <peer-id> direct <address>`, `path <peer-id> relay <url>`, or `path <peer-id> pending`: `serve` prints the path selected when it admits a peer, `sync` the one selected once its round ends, having given iroh up to five seconds to move a relayed connection to a direct path. iroh does not promise that move, even between two peers on one host, so a sync can end relayed.
 
 The exit status is 0 on success, 1 when the command fails, and 2 for a command line that cannot be run.

@@ -44,8 +44,11 @@ use crate::store::Transport;
 type EngineIoError = IoError<future_form::Sendable, RedbStorage, Transport, SyncMessage>;
 
 /// How long a dialer gives iroh, from the start of its sync round, to select
-/// a direct path before it reports whatever path is selected.
-const SETTLE: Duration = Duration::from_secs(2);
+/// a direct path before it reports whatever path is selected. Between two
+/// peers on one host, iroh as published moved a relayed connection to a direct
+/// path about two seconds into the round, and in some dials not at all; five
+/// seconds covers the first without holding the second open long.
+const SETTLE: Duration = Duration::from_secs(5);
 
 impl Peer
 {
@@ -470,7 +473,9 @@ impl Node
     ///   lacks reports exactly the remote's heads, and the path iroh had
     ///   selected for the connection once both the sync round ended and the
     ///   connection had settled ([`SelectedPath::settle`]): a direct path, or
-    ///   whatever is selected [`SETTLE`] after the round starts.
+    ///   whatever is selected [`SETTLE`] after the round starts. iroh does not
+    ///   promise a direct path, even between two peers on one host: a
+    ///   connection can stay on its relay, and is reported as relayed.
     /// - ensures: a round that ends with a direct path selected waits for
     ///   nothing more; a connection still on a relay holds the sync open until
     ///   [`SETTLE`] after the round starts at most.
