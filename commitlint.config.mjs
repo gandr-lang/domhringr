@@ -107,10 +107,10 @@ const noAutosquashMarker = (parsed) => {
   ];
 };
 
-// #28 step 0a and docs/design/factory.md § Provenance by lookup, not by stamp: actor identity selects the
-// marks. Session/role stamps never identify factory artifacts. Owner-solo
-// commits are distinct from owner-through-factory commits; historical CI uses
-// the landed commit's own assistance mark rather than the CI runner's seat.
+// Identity selects the marks: an agent author carries exactly the owner
+// co-author line and one assistance line; a human co-author is credited
+// with Co-authored-by, assistance never is. CI reads the landed commit's
+// own author and marks rather than the runner's.
 const OWNER_COAUTHOR = "Co-authored-by: silvanshade <silvanshade@users.noreply.github.com>";
 const ASSISTANCE = "Assisted-by: LLM";
 const ASSISTANT_COAUTHOR =
@@ -160,7 +160,7 @@ export default {
     "subject-empty": [2, "never"],
     "subject-full-stop": [2, "never", "."],
     "body-leading-blank": [2, "always"],
-    "body-max-line-length": [2, "always", 100],
+    "body-max-line-length": [2, "always", 72],
     // Disabled: the conventional-commits parser reclassifies wrapped prose
     // bodies as footer whenever a line starts with `word:`; the custom
     // trailer-leading-blank rule above is the sound replacement.
