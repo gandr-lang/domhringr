@@ -12,6 +12,13 @@
 # #53: act cannot execute macOS runners. That lane is retained for hosted CI;
 # the local gate runs every Linux check in the same workflow. Forward flags
 # to act for runner-image selection without changing the committed workflow.
+# Each invocation gives a disposable workflow copy a unique name, isolating
+# containers across repositories and worktrees. The checkout stays unchanged.
+# Offline action mode reuses cached actions without fetching; cache misses
+# still download the pinned action.
+# act resets Git indexes even offline, so each invocation snapshots the shared
+# action cache. A green run atomically publishes only new entries; a bounded
+# directory lock serializes publication, never the gates themselves.
 # The gandr sibling is a real clone at the revision the root manifest pins,
 # materialised in the disposable clone's vendor/ (`sibling:sync --clone`) so
 # act copies it with the tree; vendor/ is gitignored, so the copy keeps
@@ -19,13 +26,44 @@
 # the sibling, which needs a token, is skipped under act.
 ["ci:act"]
 description = "Run the committed CI workflow locally, including installed-CLI lifecycle"
+tools.yq = "4.54.1"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 scratch=$(mktemp -d)
-trap 'rm -rf "$scratch"' EXIT
+action_cache="${XDG_CACHE_HOME:-$HOME/.cache}/act"
+lockdir="${action_cache}.publish-lock"
+publish=
+locked=false
+cleanup() {
+  if [[ "$locked" == true ]]; then rmdir "$lockdir"; fi
+  if [[ -n "$publish" ]]; then rm -rf "$publish"; fi
+  rm -rf "$scratch"
+}
+trap cleanup EXIT
+mkdir -p "$action_cache" "$scratch/actions"
+cp -R "$action_cache/." "$scratch/actions/"
 git clone --quiet --local --no-hardlinks -- "{{config_root}}" "$scratch/checkout"
 mise run sibling:sync --clone "$scratch/checkout"
 cd "$scratch/checkout"
-act workflow_dispatch --workflows .github/workflows/ci.yml --use-gitignore=false "$@"
+ACT_RUN_ID=${scratch##*/} yq '.name += "-" + strenv(ACT_RUN_ID)' .github/workflows/ci.yml > "$scratch/ci.yml"
+act workflow_dispatch --workflows "$scratch/ci.yml" --action-cache-path "$scratch/actions" --action-offline-mode --use-gitignore=false "$@"
+publish=$(mktemp -d "${action_cache}.publish.XXXXXXXX")
+for entry in "$scratch/actions/"*; do
+  [[ -d "$entry" && ! -e "$action_cache/${entry##*/}" ]] || continue
+  cp -R "$entry" "$publish/"
+done
+deadline=$((SECONDS + 30))
+until mkdir "$lockdir" 2>/dev/null; do
+  if (( SECONDS >= deadline )); then
+    printf 'Timed out publishing act action cache: %s\n' "$lockdir" >&2
+    exit 1
+  fi
+  sleep 0.2
+done
+locked=true
+for entry in "$publish/"*; do
+  [[ -d "$entry" && ! -e "$action_cache/${entry##*/}" ]] || continue
+  mv "$entry" "$action_cache/"
+done
 '''
