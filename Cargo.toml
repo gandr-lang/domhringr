@@ -26,7 +26,7 @@ publish = false
 version = "1.8"
 default-features = false
 
-# Hex text for tree and peer ids, decoded into fixed buffers.
+# Hex text for peer, endpoint and commit ids, decoded into fixed buffers.
 # consumers:
 # - record-tree
 [workspace.dependencies.data-encoding]

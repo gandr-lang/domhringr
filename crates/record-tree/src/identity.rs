@@ -1,10 +1,15 @@
-//! A peer's state directory and the two ed25519 identities kept in it.
+//! A peer's state directory, the two ed25519 identities kept in it, and the
+//! keys of the trees the peer opened.
 //!
 //! The iroh endpoint key names the peer on the network; the subduction signer
 //! authenticates its handshakes and signs its commits. The two are distinct
 //! keys, created together on first use, stored as raw 32-byte seeds readable
 //! by the owner alone, and never printed: only their public halves leave this
 //! module.
+//!
+//! A tree key is minted when the peer opens a tree, one file per tree in the
+//! same shape, named by the tree id: its verifying key is the tree id, and it
+//! signs the proof the tree's Open carries ([`TreeKey::prove`]).
 
 use std::io;
 use std::io::Write as _;
@@ -16,9 +21,18 @@ use subduction_crypto::signer::memory::MemorySigner;
 
 use crate::id::EndpointKey;
 use crate::id::PeerKey;
+use crate::id::TreeId;
+use crate::receipt::OpenProof;
 
 /// Directory, beneath the state directory, holding the key files.
 const IDENTITY_DIR: &str = "identity";
+
+/// Directory, beneath the state directory, holding one key file per tree the
+/// peer opened.
+const TREE_KEY_DIR: &str = "tree-keys";
+
+/// The extension of a tree's key file, whose stem is the tree id.
+const TREE_KEY_EXTENSION: &str = "key";
 
 /// Directory, beneath the state directory, holding the tree store.
 const STORE_DIR: &str = "store";
@@ -29,7 +43,8 @@ const ENDPOINT_KEY_FILE: &str = "endpoint.key";
 /// Key file holding the subduction signer seed.
 const SIGNER_KEY_FILE: &str = "signer.key";
 
-/// A peer's state directory: its identity and its tree store live beneath it.
+/// A peer's state directory: its identity, its tree keys and its tree store
+/// live beneath it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct StateDir(PathBuf);
@@ -56,6 +71,15 @@ impl StateDir
     fn identity_dir(&self) -> PathBuf
     {
         self.0.join(IDENTITY_DIR)
+    }
+
+    /// The directory holding the tree keys.
+    ///
+    /// # Specification
+    /// trivial.
+    fn tree_key_dir(&self) -> PathBuf
+    {
+        self.0.join(TREE_KEY_DIR)
     }
 
     /// The directory holding the tree store.
@@ -170,12 +194,101 @@ impl Identity
     }
 }
 
-/// Why a peer's identity cannot be read or created.
+/// The signing key of a tree this peer opened: the tree id is its verifying
+/// key, so only its holder can make the proof the tree's Open carries.
+#[repr(transparent)]
+pub struct TreeKey(iroh::SecretKey);
+
+impl TreeKey
+{
+    /// Mint a fresh tree key and keep it in the state directory.
+    ///
+    /// # Specification
+    /// - ensures: on success the key is fresh randomness, and a new file
+    ///   beneath `state`, named by the key's tree id, holds its 32-byte seed:
+    ///   created exclusively (an existing file is never clobbered), synced to
+    ///   disk before the call returns, and on Unix readable and writable by its
+    ///   owner alone, as an identity's key files are.
+    /// - fails: [`IdentityError::Directory`] when the key directory cannot be
+    ///   created and [`IdentityError::Write`] when the key file cannot be
+    ///   created or written, each carrying the path and the I/O error.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`IdentityError::Directory`]: the key directory cannot be created.
+    /// - [`IdentityError::Write`]: the key file cannot be created or written.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — two keys minted in one directory differ, and each
+    ///   file is read back by its tree id's name: its length, its mode, and the
+    ///   verifying key of the seed it holds, compared with the tree id.
+    /// - witness: `identity::tests::a_minted_tree_key_is_kept_under_its_tree_id`
+    #[inline]
+    pub fn mint(state: &StateDir) -> Result<Self, IdentityError>
+    {
+        let directory = state.tree_key_dir();
+        std::fs::create_dir_all(&directory).map_err(|source| IdentityError::Directory {
+            path: directory.clone(),
+            source,
+        })?;
+        let seed = Seed::fresh();
+        let key = iroh::SecretKey::from_bytes(&seed.0);
+        let tree = TreeId::new(key.public());
+        seed.store(&directory.join(format!("{tree}.{TREE_KEY_EXTENSION}")))?;
+        Ok(Self(key))
+    }
+
+    /// Take an ed25519 secret key as a tree key, kept nowhere.
+    ///
+    /// # Specification
+    /// trivial.
+    #[cfg(test)]
+    pub(crate) const fn new(key: iroh::SecretKey) -> Self
+    {
+        Self(key)
+    }
+
+    /// The tree this key names: its verifying key.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub fn tree(&self) -> TreeId
+    {
+        TreeId::new(self.0.public())
+    }
+
+    /// The proof that this key names `owner` the tree's owner.
+    ///
+    /// # Specification
+    /// - ensures: the proof verifies under [`TreeKey::tree`] for `owner`, and
+    ///   for no other peer key and under no other tree id
+    ///   ([`OpenProof::verify`]).
+    /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the fold admits an Open whose proof this key made for
+    ///   the Open's author, and refuses one this key made for another author
+    ///   and one another key made.
+    /// - witness: `fold::tests::an_open_proved_by_another_key_is_refused`
+    #[inline]
+    #[must_use]
+    pub fn prove(
+        &self,
+        owner: PeerKey,
+    ) -> OpenProof
+    {
+        OpenProof::sign(&self.0, owner)
+    }
+}
+
+/// Why a peer's identity cannot be read or created, or a tree key minted.
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityError
 {
-    /// The identity directory cannot be created.
-    #[error("cannot create the identity directory {}", path.display())]
+    /// A key directory cannot be created.
+    #[error("cannot create the key directory {}", path.display())]
     Directory
     {
         /// The directory.
@@ -259,15 +372,41 @@ impl Seed
     ///   fails.
     fn create(path: &Path) -> Result<Self, IdentityError>
     {
-        let seed = Self(iroh::SecretKey::generate().to_bytes());
-        let written = Self::write_new(path, &seed);
-        match written {
-            | Ok(()) => Ok(seed),
-            | Err(source) => Err(IdentityError::Write {
-                path: path.to_path_buf(),
-                source,
-            }),
-        }
+        let seed = Self::fresh();
+        seed.store(path)?;
+        Ok(seed)
+    }
+
+    /// A fresh seed from the operating system's random source.
+    ///
+    /// # Specification
+    /// trivial.
+    fn fresh() -> Self
+    {
+        Self(iroh::SecretKey::generate().to_bytes())
+    }
+
+    /// Create `path` exclusively and write this seed into it.
+    ///
+    /// # Specification
+    /// - ensures: the file did not exist, now holds the seed, and is synced; on
+    ///   Unix its mode is `0600`.
+    /// - fails: [`IdentityError::Write`] carrying `path` when the file exists
+    ///   already or cannot be written.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`IdentityError::Write`]: the exclusive create, the write or the sync
+    ///   fails.
+    fn store(
+        &self,
+        path: &Path,
+    ) -> Result<(), IdentityError>
+    {
+        Self::write_new(path, self).map_err(|source| IdentityError::Write {
+            path: path.to_path_buf(),
+            source,
+        })
     }
 
     /// Write `seed` into a file that must not exist yet, and sync it.
@@ -304,6 +443,9 @@ mod tests
     use super::IdentityError;
     use super::SIGNER_KEY_FILE;
     use super::StateDir;
+    use super::TREE_KEY_DIR;
+    use super::TreeKey;
+    use crate::id::TreeId;
 
     #[test]
     fn an_identity_is_created_once_and_read_back()
@@ -354,5 +496,35 @@ mod tests
             [1_u8; 31],
             "the refused file is left as it was"
         );
+    }
+
+    #[test]
+    fn a_minted_tree_key_is_kept_under_its_tree_id()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let first = TreeKey::mint(&state).unwrap();
+        let second = TreeKey::mint(&state).unwrap();
+        assert_ne!(first.tree(), second.tree(), "each mint is a fresh key");
+        for key in [first, second] {
+            let path = root
+                .path()
+                .join(TREE_KEY_DIR)
+                .join(format!("{}.key", key.tree()));
+            let seed = <[u8; 32]>::try_from(std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(
+                TreeId::new(iroh::SecretKey::from_bytes(&seed).public()),
+                key.tree(),
+                "the file named by the tree id holds the seed whose verifying key it is"
+            );
+            #[cfg(unix)]
+            assert_eq!(
+                std::os::unix::fs::PermissionsExt::mode(
+                    &std::fs::metadata(&path).unwrap().permissions()
+                ) & 0o777,
+                0o600,
+                "a tree key is private to its owner"
+            );
+        }
     }
 }

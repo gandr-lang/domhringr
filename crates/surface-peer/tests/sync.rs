@@ -1,8 +1,9 @@
 //! The peer binary's consumer-visible contract, exercised as processes: two
-//! peers on one host reach each other by endpoint id and sync one tree to
-//! identical heads, the serving peer's store survives a kill, and two peers
-//! that exchange a tree's commits fold them to byte-identical views in which
-//! a note is admitted only under a grant in its causal past.
+//! peers on one host reach each other at a direct address and sync one tree to
+//! identical heads, the serving peer's store survives a kill, two peers that
+//! exchange a tree's commits fold them to byte-identical views in which a note
+//! is admitted only under a grant in its causal past, and a path bound in a
+//! tree resolves alike on both peers through its anchor.
 
 #[cfg(test)]
 mod tests
@@ -18,11 +19,7 @@ mod tests
     use std::sync::mpsc;
     use std::time::Instant;
 
-    /// The tree the heads scenario commits to and syncs.
-    const TREE: &str = "73796e6373796e6373796e6373796e6373796e6373796e6373796e6373796e63";
-
-    /// The tree the fold scenario opens, grants on, and writes notes to.
-    const FOLDED: &str = "666f6c64666f6c64666f6c64666f6c64666f6c64666f6c64666f6c64666f6c64";
+    use domhringr_record_tree::Anchor;
 
     /// How long one command may run, or a server may take to print a line.
     const DEADLINE: Duration = Duration::from_secs(30);
@@ -208,16 +205,34 @@ mod tests
         )
     }
 
-    /// Sync `tree` on `state` with the peer whose `id` printed `remote`.
+    /// Open a tree on `state` and return the anchor `open` printed.
     ///
     /// # Specification
-    /// - ensures: returns the heads the sync printed and its path line, read
-    ///   for `remote`'s peer id.
+    /// - panics: as [`finish`], or unless `open` printed one line that parses
+    ///   as a bare tree anchor.
+    fn open(state: &Path) -> String
+    {
+        let anchor = finish(peer(state).arg("open")).only().clone();
+        assert!(
+            matches!(anchor.parse::<Anchor>(), Ok(Anchor::Tree(_))),
+            "open prints a bare tree anchor: {anchor:?}"
+        );
+        anchor
+    }
+
+    /// Sync `tree` on `state` with the peer whose `id` printed `remote`,
+    /// serving on this host at `port`.
+    ///
+    /// # Specification
+    /// - ensures: the sync names the remote's direct address, the loopback
+    ///   address at `port`; returns the heads the sync printed and its path
+    ///   line, read for `remote`'s peer id.
     /// - panics: as [`finish`], or when no path line ends the output.
     fn sync(
         state: &Path,
         remote: &Lines,
         tree: &OsStr,
+        port: &Port,
     ) -> (Lines, PathLine)
     {
         let mut printed = finish(
@@ -225,7 +240,9 @@ mod tests
                 .arg("sync")
                 .arg(remote.endpoint())
                 .arg(remote.peer())
-                .arg(tree),
+                .arg(tree)
+                .arg("--at")
+                .arg(format!("127.0.0.1:{}", port.0)),
         );
         let path = printed.0.pop().expect("a sync prints its path");
         (printed, PathLine::read(OsStr::new(&path), remote))
@@ -333,17 +350,18 @@ mod tests
         }
     }
 
-    /// Two peers on one host sync a tree by endpoint id to identical heads,
-    /// and the serving peer's store survives a kill.
+    /// Two peers on one host sync a tree at a direct address to identical
+    /// heads, and the serving peer's store survives a kill.
     ///
     /// # Specification
     /// - ensures: A's `id` prints two distinct ids, and A's `serve` announces
-    ///   the same two followed by `listening`; A's note replaces its Open as
-    ///   the head; B's `sync` against A by endpoint id prints A's heads and a
-    ///   path line, B's store then holds them, and A prints B's peer id as
-    ///   accepted with a path line; after A is killed its store still holds the
-    ///   heads, a restarted A announces the same ids, and both B's repeated
-    ///   sync and a fresh C's first sync print the same heads.
+    ///   the same two followed by `listening`; A's `open` prints a tree anchor
+    ///   and A's note replaces the Open as the head; B's `sync` against A at
+    ///   its direct address prints A's heads and a path line, B's store then
+    ///   holds them, and A prints B's peer id as accepted with a path line;
+    ///   after A is killed its store still holds the heads, a restarted A
+    ///   announces the same ids, and both B's repeated sync and a fresh C's
+    ///   first sync print the same heads.
     /// - panics: on any contract violation.
     #[test]
     fn two_peers_sync_one_tree_to_identical_heads()
@@ -370,48 +388,48 @@ mod tests
 
         // A store is held exclusively by the process that opened it, so A
         // commits before it serves rather than while serving.
-        let opened = finish(peer(a).args(["open", TREE]));
-        let noted = finish(peer(a).args(["note", TREE, "first"]));
-        opened.assert_ids();
+        let tree = open(a);
+        let noted = finish(peer(a).args(["note", tree.as_str(), "first"]));
         noted.assert_ids();
-        assert_ne!(opened, noted, "distinct receipts are distinct commits");
-        let heads = finish(peer(a).args(["heads", TREE]));
+        let heads = finish(peer(a).args(["heads", tree.as_str()]));
         assert_eq!(
             heads, noted,
             "the note's parent is the Open, so it alone is the head"
         );
 
-        let server = Server::start(a, &[]);
+        let port = free_port();
+        let options = [OsStr::new("--port"), OsStr::new(&port.0)];
+        let server = Server::start(a, &options);
         assert_eq!(
             server.announcement(),
             a_id.then_listening(),
             "serve announces the ids id prints"
         );
-        let (synced, _path) = sync(b, &a_id, OsStr::new(TREE));
+        let (synced, _path) = sync(b, &a_id, OsStr::new(&tree), &port);
         assert_eq!(synced, heads, "the dialer prints the server's heads");
         let _admitted = server.admitted(&b_id);
         assert_eq!(
-            finish(peer(b).args(["heads", TREE])),
+            finish(peer(b).args(["heads", tree.as_str()])),
             heads,
             "the dialer stored the synced tree"
         );
         drop(server);
 
         assert_eq!(
-            finish(peer(a).args(["heads", TREE])),
+            finish(peer(a).args(["heads", tree.as_str()])),
             heads,
             "the killed server's store survives"
         );
-        let server = Server::start(a, &[]);
+        let server = Server::start(a, &options);
         assert_eq!(
             server.announcement(),
             a_id.then_listening(),
             "a restarted server keeps its ids"
         );
-        let (resynced, _path) = sync(b, &a_id, OsStr::new(TREE));
+        let (resynced, _path) = sync(b, &a_id, OsStr::new(&tree), &port);
         assert_eq!(resynced, heads, "a second sync leaves the heads unchanged");
         let _admitted = server.admitted(&b_id);
-        let (fresh, _path) = sync(c, &a_id, OsStr::new(TREE));
+        let (fresh, _path) = sync(c, &a_id, OsStr::new(&tree), &port);
         assert_eq!(
             fresh, heads,
             "the restarted server serves the tree from its store"
@@ -421,7 +439,7 @@ mod tests
     }
 
     /// Serve `state` on the fixed `port` while the peer on `dialer` syncs
-    /// `FOLDED` from it, then stop serving.
+    /// `tree` from it at that port, then stop serving.
     ///
     /// # Specification
     /// - ensures: the server announced `server`'s ids, admitted the dialer and
@@ -435,6 +453,7 @@ mod tests
         dialer: (&Path, &Lines),
         server: (&Path, &Lines),
         port: &Port,
+        tree: &OsStr,
     ) -> Lines
     {
         let options = [OsStr::new("--port"), OsStr::new(&port.0)];
@@ -444,7 +463,7 @@ mod tests
             server.1.then_listening(),
             "serve announces its ids"
         );
-        let (heads, path) = sync(dialer.0, server.1, OsStr::new(FOLDED));
+        let (heads, path) = sync(dialer.0, server.1, tree, port);
         match path {
             | PathLine::Direct(address) => assert_eq!(
                 address.port().to_string(),
@@ -482,19 +501,20 @@ mod tests
         let (a, b) = (a.path(), b.path());
         let (a_id, b_id) = (finish(peer(a).arg("id")), finish(peer(b).arg("id")));
         let (a_port, b_port) = (free_port(), free_port());
+        let tree = open(a);
         let note = |state: &Path, text: &str| {
-            let id = finish(peer(state).args(["note", FOLDED, text]));
+            let id = finish(peer(state).args(["note", tree.as_str(), text]));
             id.assert_ids();
             id.only().clone()
         };
-        let view = |state: &Path| finish(peer(state).args(["view", FOLDED]));
+        let view = |state: &Path| finish(peer(state).args(["view", tree.as_str()]));
         let owner = format!("owner {}", a_id.peer());
+        let folded = OsStr::new(&tree);
 
-        finish(peer(a).args(["open", FOLDED])).assert_ids();
         let _a1 = note(a, "a1");
-        pull((b, &b_id), (a, &a_id), &a_port);
+        pull((b, &b_id), (a, &a_id), &a_port, folded);
         let b1 = note(b, "b1 before any grant");
-        pull((a, &a_id), (b, &b_id), &b_port);
+        pull((a, &a_id), (b, &b_id), &b_port, folded);
         let refused = format!("refused {b1} no authority");
         let unauthorised = Lines(vec![
             owner.clone(),
@@ -512,14 +532,14 @@ mod tests
             "the non-member folds its own note to the same refusal"
         );
 
-        let granted = finish(peer(a).args(["grant", FOLDED, b_id.peer().as_str()]));
+        let granted = finish(peer(a).args(["grant", tree.as_str(), b_id.peer().as_str()]));
         granted.assert_ids();
         let _a2 = note(a, "a2");
-        pull((b, &b_id), (a, &a_id), &a_port);
+        pull((b, &b_id), (a, &a_id), &a_port, folded);
         let b2 = note(b, "b2 under the grant");
         let a3 = note(a, "a3");
-        pull((a, &a_id), (b, &b_id), &b_port);
-        let heads = pull((b, &b_id), (a, &a_id), &a_port);
+        pull((a, &a_id), (b, &b_id), &b_port, folded);
+        let heads = pull((b, &b_id), (a, &a_id), &a_port, folded);
 
         let mut concurrent = [a3, b2.clone()];
         concurrent.sort();
@@ -547,5 +567,96 @@ mod tests
             a_view, expected,
             "the grant admits B's later note alone, concurrent notes in commit id order"
         );
+    }
+
+    /// A path bound in a tree resolves alike on both peers through its anchor,
+    /// to the binding the fold admitted last.
+    ///
+    /// # Specification
+    /// - ensures: A opens a tree, whose printed anchor parses, writes a note
+    ///   and binds `x` to the note's commit; B syncs from A and its `whence` of
+    ///   `x` prints the same commit. B, not a member, binds `x` on its copy; A
+    ///   syncs from B, A's `whence` of `x` is unchanged, and A's view lists B's
+    ///   bind as refused for want of authority. A grants B; B syncs the grant,
+    ///   writes a note and binds `x` to it; A syncs, resolves `x` to B's note,
+    ///   writes a note of its own and re-binds `x` to it; B syncs, and both
+    ///   peers' `whence` of `x` print A's target. `whence` of `y`, which nobody
+    ///   bound, prints `unbound` on both. Every sync names the remote's direct
+    ///   address.
+    /// - panics: on any contract violation.
+    #[test]
+    fn an_anchor_resolves_alike_on_both_peers()
+    {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (a, b) = (a.path(), b.path());
+        let (a_id, b_id) = (finish(peer(a).arg("id")), finish(peer(b).arg("id")));
+        let (a_port, b_port) = (free_port(), free_port());
+        let tree = open(a);
+        let (x, y) = (format!("{tree}x"), format!("{tree}y"));
+        let anchored = OsStr::new(&tree);
+        let note = |state: &Path, text: &str| {
+            let id = finish(peer(state).args(["note", tree.as_str(), text]));
+            id.assert_ids();
+            id.only().clone()
+        };
+        let bind = |state: &Path, kind: &str, target: &str| {
+            let id = finish(peer(state).args(["bind", x.as_str(), kind, target]));
+            id.assert_ids();
+            id.only().clone()
+        };
+        let whence = |state: &Path, anchor: &str| {
+            finish(peer(state).args(["whence", anchor])).only().clone()
+        };
+
+        let a1 = note(a, "a1");
+        let _bound = bind(a, "commit", &a1);
+        pull((b, &b_id), (a, &a_id), &a_port, anchored);
+        let first = format!("commit {a1}");
+        assert_eq!(
+            whence(b, &x),
+            first,
+            "the synced bind resolves on the dialer to the same commit"
+        );
+
+        let squat = bind(b, "datum", "squat");
+        pull((a, &a_id), (b, &b_id), &b_port, anchored);
+        assert_eq!(
+            whence(a, &x),
+            first,
+            "a non-member's bind leaves the path as it was"
+        );
+        let view = finish(peer(a).args(["view", tree.as_str()]));
+        assert!(
+            view.0.contains(&format!("refused {squat} no authority")),
+            "the owner's view lists the non-member's bind as refused: {view:?}"
+        );
+
+        let granted = finish(peer(a).args(["grant", tree.as_str(), b_id.peer().as_str()]));
+        granted.assert_ids();
+        pull((b, &b_id), (a, &a_id), &a_port, anchored);
+        let b1 = note(b, "b1");
+        let _rebound = bind(b, "commit", &b1);
+        pull((a, &a_id), (b, &b_id), &b_port, anchored);
+        assert_eq!(
+            whence(a, &x),
+            format!("commit {b1}"),
+            "a member's bind under the grant rebinds the path"
+        );
+        let a2 = note(a, "a2");
+        let _rebound = bind(a, "commit", &a2);
+        pull((b, &b_id), (a, &a_id), &a_port, anchored);
+        let last = format!("commit {a2}");
+        for state in [a, b] {
+            assert_eq!(
+                whence(state, &x),
+                last,
+                "the bind made after the others in its causal past wins on both peers"
+            );
+            assert_eq!(
+                whence(state, &y),
+                "unbound",
+                "a path nobody bound is unbound"
+            );
+        }
     }
 }

@@ -4,8 +4,9 @@
 //! The endpoint uses n0's preset (relay, DNS address publishing and lookup)
 //! plus mDNS address lookup, so a peer is reached by its endpoint id alone:
 //! on the LAN through mDNS and direct addresses, across networks through the
-//! relay and DNS. Each connection reports the network path iroh selected for
-//! it ([`SelectedPath`]).
+//! relay and DNS. A dialer that knows the remote's direct address names it
+//! ([`Address::Direct`]) and does not wait on the lookups. Each connection
+//! reports the network path iroh selected for it ([`SelectedPath`]).
 
 use core::convert::Infallible;
 use core::fmt;
@@ -31,6 +32,7 @@ use subduction_iroh::error::DisconnectionError;
 use subduction_iroh::error::SendError;
 use subduction_redb_storage::RedbStorage;
 
+use crate::id::Address;
 use crate::id::EndpointKey;
 use crate::id::PeerKey;
 use crate::id::RemotePeer;
@@ -462,10 +464,13 @@ impl Node
         })
     }
 
-    /// Dial `remote` by endpoint id, batch-sync `tree` with it, and
-    /// disconnect.
+    /// Dial `remote` by endpoint id, at its direct address when it names one,
+    /// batch-sync `tree` with it, and disconnect.
     ///
     /// # Specification
+    /// - ensures: the dial's endpoint address is `remote`'s endpoint id, with
+    ///   its direct address when it names one ([`Address::Direct`]), so such a
+    ///   dial does not wait on address lookup; iroh's lookups run beside it.
     /// - ensures: on success the remote proved it holds `remote`'s peer key;
     ///   every commit the remote held for `tree` when it answered is durable in
     ///   this peer's store; the connection is closed; returns this peer's heads
@@ -501,10 +506,11 @@ impl Node
     ///
     /// # Adequacy
     /// - hypothesis: L3 — two peers holding divergent commits on one tree: the
-    ///   dialer's heads after the sync are compared exactly with the union of
-    ///   both frontiers, which a pull that dropped either side, or one that
-    ///   skipped storage, would not produce; a dial naming the wrong peer key
-    ///   is refused as a connect failure; the dialer reports a selected path.
+    ///   dialer's heads after a sync at the remote's direct address are
+    ///   compared exactly with the union of both frontiers, which a pull that
+    ///   dropped either side, or one that skipped storage, would not produce; a
+    ///   dial naming the wrong peer key is refused as a connect failure,
+    ///   whether looked up or direct; the dialer reports a selected path.
     /// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
     /// - witness: `node::tests::a_dialer_naming_another_peer_is_refused`
     #[inline]
@@ -516,6 +522,10 @@ impl Node
     {
         let peer = remote.peer().peer_id();
         let address = iroh::EndpointAddr::from(remote.endpoint().endpoint_id());
+        let address = match remote.address() {
+            | Address::Lookup => address,
+            | Address::Direct(direct) => address.with_ip_addr(direct),
+        };
         let connected = subduction_iroh::client::connect(
             &self.endpoint,
             address,
@@ -635,6 +645,8 @@ mod tests
 {
     use alloc::string::String;
     use alloc::sync::Arc;
+    use core::net::Ipv4Addr;
+    use core::net::SocketAddr;
 
     use sedimentree_core::loose_commit::id::CommitId;
 
@@ -644,6 +656,7 @@ mod tests
     use super::SelectedPath;
     use super::SyncError;
     use super::UdpPort;
+    use crate::id::Address;
     use crate::id::RemotePeer;
     use crate::id::TreeId;
     use crate::identity::Identity;
@@ -651,9 +664,7 @@ mod tests
     use crate::receipt::Receipt;
     use crate::store::Peer;
     use crate::testing::runtime;
-
-    /// The tree both peers commit to.
-    const TREE: &str = "6e6f64656e6f64656e6f64656e6f64656e6f64656e6f64656e6f64656e6f6465";
+    use crate::testing::tree_key;
 
     /// Open and bind a peer on a fresh state directory beneath `root`.
     ///
@@ -704,11 +715,23 @@ mod tests
         node.peer().commit(tree, receipt).await.unwrap()
     }
 
+    /// `node`'s direct address on this host: the loopback address at its
+    /// IPv4 socket's port.
+    ///
+    /// # Specification
+    /// trivial.
+    fn direct(node: &Node) -> Address
+    {
+        let sockets = node.endpoint.bound_sockets();
+        let ipv4 = sockets.iter().find(|socket| socket.is_ipv4()).unwrap();
+        Address::Direct(SocketAddr::from((Ipv4Addr::LOCALHOST, ipv4.port())))
+    }
+
     #[test]
     fn a_dialer_takes_the_union_of_both_frontiers()
     {
         let (root_a, root_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let tree = TREE.parse::<TreeId>().unwrap();
+        let tree = tree_key().tree();
         runtime().block_on(async {
             let a = Arc::new(bound(&root_a, BindPort::Ephemeral).await);
             let b = bound(&root_b, BindPort::Ephemeral).await;
@@ -716,7 +739,8 @@ mod tests
             commit(&a, tree, "a1".into()).await;
             let a2 = commit(&a, tree, "a2".into()).await;
             let b1 = commit(&b, tree, "b1".into()).await;
-            let remote = RemotePeer::new(a.endpoint_key(), a.peer().identity().peer_key());
+            let remote =
+                RemotePeer::new(a.endpoint_key(), a.peer().identity().peer_key(), direct(&a));
             let synced = b.sync(&remote, tree).await.unwrap();
             let mut expected = vec![a2, b1];
             expected.sort();
@@ -747,14 +771,14 @@ mod tests
     fn a_dialer_naming_another_peer_is_refused()
     {
         let (root_a, root_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let tree = TREE.parse::<TreeId>().unwrap();
+        let tree = tree_key().tree();
         runtime().block_on(async {
             let a = Arc::new(bound(&root_a, BindPort::Ephemeral).await);
             let b = bound(&root_b, BindPort::Ephemeral).await;
             serve(&a);
             commit(&a, tree, "a1".into()).await;
             let impostor = b.peer().identity().peer_key();
-            let remote = RemotePeer::new(a.endpoint_key(), impostor);
+            let remote = RemotePeer::new(a.endpoint_key(), impostor, direct(&a));
             let refused = b.sync(&remote, tree).await;
             assert!(
                 matches!(refused, Err(SyncError::Connect(_))),

@@ -15,6 +15,7 @@ use subduction_crypto::verified_meta::VerifiedMeta;
 
 use crate::id::PeerKey;
 use crate::id::TreeId;
+use crate::identity::TreeKey;
 use crate::receipt::Receipt;
 
 /// A multi-threaded runtime, as the peer binary runs.
@@ -54,6 +55,24 @@ pub fn other() -> MemorySigner
 pub fn key(signer: &MemorySigner) -> PeerKey
 {
     PeerKey::new(PeerId::from(signer.verifying_key()))
+}
+
+/// The key of the tree the tests open.
+///
+/// # Specification
+/// trivial.
+pub fn tree_key() -> TreeKey
+{
+    TreeKey::new(iroh::SecretKey::from_bytes(&[3; 32]))
+}
+
+/// The key of another tree, which a misplaced receipt names.
+///
+/// # Specification
+/// trivial.
+pub fn elsewhere_key() -> TreeKey
+{
+    TreeKey::new(iroh::SecretKey::from_bytes(&[4; 32]))
 }
 
 /// The id of `commit`.

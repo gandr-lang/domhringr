@@ -23,14 +23,19 @@ use sedimentree_core::loose_commit::id::CommitId;
 use subduction_core::peer::id::PeerId;
 use subduction_crypto::verified_meta::VerifiedMeta;
 
+use crate::anchor::Path;
+use crate::anchor::Resolution;
+use crate::anchor::Target;
 use crate::id::PeerKey;
 use crate::id::TreeId;
+use crate::line::Field;
+use crate::line::OneLine;
 use crate::receipt::Kind;
 use crate::receipt::Operation;
 use crate::receipt::Receipt;
 
 /// What a peer makes of a tree: its owner, the peers granted write authority,
-/// the admitted notes, and the commits refused.
+/// the admitted notes, the paths bound, and the commits refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View
 {
@@ -40,6 +45,9 @@ pub struct View
     members: BTreeSet<PeerKey>,
     /// The admitted notes and their authors, in canonical order.
     notes: Vec<(PeerKey, String)>,
+    /// Each bound path's binding: the admitted bind last in canonical order,
+    /// its author and its target.
+    bindings: BTreeMap<Path, (PeerKey, Target)>,
     /// The refused commits and why, in canonical order.
     refused: Vec<(CommitId, Refusal)>,
 }
@@ -79,6 +87,46 @@ impl View
         &self.notes
     }
 
+    /// Each bound path's binding — its author and its target — in path
+    /// order.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub const fn bindings(&self) -> &BTreeMap<Path, (PeerKey, Target)>
+    {
+        &self.bindings
+    }
+
+    /// What `path` resolves to in this view.
+    ///
+    /// # Specification
+    /// - ensures: [`Resolution::Bound`] with the author and target of the
+    ///   admitted bind of `path` last in canonical order, and
+    ///   [`Resolution::Unbound`] when no admitted bind names `path`; never a
+    ///   default.
+    /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a path bound twice resolves to the later bind from
+    ///   every arrival order, a path whose only other bind was refused keeps
+    ///   the admitted one, and a path nobody bound is unbound.
+    /// - witness: `fold::tests::the_later_bind_in_canonical_order_wins`
+    /// - witness: `fold::tests::a_bind_by_a_non_member_is_refused`
+    #[inline]
+    #[must_use]
+    pub fn resolve(
+        &self,
+        path: &Path,
+    ) -> Resolution
+    {
+        match self.bindings.get(path) {
+            | Some(&(author, ref target)) => Resolution::Bound(author, target.clone()),
+            | None => Resolution::Unbound,
+        }
+    }
+
     /// The refused commits and why, in canonical order.
     ///
     /// # Specification
@@ -94,19 +142,22 @@ impl View
 impl fmt::Display for View
 {
     /// Write the view as lines: `owner <key>`, one `member <key>` per member
-    /// in key order, one `note <key> <text>` per note and one
-    /// `refused <commit> <reason>` per refusal, both in canonical order.
+    /// in key order, one `note <key> <text>` per note in canonical order, one
+    /// `bind <path> <target>` per bound path in path order, and one
+    /// `refused <commit> <reason>` per refusal in canonical order.
     ///
     /// # Specification
-    /// - ensures: every line ends in a newline, and each note stays one line: a
-    ///   backslash in its text is written `\\` and a control character as its
-    ///   Rust escape (`\n`, `\u{7}`), so equal views print equal bytes and
-    ///   distinct notes print distinct lines.
+    /// - ensures: every line ends in a newline, and each fact stays one line: a
+    ///   backslash in a note, a path or a datum is written `\\` and a control
+    ///   character as its Rust escape (`\n`, `\u{7}`), and a space in a path as
+    ///   `\u{20}`, so equal views print equal bytes and distinct facts print
+    ///   distinct lines.
     /// - panics: none.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — a view with a member, notes, a multi-line note and a
-    ///   refusal is printed and compared line for line.
+    /// - hypothesis: L3 — a view with a member, notes, a multi-line note, a
+    ///   path with a space bound to a datum with a newline, and a refusal is
+    ///   printed and compared line for line.
     /// - witness: `fold::tests::a_view_prints_one_line_per_fact`
     #[inline]
     fn fmt(
@@ -120,15 +171,13 @@ impl fmt::Display for View
         }
         for &(author, ref text) in &self.notes {
             write!(f, "note {author} ")?;
-            for character in text.chars() {
-                if character == '\\' || character.is_control() {
-                    write!(f, "{}", character.escape_default())?;
-                }
-                else {
-                    f.write_char(character)?;
-                }
-            }
+            OneLine::new(f, Field::Last).write_str(text)?;
             writeln!(f)?;
+        }
+        for (path, &(_author, ref target)) in &self.bindings {
+            f.write_str("bind ")?;
+            write!(OneLine::new(f, Field::Inner), "{path}")?;
+            writeln!(f, " {target}")?;
         }
         for &(commit, ref refusal) in &self.refused {
             writeln!(f, "refused {commit} {refusal}")?;
@@ -159,6 +208,8 @@ pub enum Refusal
     /// The author is not the owner, and no admitted grant to the author is
     /// an ancestor of the receipt.
     NoAuthority,
+    /// An Open whose proof is not the tree key's signature naming its author.
+    BadProof,
     /// An Open that is not the tree's.
     SecondOpen,
 }
@@ -180,6 +231,7 @@ impl fmt::Display for Refusal
             | Self::WrongTree { .. } => "wrong tree",
             | Self::Duplicate { .. } => "duplicate operation",
             | Self::NoAuthority => "no authority",
+            | Self::BadProof => "bad proof",
             | Self::SecondOpen => "second open",
         })
     }
@@ -232,29 +284,35 @@ struct Carry
 ///   parents held in the set are all placed, the one with the smallest commit
 ///   id goes next, and among equal ids the one with the smaller signed bytes. A
 ///   commit is admitted iff it is the tree's Open — of the commits with no
-///   parents whose receipt is an Open of `tree`, the first in canonical order,
-///   whose author is the owner — or its author is the owner, or an admitted
-///   grant to its author is among its ancestors.
+///   parents whose receipt is an Open of `tree` with a proof that verifies
+///   under `tree` for its author ([`OpenProof::verify`]), the first in
+///   canonical order, whose author is the owner — or its author is the owner,
+///   or an admitted grant to its author is among its ancestors.
 /// - ensures: a refused commit is listed with the first refusal that holds,
 ///   checked in this order: [`Refusal::Undecodable`], [`Refusal::WrongTree`],
 ///   [`Refusal::Duplicate`] (an admitted commit earlier in canonical order
-///   carries the same operation), then [`Refusal::SecondOpen`] for an Open and
-///   [`Refusal::NoAuthority`] for a grant or a note.
+///   carries the same operation), then for an Open [`Refusal::BadProof`] when
+///   its proof fails and [`Refusal::SecondOpen`] when it is not the tree's, and
+///   [`Refusal::NoAuthority`] for a grant, a note or a bind.
+/// - ensures: each path's binding is the admitted bind of that path last in
+///   canonical order.
 /// - fails: [`Unopened`] when no commit is the tree's Open.
 /// - panics: none.
 /// - intension: when parents claim a cycle no topological order exists; the
 ///   smallest unplaced commit is then placed next, and authority flows only
-///   from parents already placed. The fold is O(n log n) in the commits and
-///   holds authority sets only for placed commits with unplaced children.
+///   from parents already placed. The fold is O(n log n) in the commits,
+///   verifies each Open's proof once, and holds authority sets only for placed
+///   commits with unplaced children.
 ///
 /// # Errors
-/// - [`Unopened`]: no root Open names `tree`.
+/// - [`Unopened`]: no root Open of `tree` carries a proof for its author.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — one DAG with concurrent branches, a refused note, a grant
 ///   and a merge is folded from three arrival orders and compared exactly; each
 ///   refusal reason, the causal reading of a grant, the first-wins duplicate,
-///   the smallest-root Open, an unopened tree and a parent cycle are each
+///   the smallest-root Open, a forged and a replayed proof, the last-wins bind
+///   from every arrival order, an unopened tree and a parent cycle are each
 ///   pinned by a case of their own.
 /// - witness: `fold::tests::a_view_is_the_same_whatever_order_commits_arrive_in`
 /// - witness: `fold::tests::a_note_by_a_non_member_is_refused`
@@ -262,8 +320,13 @@ struct Carry
 /// - witness: `fold::tests::a_duplicate_operation_keeps_the_first`
 /// - witness: `fold::tests::a_receipt_under_the_wrong_tree_is_refused`
 /// - witness: `fold::tests::the_smallest_root_open_names_the_owner`
+/// - witness: `fold::tests::an_open_proved_by_another_key_is_refused`
+/// - witness: `fold::tests::the_later_bind_in_canonical_order_wins`
+/// - witness: `fold::tests::a_bind_by_a_non_member_is_refused`
 /// - witness: `fold::tests::an_undecodable_blob_is_refused_and_an_unopened_tree_has_no_view`
 /// - witness: `fold::tests::a_parent_cycle_is_placed_in_commit_id_order`
+///
+/// [`OpenProof::verify`]: crate::receipt::OpenProof::verify
 pub fn fold(
     tree: TreeId,
     commits: Vec<VerifiedMeta<LooseCommit>>,
@@ -299,17 +362,27 @@ pub fn fold(
     }
 
     let mut open = None;
+    let mut bad_proofs = BTreeSet::new();
     let mut nodes = BTreeMap::new();
     for (index, (commit, parents)) in commits.into_iter().zip(parents).enumerate() {
         let position = Position(index);
         let author = PeerKey::new(PeerId::from(commit.issuer()));
         let receipt = Receipt::decode(commit.blob());
-        let opens = commit.payload().parents().is_empty()
-            && receipt
-                .as_ref()
-                .is_ok_and(|receipt| receipt.tree() == tree && *receipt.kind() == Kind::Open);
-        if opens && open.is_none() {
-            open = Some((position, author));
+        let proof = match receipt {
+            | Ok(ref receipt) if receipt.tree() == tree => match *receipt.kind() {
+                | Kind::Open { proof } => Some(proof.verify(tree, author)),
+                | Kind::Grant { .. } | Kind::Note { .. } | Kind::Bind { .. } => None,
+            },
+            | Ok(_) | Err(_) => None,
+        };
+        match proof {
+            | Some(Ok(())) if open.is_none() && commit.payload().parents().is_empty() => {
+                open = Some((position, author));
+            },
+            | Some(Err(_forged)) => {
+                let _first_seen = bad_proofs.insert(position);
+            },
+            | Some(Ok(())) | None => {},
         }
         let node = Node {
             commit: commit.payload().head(),
@@ -330,6 +403,7 @@ pub fn fold(
         owner,
         members: BTreeSet::new(),
         notes: Vec::new(),
+        bindings: BTreeMap::new(),
         refused: Vec::new(),
     };
     let mut ready: BTreeSet<Position> = nodes
@@ -368,7 +442,10 @@ pub fn fold(
                 }
                 else {
                     let refusal = match kind {
-                        | Kind::Open => (position != open).then_some(Refusal::SecondOpen),
+                        | Kind::Open { .. } if bad_proofs.contains(&position) => {
+                            Some(Refusal::BadProof)
+                        },
+                        | Kind::Open { .. } => (position != open).then_some(Refusal::SecondOpen),
                         | Kind::Grant { to } if authorized => {
                             let _was_member = view.members.insert(to);
                             let _was_granted = grantees.insert(to);
@@ -378,7 +455,13 @@ pub fn fold(
                             view.notes.push((node.author, text));
                             None
                         },
-                        | Kind::Grant { .. } | Kind::Note { .. } => Some(Refusal::NoAuthority),
+                        | Kind::Bind { path, target } if authorized => {
+                            let _rebound = view.bindings.insert(path, (node.author, target));
+                            None
+                        },
+                        | Kind::Grant { .. } | Kind::Note { .. } | Kind::Bind { .. } => {
+                            Some(Refusal::NoAuthority)
+                        },
                     };
                     if refusal.is_none() {
                         admit(&mut admitted, operation, node.commit);
@@ -476,6 +559,7 @@ fn admit(
 #[cfg(test)]
 mod tests
 {
+    use alloc::collections::BTreeMap;
     use alloc::collections::BTreeSet;
     use alloc::string::String;
     use alloc::vec::Vec;
@@ -490,12 +574,16 @@ mod tests
     use super::Unopened;
     use super::View;
     use super::fold;
+    use crate::anchor::Path;
+    use crate::anchor::Resolution;
+    use crate::anchor::Target;
     use crate::id::TreeId;
     use crate::receipt::Kind;
     use crate::receipt::Operation;
     use crate::receipt::Receipt;
     use crate::testing::commit;
     use crate::testing::digest;
+    use crate::testing::elsewhere_key;
     use crate::testing::id;
     use crate::testing::key;
     use crate::testing::other;
@@ -503,12 +591,7 @@ mod tests
     use crate::testing::runtime;
     use crate::testing::seal;
     use crate::testing::seal_on;
-
-    /// The tree every test folds.
-    const TREE: &str = "666f6c64666f6c64666f6c64666f6c64666f6c64666f6c64666f6c64666f6c64";
-
-    /// Another tree, which a misplaced receipt names.
-    const ELSEWHERE: &str = "656c7365656c7365656c7365656c7365656c7365656c7365656c7365656c7365";
+    use crate::testing::tree_key;
 
     /// The tree every test folds.
     ///
@@ -516,16 +599,16 @@ mod tests
     /// trivial.
     fn tree() -> TreeId
     {
-        TREE.parse().unwrap()
+        tree_key().tree()
     }
 
-    /// A fresh Open of the tree.
+    /// A fresh Open of the tree, proved for `signer`'s key.
     ///
     /// # Specification
     /// trivial.
-    fn open() -> Receipt
+    fn open(signer: &MemorySigner) -> Receipt
     {
-        Receipt::open(tree()).unwrap()
+        Receipt::open(&tree_key(), key(signer)).unwrap()
     }
 
     /// A fresh grant on the tree to `signer`'s key.
@@ -546,6 +629,18 @@ mod tests
         Receipt::note(tree(), text).unwrap()
     }
 
+    /// A fresh bind of `path` on the tree to `target`.
+    ///
+    /// # Specification
+    /// trivial.
+    fn bind(
+        path: &Path,
+        target: Target,
+    ) -> Receipt
+    {
+        Receipt::bind(tree(), path.clone(), target).unwrap()
+    }
+
     /// A note of `text` on the tree carrying `operation`.
     ///
     /// # Specification
@@ -563,7 +658,7 @@ mod tests
     {
         let (a, b) = (owner(), other());
         runtime().block_on(async {
-            let opened = commit(&a, tree(), &[], &open()).await;
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
             let a1 = commit(&a, tree(), &[&opened], &note("a1".into())).await;
             let early = commit(&b, tree(), &[&a1], &note("early".into())).await;
             let granted = commit(&a, tree(), &[&early], &grant(&b)).await;
@@ -641,7 +736,7 @@ mod tests
     {
         let (a, b) = (owner(), other());
         runtime().block_on(async {
-            let opened = commit(&a, tree(), &[], &open()).await;
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
             let stranger = commit(&b, tree(), &[&opened], &note("hello".into())).await;
             let view = fold(tree(), vec![opened, stranger.clone()]).unwrap();
             assert_eq!(view.notes(), [], "no note is admitted");
@@ -659,7 +754,7 @@ mod tests
     {
         let (a, b) = (owner(), other());
         runtime().block_on(async {
-            let opened = commit(&a, tree(), &[], &open()).await;
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
             let granted = commit(&a, tree(), &[&opened], &grant(&b)).await;
             let after = commit(&b, tree(), &[&granted], &note("after".into())).await;
             let beside = commit(&b, tree(), &[&opened], &note("beside".into())).await;
@@ -682,7 +777,7 @@ mod tests
     {
         let (a, b) = (owner(), other());
         runtime().block_on(async {
-            let opened = commit(&a, tree(), &[], &open()).await;
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
             let fence = Operation::random().unwrap();
             let first = commit(&a, tree(), &[&opened], &fenced(fence, "first".into())).await;
             let again = commit(&a, tree(), &[&first], &fenced(fence, "again".into())).await;
@@ -736,9 +831,9 @@ mod tests
     fn a_receipt_under_the_wrong_tree_is_refused()
     {
         let a = owner();
-        let elsewhere = ELSEWHERE.parse::<TreeId>().unwrap();
+        let elsewhere = elsewhere_key().tree();
         runtime().block_on(async {
-            let opened = commit(&a, tree(), &[], &open()).await;
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
             let astray = Receipt::note(elsewhere, "astray".into()).unwrap();
             let astray = commit(&a, tree(), &[&opened], &astray).await;
             let view = fold(tree(), vec![opened, astray.clone()]).unwrap();
@@ -756,9 +851,9 @@ mod tests
     {
         let (a, b) = (owner(), other());
         runtime().block_on(async {
-            let by_a = commit(&a, tree(), &[], &open()).await;
-            let by_b = commit(&b, tree(), &[], &open()).await;
-            let reopened = commit(&a, tree(), &[&by_a], &open()).await;
+            let by_a = commit(&a, tree(), &[], &open(&a)).await;
+            let by_b = commit(&b, tree(), &[], &open(&b)).await;
+            let reopened = commit(&a, tree(), &[&by_a], &open(&a)).await;
             let view = fold(tree(), vec![reopened.clone(), by_b.clone(), by_a.clone()]).unwrap();
             let (second, owner_key) = if id(&by_a) < id(&by_b) {
                 (&by_b, key(&a))
@@ -775,9 +870,123 @@ mod tests
             for refused in [second, &reopened] {
                 assert!(
                     view.refused().contains(&(id(refused), Refusal::SecondOpen)),
-                    "every other Open, root or not, is a second Open"
+                    "every other proved Open, root or not, is a second Open"
                 );
             }
+        });
+    }
+
+    #[test]
+    fn an_open_proved_by_another_key_is_refused()
+    {
+        let (a, b) = (owner(), other());
+        runtime().block_on(async {
+            let forged = Receipt::new(tree(), Operation::random().unwrap(), Kind::Open {
+                proof: elsewhere_key().prove(key(&a)),
+            });
+            let forged = commit(&a, tree(), &[], &forged).await;
+            assert_eq!(
+                fold(tree(), vec![forged.clone()]),
+                Err(Unopened),
+                "an Open proved by another key opens nothing"
+            );
+            let replayed = commit(&b, tree(), &[], &open(&a)).await;
+            assert_eq!(
+                fold(tree(), vec![replayed.clone()]),
+                Err(Unopened),
+                "an Open proved for another author opens nothing"
+            );
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let view = fold(tree(), vec![forged.clone(), replayed.clone(), opened]).unwrap();
+            assert_eq!(
+                view.owner(),
+                key(&a),
+                "the Open the tree key proved for its author names the owner"
+            );
+            assert_eq!(view.refused().len(), 2, "{:?}", view.refused());
+            for refused in [&forged, &replayed] {
+                assert!(
+                    view.refused().contains(&(id(refused), Refusal::BadProof)),
+                    "a forged or replayed proof is refused as a bad proof"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn the_later_bind_in_canonical_order_wins()
+    {
+        let a = owner();
+        let (x, y) = ("x".parse::<Path>().unwrap(), "y".parse::<Path>().unwrap());
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let target = Target::Commit(id(&opened));
+            let first = commit(&a, tree(), &[&opened], &bind(&x, target)).await;
+            let rebound = Target::Datum(String::from("rebound"));
+            let second = commit(&a, tree(), &[&first], &bind(&x, rebound.clone())).await;
+            let left = Target::Datum(String::from("left"));
+            let left = commit(&a, tree(), &[&opened], &bind(&y, left)).await;
+            let right = Target::Datum(String::from("right"));
+            let right = commit(&a, tree(), &[&opened], &bind(&y, right)).await;
+            let later = if id(&left) < id(&right) {
+                Target::Datum(String::from("right"))
+            }
+            else {
+                Target::Datum(String::from("left"))
+            };
+            let arrived = vec![opened, first, second, left, right];
+            let mut orders = vec![arrived.clone()];
+            for turn in 1 .. arrived.len() {
+                let mut rotated = arrived.clone();
+                rotated.rotate_left(turn);
+                orders.push(rotated.clone());
+                rotated.reverse();
+                orders.push(rotated);
+            }
+            for order in orders {
+                let view = fold(tree(), order).unwrap();
+                assert_eq!(
+                    view.resolve(&x),
+                    Resolution::Bound(key(&a), rebound.clone()),
+                    "a rebind descending from the bind wins"
+                );
+                assert_eq!(
+                    view.resolve(&y),
+                    Resolution::Bound(key(&a), later.clone()),
+                    "of two concurrent binds the larger commit id, placed later, wins"
+                );
+                assert_eq!(view.bindings().len(), 2, "two paths are bound");
+            }
+        });
+    }
+
+    #[test]
+    fn a_bind_by_a_non_member_is_refused()
+    {
+        let (a, b) = (owner(), other());
+        let (x, y) = ("x".parse::<Path>().unwrap(), "y".parse::<Path>().unwrap());
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let target = Target::Commit(id(&opened));
+            let bound = commit(&a, tree(), &[&opened], &bind(&x, target.clone())).await;
+            let squat = Target::Datum(String::from("squat"));
+            let squat = commit(&b, tree(), &[&bound], &bind(&x, squat)).await;
+            let view = fold(tree(), vec![opened, bound, squat.clone()]).unwrap();
+            assert_eq!(
+                view.refused(),
+                [(id(&squat), Refusal::NoAuthority)],
+                "the non-member's bind is refused for want of authority"
+            );
+            assert_eq!(
+                view.resolve(&x),
+                Resolution::Bound(key(&a), target),
+                "the path stays as the owner bound it"
+            );
+            assert_eq!(
+                view.resolve(&y),
+                Resolution::Unbound,
+                "a path nobody bound is unbound"
+            );
         });
     }
 
@@ -785,9 +994,8 @@ mod tests
     fn an_undecodable_blob_is_refused_and_an_unopened_tree_has_no_view()
     {
         let a = owner();
-        let elsewhere = ELSEWHERE.parse::<TreeId>().unwrap();
         runtime().block_on(async {
-            let opened = commit(&a, tree(), &[], &open()).await;
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
             let garbage = Blob::new(b"not a receipt".to_vec());
             let garbage = seal(&a, tree(), &[&opened], garbage).await;
             let view = fold(tree(), vec![opened, garbage.clone()]).unwrap();
@@ -802,7 +1010,7 @@ mod tests
                 "a blob that is not a receipt is refused with the decoder's reason"
             );
 
-            let foreign = Receipt::open(elsewhere).unwrap();
+            let foreign = Receipt::open(&elsewhere_key(), key(&a)).unwrap();
             let foreign = commit(&a, tree(), &[], &foreign).await;
             let orphan = commit(&a, tree(), &[&foreign], &note("orphan".into())).await;
             assert_eq!(
@@ -823,7 +1031,7 @@ mod tests
     {
         let a = owner();
         runtime().block_on(async {
-            let opened = commit(&a, tree(), &[], &open()).await;
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
             let (x, y) = (note("x".into()), note("y".into()));
             let (x_id, y_id) = (digest(&x), digest(&y));
             let x = seal_on(
@@ -854,6 +1062,7 @@ mod tests
     {
         let (author, member) = (key(&owner()), key(&other()));
         let refused = CommitId::new([7; 32]);
+        let bound = CommitId::new([8; 32]);
         let view = View {
             owner: author,
             members: BTreeSet::from([member]),
@@ -861,15 +1070,26 @@ mod tests
                 (author, String::from("plain text")),
                 (member, String::from("two\nlines, a \\ and a bell\u{7}")),
             ],
+            bindings: BTreeMap::from([
+                (
+                    "a b/c".parse::<Path>().unwrap(),
+                    (author, Target::Datum(String::from("one\nline, spaced"))),
+                ),
+                (
+                    "x".parse::<Path>().unwrap(),
+                    (member, Target::Commit(bound)),
+                ),
+            ]),
             refused: vec![(refused, Refusal::NoAuthority)],
         };
         assert_eq!(
             view.to_string(),
             format!(
                 "owner {author}\nmember {member}\nnote {author} plain text\nnote {member} \
-                 two\\nlines, a \\\\ and a bell\\u{{7}}\nrefused {refused} no authority\n"
+                 two\\nlines, a \\\\ and a bell\\u{{7}}\nbind a\\u{{20}}b/c datum \
+                 one\\nline, spaced\nbind x commit {bound}\nrefused {refused} no authority\n"
             ),
-            "one line per fact, a note's control characters escaped"
+            "one line per fact, control characters escaped, a path's spaces too"
         );
     }
 }

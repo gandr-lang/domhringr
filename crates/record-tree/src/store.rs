@@ -24,6 +24,8 @@ use subduction_iroh::transport::IrohTransport;
 use subduction_redb_storage::RedbStorage;
 use subduction_redb_storage::RedbStorageError;
 
+use crate::anchor::Anchor;
+use crate::anchor::Resolution;
 use crate::fold::Unopened;
 use crate::fold::View;
 use crate::fold::fold;
@@ -291,6 +293,40 @@ impl Peer
         Ok(view)
     }
 
+    /// Resolve `anchor` by folding its tree's stored commits.
+    ///
+    /// # Specification
+    /// - ensures: for a path anchor, what its path resolves to in the tree's
+    ///   view ([`View::resolve`]): the binding the fold admitted last in
+    ///   canonical order, or [`Resolution::Unbound`]; a bare tree anchor names
+    ///   no path, which no bind binds, so it is unbound. The answer reads only
+    ///   the local store: nothing is synced.
+    /// - fails: as [`Peer::view`] for the anchor's tree.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ViewError::Load`]: the storage read fails.
+    /// - [`ViewError::Unopened`]: the anchor's tree has no Open.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — after an Open, a note and a bind committed through
+    ///   the store, the bound path resolves to the note's commit under the
+    ///   peer's key, an unbound path and the bare tree are unbound, and an
+    ///   anchor in a tree the store has never seen is unopened.
+    /// - witness: `store::tests::whence_resolves_an_anchor_by_fold`
+    #[inline]
+    pub async fn whence(
+        &self,
+        anchor: &Anchor,
+    ) -> Result<Resolution, ViewError>
+    {
+        let view = self.view(anchor.tree()).await?;
+        Ok(match *anchor {
+            | Anchor::Tree(_) => Resolution::Unbound,
+            | Anchor::Path { ref path, .. } => view.resolve(path),
+        })
+    }
+
     /// Read `tree`'s heads from the store.
     ///
     /// # Specification
@@ -385,23 +421,31 @@ mod tests
 
     use super::Peer;
     use super::ViewError;
+    use crate::anchor::Anchor;
+    use crate::anchor::Resolution;
+    use crate::anchor::Target;
     use crate::fold::Refusal;
     use crate::id::TreeId;
     use crate::identity::Identity;
     use crate::identity::StateDir;
     use crate::receipt::Receipt;
     use crate::testing::commit;
+    use crate::testing::elsewhere_key;
     use crate::testing::id;
     use crate::testing::key;
     use crate::testing::other;
     use crate::testing::owner;
     use crate::testing::runtime;
+    use crate::testing::tree_key;
 
     /// The tree every test commits to.
-    const TREE: &str = "7472656574726565747265657472656574726565747265657472656574726565";
-
-    /// A tree no test commits to.
-    const UNKNOWN: &str = "756e6b6e6f776e756e6b6e6f776e756e6b6e6f776e756e6b6e6f776e756e6b6e";
+    ///
+    /// # Specification
+    /// trivial.
+    fn tree() -> TreeId
+    {
+        tree_key().tree()
+    }
 
     /// The commit id the store must assign to `receipt`: the BLAKE3 digest of
     /// its encoding, computed here with the reference implementation,
@@ -420,7 +464,7 @@ mod tests
     /// trivial.
     fn note(text: String) -> Receipt
     {
-        Receipt::note(TREE.parse().unwrap(), text).unwrap()
+        Receipt::note(tree(), text).unwrap()
     }
 
     /// Open a peer on `state`, creating its identity as needed.
@@ -437,7 +481,7 @@ mod tests
     {
         let root = tempfile::tempdir().unwrap();
         let state = StateDir::from(root.path().to_path_buf());
-        let tree = TREE.parse::<TreeId>().unwrap();
+        let tree = tree();
         let (first, second) = (note("first".into()), note("second".into()));
         runtime().block_on(async {
             let peer = open(&state);
@@ -501,7 +545,7 @@ mod tests
     {
         let root = tempfile::tempdir().unwrap();
         let state = StateDir::from(root.path().to_path_buf());
-        let tree = TREE.parse::<TreeId>().unwrap();
+        let tree = tree();
         let first = note("first".into());
         runtime().block_on(async {
             let peer = open(&state);
@@ -528,10 +572,11 @@ mod tests
     fn two_stores_given_one_commit_set_in_two_orders_agree()
     {
         let (root_a, root_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let tree = TREE.parse::<TreeId>().unwrap();
+        let tree = tree();
         let (owner, other) = (owner(), other());
         runtime().block_on(async {
-            let opened = commit(&owner, tree, &[], &Receipt::open(tree).unwrap()).await;
+            let opened = Receipt::open(&tree_key(), key(&owner)).unwrap();
+            let opened = commit(&owner, tree, &[], &opened).await;
             let early = commit(&other, tree, &[&opened], &note("early".into())).await;
             let granted = Receipt::grant(tree, key(&other)).unwrap();
             let granted = commit(&owner, tree, &[&early], &granted).await;
@@ -574,12 +619,56 @@ mod tests
             );
             assert!(
                 matches!(
-                    a.view(UNKNOWN.parse().unwrap()).await,
+                    a.view(elsewhere_key().tree()).await,
                     Err(ViewError::Unopened(_))
                 ),
                 "a tree never seen has no Open"
             );
             drop((a, b));
+        });
+    }
+
+    #[test]
+    fn whence_resolves_an_anchor_by_fold()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let path = |text: &str| Anchor::Path {
+            tree: tree(),
+            path: text.parse().unwrap(),
+        };
+        runtime().block_on(async {
+            let peer = open(&state);
+            let me = peer.identity().peer_key();
+            let opened = Receipt::open(&tree_key(), me).unwrap();
+            peer.commit(tree(), opened).await.unwrap();
+            let noted = peer.commit(tree(), note("bound".into())).await.unwrap();
+            let bind = Receipt::bind(tree(), "x".parse().unwrap(), Target::Commit(noted));
+            peer.commit(tree(), bind.unwrap()).await.unwrap();
+            assert_eq!(
+                peer.whence(&path("x")).await.unwrap(),
+                Resolution::Bound(me, Target::Commit(noted)),
+                "the bound path resolves to the note's commit under the binder's key"
+            );
+            assert_eq!(
+                peer.whence(&path("x/y")).await.unwrap(),
+                Resolution::Unbound,
+                "a path below a bound one is a path of its own, unbound"
+            );
+            assert_eq!(
+                peer.whence(&Anchor::Tree(tree())).await.unwrap(),
+                Resolution::Unbound,
+                "the bare tree names no path, so nothing binds it"
+            );
+            let unknown = Anchor::Path {
+                tree: elsewhere_key().tree(),
+                path: "x".parse().unwrap(),
+            };
+            assert!(
+                matches!(peer.whence(&unknown).await, Err(ViewError::Unopened(_))),
+                "an anchor in a tree never seen has no view to resolve in"
+            );
+            drop(peer);
         });
     }
 }
