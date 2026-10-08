@@ -32,6 +32,20 @@ crates/
 └── surface-peer/     domhringr-surface-peer   the `domhringr-peer` binary: opens, grants on, notes to, views, reads and syncs a tree
 ```
 
+## Crate README shape
+
+Every crate's `README.md` follows this order. Include a section when the crate has content for it. Name crate-specific sections plainly by subject, never by negation or metaphor.
+
+1. `# <package>` and one sentence stating what the crate is.
+2. A table of contents linking every section below.
+3. `## Synopsis` — three dense, technical paragraphs in the present tense, without history. Each opens with a bold word: **What.** states what the crate is; **Why.** states the need it answers; **How.** names the mechanism concretely.
+4. `## References` — papers and technical artifacts, each with its full title, authors, venue, date, stable identifier (DOI, ISBN, arXiv, HAL), and one clause stating what the crate takes from it.
+5. `## Provided features` — an itemized list of what the crate provides.
+6. `## Expected features` — what the crate requires of its consumer or environment to be useful: a digest function, a store implementation, a spawner, a target requirement, or a specification facade's `cfg`. Do not list absent or planned work here.
+7. `## Examples` — runnable usage and the test command.
+8. Crate-specific sections, one per decision or mechanism, each stated as present fact with its reason.
+9. `## License` — `Apache-2.0 WITH LLVM-exception`, the workspace licence at the repository root.
+
 ## Divergences
 
 None.
