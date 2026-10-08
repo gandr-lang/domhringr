@@ -1,19 +1,23 @@
-//! `domhringr-peer`: one record-plane peer over a state directory. It commits
-//! to a sedimentree, reads the tree's heads, and syncs the tree with another
-//! peer over iroh.
+//! `domhringr-peer`: one record-plane peer over a state directory. It opens a
+//! sedimentree, grants write authority on it, writes notes to it, prints the
+//! view every peer holding the same commits folds them to, reads the tree's
+//! heads, and syncs the tree with another peer over iroh.
 //!
 //! ```text
 //! domhringr-peer --state <dir> id
-//! domhringr-peer --state <dir> serve
-//! domhringr-peer --state <dir> commit <tree-id> <text>
+//! domhringr-peer --state <dir> serve [--port <port>]
+//! domhringr-peer --state <dir> open <tree-id>
+//! domhringr-peer --state <dir> grant <tree-id> <peer-id>
+//! domhringr-peer --state <dir> note <tree-id> <text>
+//! domhringr-peer --state <dir> view <tree-id>
 //! domhringr-peer --state <dir> heads <tree-id>
 //! domhringr-peer --state <dir> sync <endpoint-id> <peer-id> <tree-id>
 //! ```
 //!
 //! The state directory holds the peer's two keys and its tree store, both
 //! created on first use. A command holds the store exclusively while it runs,
-//! so `commit`, `heads` and `sync` fail while `serve` runs on the same
-//! directory; `id` reads only the keys and runs beside it.
+//! so every command but `id` fails while `serve` runs on the same directory;
+//! `id` reads only the keys and runs beside it.
 //!
 //! The exit status is 0 on success, 1 when the command fails, and 2 for a
 //! command line that cannot be run; diagnostics go to standard error.
@@ -38,24 +42,33 @@ use std::process::ExitCode;
 
 use domhringr_record_tree::AcceptError;
 use domhringr_record_tree::BindError;
+use domhringr_record_tree::BindPort;
 use domhringr_record_tree::CommitError;
-use domhringr_record_tree::Content;
 use domhringr_record_tree::HeadsError;
 use domhringr_record_tree::Identity;
 use domhringr_record_tree::IdentityError;
 use domhringr_record_tree::OpenError;
 use domhringr_record_tree::ParseIdError;
+use domhringr_record_tree::ParsePortError;
 use domhringr_record_tree::Peer;
+use domhringr_record_tree::PeerKey;
+use domhringr_record_tree::RandomError;
+use domhringr_record_tree::Receipt;
 use domhringr_record_tree::RemotePeer;
 use domhringr_record_tree::StateDir;
 use domhringr_record_tree::SyncError;
 use domhringr_record_tree::TreeId;
+use domhringr_record_tree::UdpPort;
+use domhringr_record_tree::ViewError;
 
 /// The synopsis written after a usage error.
 const USAGE: &str = "\
 usage: domhringr-peer --state <dir> id
-       domhringr-peer --state <dir> serve
-       domhringr-peer --state <dir> commit <tree-id> <text>
+       domhringr-peer --state <dir> serve [--port <port>]
+       domhringr-peer --state <dir> open <tree-id>
+       domhringr-peer --state <dir> grant <tree-id> <peer-id>
+       domhringr-peer --state <dir> note <tree-id> <text>
+       domhringr-peer --state <dir> view <tree-id>
        domhringr-peer --state <dir> heads <tree-id>
        domhringr-peer --state <dir> sync <endpoint-id> <peer-id> <tree-id>
 ";
@@ -71,8 +84,14 @@ enum Verb
     Id,
     /// Accept peers until killed.
     Serve,
-    /// Append a commit to a tree.
-    Commit,
+    /// Open a tree.
+    Open,
+    /// Grant a peer write authority on a tree.
+    Grant,
+    /// Write a note to a tree.
+    Note,
+    /// Print a tree's view.
+    View,
     /// Print a tree's heads.
     Heads,
     /// Sync a tree with a remote peer.
@@ -92,8 +111,11 @@ impl fmt::Display for Verb
     {
         f.write_str(match *self {
             | Self::Id => "id",
-            | Self::Serve => "serve",
-            | Self::Commit => "commit <tree-id> <text>",
+            | Self::Serve => "serve [--port <port>]",
+            | Self::Open => "open <tree-id>",
+            | Self::Grant => "grant <tree-id> <peer-id>",
+            | Self::Note => "note <tree-id> <text>",
+            | Self::View => "view <tree-id>",
             | Self::Heads => "heads <tree-id>",
             | Self::Sync => "sync <endpoint-id> <peer-id> <tree-id>",
         })
@@ -104,11 +126,11 @@ impl fmt::Display for Verb
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Operand
 {
-    /// The tree to commit to, read, or sync.
+    /// The tree to open, grant on, write to, read, or sync.
     Tree,
     /// The remote's iroh endpoint id.
     Endpoint,
-    /// The remote's subduction peer id.
+    /// The remote's or the grantee's subduction peer id.
     Peer,
 }
 
@@ -137,15 +159,40 @@ enum Command
 {
     /// Print the endpoint id, then the peer id.
     Id,
-    /// Bind, print the ids and `listening`, then accept peers until killed.
-    Serve,
-    /// Append `content` to `tree` and print the commit id.
-    Commit
+    /// Bind on `port`, print the ids and `listening`, then accept peers until
+    /// killed.
+    Serve
     {
-        /// The tree appended to.
+        /// The UDP port the endpoint binds.
+        port: BindPort,
+    },
+    /// Commit an Open of `tree` and print the commit id.
+    Open
+    {
+        /// The tree opened.
         tree: TreeId,
-        /// The commit's bytes.
-        content: Content,
+    },
+    /// Commit a grant on `tree` to `to` and print the commit id.
+    Grant
+    {
+        /// The tree granted on.
+        tree: TreeId,
+        /// The peer granted write authority.
+        to: PeerKey,
+    },
+    /// Commit a note of `text` to `tree` and print the commit id.
+    Note
+    {
+        /// The tree written to.
+        tree: TreeId,
+        /// The note's text.
+        text: String,
+    },
+    /// Print `tree`'s view.
+    View
+    {
+        /// The tree folded.
+        tree: TreeId,
     },
     /// Print `tree`'s heads.
     Heads
@@ -153,7 +200,7 @@ enum Command
         /// The tree read.
         tree: TreeId,
     },
-    /// Sync `tree` with `remote` and print the heads after it.
+    /// Sync `tree` with `remote` and print the heads after it, then the path.
     Sync
     {
         /// The peer dialed.
@@ -202,9 +249,12 @@ enum UsageError
         #[source]
         source: ParseIdError,
     },
-    /// The text to commit is not UTF-8.
-    #[error("the text to commit is not UTF-8: {0:?}")]
+    /// The note's text is not UTF-8.
+    #[error("the note's text is not UTF-8: {0:?}")]
     Text(OsString),
+    /// `--port`'s value is not a UDP port.
+    #[error("cannot read the port")]
+    Port(#[source] ParsePortError),
 }
 
 /// Why a command failed once its command line was read.
@@ -226,9 +276,15 @@ enum RunError
     /// The endpoint closed while serving.
     #[error("the endpoint closed while serving")]
     Closed,
+    /// No operation fence can be drawn for a receipt.
+    #[error(transparent)]
+    Random(#[from] RandomError),
     /// The commit cannot be appended.
     #[error(transparent)]
     Commit(#[from] CommitError),
+    /// The view cannot be folded.
+    #[error(transparent)]
+    View(#[from] ViewError),
     /// The heads cannot be read.
     #[error(transparent)]
     Heads(#[from] HeadsError),
@@ -247,16 +303,17 @@ enum RunError
 ///
 /// # Specification
 /// - ensures: accepts `--state <dir>` (or `--state=<dir>`; the last one given
-///   wins) followed by a verb and exactly the operands that verb takes. The
-///   operands are taken verbatim, so a text beginning with `-` is a text, not
-///   an option.
+///   wins) followed by a verb and exactly the operands that verb takes, or, for
+///   `serve`, the options [`serve_port`] reads. The operands are taken
+///   verbatim, so a note's text beginning with `-` is a text, not an option.
 /// - fails: [`UsageError::Arguments`] for any option but `--state` or for
 ///   `--state` without a value, [`UsageError::NoCommand`] when no verb follows
 ///   the options, [`UsageError::Command`] for an unknown verb,
 ///   [`UsageError::State`] when `--state` is absent, [`UsageError::Operands`]
 ///   for too few or too many operands, checked before any operand is read,
-///   [`UsageError::Operand`] for an id that does not parse, and
-///   [`UsageError::Text`] for a text that is not UTF-8.
+///   [`UsageError::Operand`] for an id that does not parse,
+///   [`UsageError::Text`] for a note's text that is not UTF-8, and as
+///   [`serve_port`] for `serve`.
 /// - panics: none.
 ///
 /// # Errors
@@ -266,13 +323,15 @@ enum RunError
 /// - [`UsageError::State`]: `--state` is absent.
 /// - [`UsageError::Operands`]: the verb's operand count is wrong.
 /// - [`UsageError::Operand`]: an operand is not an id.
-/// - [`UsageError::Text`]: the text is not UTF-8.
+/// - [`UsageError::Text`]: the note's text is not UTF-8.
+/// - [`UsageError::Port`]: `serve`'s port is not a UDP port.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — each verb with its operands, both `--state` spellings,
-///   and a dash-leading text separate the accepted lines, and one line per
-///   refusal pins which refusal each malformation gets, including an arity
-///   error that wins over a malformed operand.
+///   `serve` with and without a port, and a dash-leading note separate the
+///   accepted lines, and one line per refusal pins which refusal each
+///   malformation gets, including an arity error that wins over a malformed
+///   operand.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
@@ -288,15 +347,32 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     };
     let verb = verb(word)?;
     let state = StateDir::from(PathBuf::from(state.ok_or(UsageError::State)?));
+    if verb == Verb::Serve {
+        let port = serve_port(&mut arguments)?;
+        let command = Command::Serve { port };
+        return Ok(Invocation { state, command });
+    }
     let mut raw = arguments.raw_args()?;
     // One more operand than any verb takes is read, so that a surplus is seen.
     let operands = (raw.next(), raw.next(), raw.next(), raw.next());
     let command = match (verb, operands) {
         | (Verb::Id, (None, None, None, None)) => Command::Id,
-        | (Verb::Serve, (None, None, None, None)) => Command::Serve,
-        | (Verb::Commit, (Some(tree), Some(text), None, None)) => Command::Commit {
+        | (Verb::Open, (Some(tree), None, None, None)) => Command::Open {
             tree: read_id(&tree, Operand::Tree)?,
-            content: content(text)?,
+        },
+        | (Verb::Grant, (Some(tree), Some(to), None, None)) => {
+            let tree = read_id(&tree, Operand::Tree)?;
+            Command::Grant {
+                tree,
+                to: read_id(&to, Operand::Peer)?,
+            }
+        },
+        | (Verb::Note, (Some(tree), Some(text), None, None)) => Command::Note {
+            tree: read_id(&tree, Operand::Tree)?,
+            text: text.into_string().map_err(UsageError::Text)?,
+        },
+        | (Verb::View, (Some(tree), None, None, None)) => Command::View {
+            tree: read_id(&tree, Operand::Tree)?,
         },
         | (Verb::Heads, (Some(tree), None, None, None)) => Command::Heads {
             tree: read_id(&tree, Operand::Tree)?,
@@ -314,10 +390,51 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     Ok(Invocation { state, command })
 }
 
+/// Read `serve`'s options from what follows the verb.
+///
+/// # Specification
+/// - ensures: accepts nothing, which leaves the port ephemeral, or `--port
+///   <port>` (or `--port=<port>`; the last one given wins), which fixes it.
+/// - fails: [`UsageError::Arguments`] for any other option or for `--port`
+///   without a value, [`UsageError::Operands`] for an operand, and
+///   [`UsageError::Port`] for a value that is not a port from 1 through 65535.
+/// - panics: none.
+///
+/// # Errors
+/// - [`UsageError::Arguments`]: an unknown option, or `--port` lacks a value.
+/// - [`UsageError::Operands`]: an operand follows `serve`.
+/// - [`UsageError::Port`]: the value is not a UDP port.
+///
+/// # Adequacy
+/// - hypothesis: L3 — no option, both `--port` spellings and a repeated
+///   `--port` are read to their ports, and a stray operand, an unknown option,
+///   a missing value and port 0 each meet their own refusal.
+/// - witness: `tests::every_verb_reads_its_operands`
+/// - witness: `tests::a_malformed_command_line_is_refused`
+fn serve_port(arguments: &mut lexopt::Parser) -> Result<BindPort, UsageError>
+{
+    let mut port = BindPort::Ephemeral;
+    while let Some(argument) = arguments.next()? {
+        match argument {
+            | lexopt::Arg::Long("port") => {
+                let value = arguments.value()?;
+                let fixed = value.to_string_lossy().parse::<UdpPort>();
+                port = BindPort::Fixed(fixed.map_err(UsageError::Port)?);
+            },
+            | lexopt::Arg::Value(_) => return Err(UsageError::Operands(Verb::Serve)),
+            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+                return Err(UsageError::from(other.unexpected()));
+            },
+        }
+    }
+    Ok(port)
+}
+
 /// Name the verb `word` spells.
 ///
 /// # Specification
-/// - ensures: `id`, `serve`, `commit`, `heads` and `sync` name their verbs.
+/// - ensures: `id`, `serve`, `open`, `grant`, `note`, `view`, `heads` and
+///   `sync` name their verbs.
 /// - fails: [`UsageError::Command`] for any other word, carrying it.
 /// - panics: none.
 ///
@@ -325,8 +442,8 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
 /// - [`UsageError::Command`]: the word is not a verb.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — every verb is read by name and an unknown word is refused
-///   with the word kept.
+/// - hypothesis: L3 — every verb is read by name and an unknown word, among
+///   them the retired `commit`, is refused with the word kept.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn verb(word: OsString) -> Result<Verb, UsageError>
@@ -334,7 +451,10 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
     match word.to_str() {
         | Some("id") => Ok(Verb::Id),
         | Some("serve") => Ok(Verb::Serve),
-        | Some("commit") => Ok(Verb::Commit),
+        | Some("open") => Ok(Verb::Open),
+        | Some("grant") => Ok(Verb::Grant),
+        | Some("note") => Ok(Verb::Note),
+        | Some("view") => Ok(Verb::View),
         | Some("heads") => Ok(Verb::Heads),
         | Some("sync") => Ok(Verb::Sync),
         | Some(_) | None => Err(UsageError::Command(word)),
@@ -354,8 +474,8 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
 /// - [`UsageError::Operand`]: the text is not an id.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — a malformed tree id and a malformed endpoint id are
-///   refused under their own operand names.
+/// - hypothesis: L3 — a malformed tree id, a malformed peer id and a malformed
+///   endpoint id are refused under their own operand names.
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn read_id<T>(
     text: &OsStr,
@@ -367,28 +487,6 @@ where
     text.to_string_lossy()
         .parse::<T>()
         .map_err(|source| UsageError::Operand { operand, source })
-}
-
-/// Take `text` as commit content.
-///
-/// # Specification
-/// - ensures: the content is the text's UTF-8 bytes.
-/// - fails: [`UsageError::Text`] for text that is not UTF-8, carrying it.
-/// - panics: none.
-///
-/// # Errors
-/// - [`UsageError::Text`]: the text is not UTF-8.
-///
-/// # Adequacy
-/// - hypothesis: L3 — a dash-leading text becomes its bytes and an invalid byte
-///   sequence is refused.
-/// - witness: `tests::every_verb_reads_its_operands`
-/// - witness: `tests::a_malformed_command_line_is_refused`
-fn content(text: OsString) -> Result<Content, UsageError>
-{
-    text.into_string()
-        .map(|text| Content::from(text.into_bytes()))
-        .map_err(UsageError::Text)
 }
 
 /// Run `invocation` to completion on a fresh multi-threaded runtime.
@@ -407,7 +505,7 @@ fn content(text: OsString) -> Result<Content, UsageError>
 /// # Adequacy
 /// - hypothesis: L3 — the process test runs every command through this function
 ///   and observes its output.
-/// - witness: `sync::tests::two_peers_sync_one_tree_to_identical_heads`
+/// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
 fn run(invocation: Invocation) -> Result<(), RunError>
 {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -422,30 +520,39 @@ fn run(invocation: Invocation) -> Result<(), RunError>
 /// # Specification
 /// - requires: called within a Tokio runtime.
 /// - ensures: the identity exists beneath the state directory. `id` writes the
-///   endpoint id line, then the peer id line, and opens no store. `commit`
-///   writes the new commit's id line. `heads` writes the tree's heads, one
-///   sorted hex line each. `sync` writes the heads after the sync the same way,
-///   having closed its endpoint. `serve` runs as [`serve`] specifies.
+///   endpoint id line, then the peer id line, and opens no store. `open`,
+///   `grant` and `note` commit their receipt, under a fresh operation fence,
+///   and write the new commit's id line. `view` writes the tree's view, one
+///   line per fact ([`domhringr_record_tree::View`]'s display). `heads` writes
+///   the tree's heads, one sorted hex line each. `sync` writes the heads after
+///   the sync the same way, then `path <peer-id> <path>` for the path the
+///   connection took, having closed its endpoint. `serve` runs as [`serve`]
+///   specifies.
 /// - fails: [`RunError::Identity`], [`RunError::Open`], [`RunError::Bind`],
-///   [`RunError::Commit`], [`RunError::Heads`] and [`RunError::Sync`] as the
-///   record library reports them, and [`RunError::Output`] when standard output
-///   cannot be written. A failed sync still closes the endpoint.
+///   [`RunError::Random`], [`RunError::Commit`], [`RunError::View`],
+///   [`RunError::Heads`] and [`RunError::Sync`] as the record library reports
+///   them, and [`RunError::Output`] when standard output cannot be written. A
+///   failed sync still closes the endpoint.
 /// - panics: none.
 ///
 /// # Errors
 /// - [`RunError::Identity`]: the identity cannot be read or created.
 /// - [`RunError::Open`]: the store cannot be opened, as when `serve` holds it.
 /// - [`RunError::Bind`]: the endpoint cannot bind.
+/// - [`RunError::Random`]: no operation fence can be drawn.
 /// - [`RunError::Commit`]: the commit cannot be appended.
+/// - [`RunError::View`]: the tree is unopened or its commits cannot be read.
 /// - [`RunError::Heads`]: the heads cannot be read.
 /// - [`RunError::Sync`]: the sync failed.
 /// - [`RunError::Output`]: standard output cannot be written.
 /// - [`RunError::Closed`], [`RunError::Diagnostics`]: as [`serve`].
 ///
 /// # Adequacy
-/// - hypothesis: L3 — two processes exchange ids, commit, read heads, and sync
-///   before and after one restarts; each output line is compared exactly with
-///   another process's output.
+/// - hypothesis: L3 — two processes exchange ids, open a tree, grant, write
+///   notes, read heads and views, and sync in both directions; views are
+///   compared byte for byte across processes and with the expected facts, and
+///   each sync's path line is parsed.
+/// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
 /// - witness: `sync::tests::two_peers_sync_one_tree_to_identical_heads`
 async fn execute(invocation: Invocation) -> Result<(), RunError>
 {
@@ -457,32 +564,80 @@ async fn execute(invocation: Invocation) -> Result<(), RunError>
             identity.endpoint_key(),
             identity.peer_key()
         )),
-        | Command::Serve => serve(Peer::open(&state, identity)?).await,
-        | Command::Commit { tree, content } => {
-            let id = Peer::open(&state, identity)?.commit(tree, content).await?;
-            emit(&format_args!("{id}\n"))
+        | Command::Serve { port } => serve(Peer::open(&state, identity)?, port).await,
+        | Command::Open { tree } => {
+            let peer = Peer::open(&state, identity)?;
+            record(&peer, tree, Receipt::open(tree)?).await
+        },
+        | Command::Grant { tree, to } => {
+            let peer = Peer::open(&state, identity)?;
+            record(&peer, tree, Receipt::grant(tree, to)?).await
+        },
+        | Command::Note { tree, text } => {
+            let peer = Peer::open(&state, identity)?;
+            record(&peer, tree, Receipt::note(tree, text)?).await
+        },
+        | Command::View { tree } => {
+            let view = Peer::open(&state, identity)?.view(tree).await?;
+            emit(&view)
         },
         | Command::Heads { tree } => {
             let heads = Peer::open(&state, identity)?.heads(tree).await?;
             emit(&heads)
         },
         | Command::Sync { remote, tree } => {
-            let node = Peer::open(&state, identity)?.bind().await?;
+            let node = Peer::open(&state, identity)?
+                .bind(BindPort::Ephemeral)
+                .await?;
             let synced = node.sync(&remote, tree).await;
             node.close().await;
             drop(node);
-            emit(&synced?)
+            let synced = synced?;
+            emit(&format_args!(
+                "{}path {} {}\n",
+                synced.heads(),
+                remote.peer(),
+                synced.path()
+            ))
         },
     }
 }
 
-/// Bind `peer`, announce it, and accept peers until the process is killed.
+/// Commit `receipt` to `tree` on `peer` and write the commit id line.
+///
+/// # Specification
+/// - ensures: on success the commit is durable and its id line written.
+/// - fails: [`RunError::Commit`] when the commit cannot be appended,
+///   [`RunError::Output`] when standard output cannot be written.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError::Commit`]: the commit cannot be appended.
+/// - [`RunError::Output`]: standard output cannot be written.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process test commits every kind and reads each
+///   printed commit id back among the tree's heads.
+/// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
+async fn record(
+    peer: &Peer,
+    tree: TreeId,
+    receipt: Receipt,
+) -> Result<(), RunError>
+{
+    let id = peer.commit(tree, receipt).await?;
+    emit(&format_args!("{id}\n"))
+}
+
+/// Bind `peer` on `port`, announce it, and accept peers until the process is
+/// killed.
 ///
 /// # Specification
 /// - ensures: once the endpoint is bound, writes the endpoint id line, the peer
-///   id line and `listening`; then writes `accepted <peer-id>` for each peer
-///   admitted. A connection that fails its handshake is reported on standard
-///   error and serving continues.
+///   id line and `listening`; then, for each peer admitted, writes `accepted
+///   <peer-id>` and `path <peer-id> <path>` for the path its connection took
+///   when admitted. A connection that fails its handshake is reported on
+///   standard error and serving continues.
 /// - fails: [`RunError::Bind`] when the endpoint cannot bind,
 ///   [`RunError::Closed`] if the endpoint closes, [`RunError::Output`] and
 ///   [`RunError::Diagnostics`] when standard output or standard error cannot be
@@ -490,19 +645,23 @@ async fn execute(invocation: Invocation) -> Result<(), RunError>
 /// - panics: none.
 ///
 /// # Errors
-/// - [`RunError::Bind`]: the endpoint cannot bind.
+/// - [`RunError::Bind`]: the endpoint cannot bind, as when `port` is taken.
 /// - [`RunError::Closed`]: the endpoint closed.
 /// - [`RunError::Output`]: standard output cannot be written.
 /// - [`RunError::Diagnostics`]: standard error cannot be written.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — the process test reads the announced ids and `listening`,
-///   syncs against the server before and after a restart, and reads one
-///   `accepted` line per sync.
+/// - hypothesis: L3 — the process test serves on a fixed port, reads the
+///   announced ids and `listening`, syncs against the server repeatedly, and
+///   reads an `accepted` line and a parseable `path` line per sync.
+/// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
 /// - witness: `sync::tests::two_peers_sync_one_tree_to_identical_heads`
-async fn serve(peer: Peer) -> Result<(), RunError>
+async fn serve(
+    peer: Peer,
+    port: BindPort,
+) -> Result<(), RunError>
 {
-    let node = peer.bind().await?;
+    let node = peer.bind(port).await?;
     emit(&format_args!(
         "{}\n{}\nlistening\n",
         node.endpoint_key(),
@@ -510,7 +669,11 @@ async fn serve(peer: Peer) -> Result<(), RunError>
     ))?;
     loop {
         match node.accept().await {
-            | Ok(remote) => emit(&format_args!("accepted {remote}\n"))?,
+            | Ok(accepted) => emit(&format_args!(
+                "accepted {peer}\npath {peer} {path}\n",
+                peer = accepted.peer(),
+                path = accepted.path()
+            ))?,
             | Err(AcceptError::Closed) => return Err(RunError::Closed),
             | Err(failure) => report(&failure).map_err(RunError::Diagnostics)?,
         }
@@ -589,11 +752,12 @@ mod tests
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use domhringr_record_tree::Content;
+    use domhringr_record_tree::BindPort;
     use domhringr_record_tree::Identity;
     use domhringr_record_tree::RemotePeer;
     use domhringr_record_tree::StateDir;
     use domhringr_record_tree::TreeId;
+    use domhringr_record_tree::UdpPort;
 
     use super::Command;
     use super::Invocation;
@@ -624,16 +788,40 @@ mod tests
         let state = StateDir::from(PathBuf::from("dir"));
         let remote = remote();
         let (endpoint, peer) = (remote.endpoint().to_string(), remote.peer().to_string());
+        let port = |text: &str| BindPort::Fixed(text.parse::<UdpPort>().unwrap());
         let lines = [
             (vec!["--state", "dir", "id"], Command::Id),
-            (vec!["--state=dir", "serve"], Command::Serve),
+            (vec!["--state=dir", "serve"], Command::Serve {
+                port: BindPort::Ephemeral,
+            }),
             (
-                vec!["--state", "dir", "commit", TREE, "--not-an-option"],
-                Command::Commit {
-                    tree,
-                    content: Content::from(b"--not-an-option".to_vec()),
+                vec!["--state", "dir", "serve", "--port", "49731"],
+                Command::Serve {
+                    port: port("49731"),
                 },
             ),
+            (
+                vec!["--state", "dir", "serve", "--port=1", "--port=65535"],
+                Command::Serve {
+                    port: port("65535"),
+                },
+            ),
+            (vec!["--state", "dir", "open", TREE], Command::Open { tree }),
+            (
+                vec!["--state", "dir", "grant", TREE, &peer],
+                Command::Grant {
+                    tree,
+                    to: remote.peer(),
+                },
+            ),
+            (
+                vec!["--state", "dir", "note", TREE, "--not-an-option"],
+                Command::Note {
+                    tree,
+                    text: String::from("--not-an-option"),
+                },
+            ),
+            (vec!["--state", "dir", "view", TREE], Command::View { tree }),
             (
                 vec!["--state", "elsewhere", "--state", "dir", "heads", TREE],
                 Command::Heads { tree },
@@ -708,7 +896,43 @@ mod tests
                 ..
             }
         ));
-        let mut invalid = line(&["--state", "dir", "commit", TREE]);
+        assert!(matches!(
+            refused(line(&["--state", "dir", "grant", TREE])),
+            UsageError::Operands(Verb::Grant)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "grant", TREE, "nothex"])),
+            UsageError::Operand {
+                operand: Operand::Peer,
+                ..
+            }
+        ));
+        assert!(
+            matches!(refused(line(&["--state", "dir", "commit", TREE, "text"])), UsageError::Command(word) if word == "commit"),
+            "`note` replaced `commit`"
+        );
+        assert!(matches!(
+            refused(line(&["--state", "dir", "serve", "extra"])),
+            UsageError::Operands(Verb::Serve)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "serve", "--verbose"])),
+            UsageError::Arguments(_)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "serve", "--port"])),
+            UsageError::Arguments(_)
+        ));
+        for port in ["0", "65536", "port"] {
+            assert!(
+                matches!(
+                    refused(line(&["--state", "dir", "serve", "--port", port])),
+                    UsageError::Port(_)
+                ),
+                "{port:?} is not a port"
+            );
+        }
+        let mut invalid = line(&["--state", "dir", "note", TREE]);
         invalid.push(std::os::unix::ffi::OsStringExt::from_vec(vec![0xff]));
         assert!(matches!(refused(invalid), UsageError::Text(_)));
     }

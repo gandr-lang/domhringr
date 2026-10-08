@@ -27,9 +27,9 @@ One row per directory: the directory, its package, and what it is.
 
 ```text
 crates/
-├── record-tree/   domhringr-record-tree   the sedimentree: a tree stored in redb, synced with a peer over iroh
+├── record-tree/   domhringr-record-tree   the sedimentree: receipts, the fold to a view, a tree stored in redb and synced over iroh
 ├── face-driver/   domhringr               the `domhringr` driver: installs components
-└── face-peer/     domhringr-face-peer     the `domhringr-peer` binary: commits to, reads and syncs a tree
+└── face-peer/     domhringr-face-peer     the `domhringr-peer` binary: opens, grants on, notes to, views, reads and syncs a tree
 ```
 
 ## Divergences

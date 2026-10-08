@@ -17,6 +17,15 @@ pub struct TreeId(SedimentreeId);
 
 impl TreeId
 {
+    /// The tree id subduction knows as `id`.
+    ///
+    /// # Specification
+    /// trivial.
+    pub(crate) const fn from_sedimentree(id: SedimentreeId) -> Self
+    {
+        Self(id)
+    }
+
     /// The sedimentree id subduction knows the tree by.
     ///
     /// # Specification

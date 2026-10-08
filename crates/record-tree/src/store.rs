@@ -1,5 +1,5 @@
-//! The tree store: a subduction peer over one redb file, committing content
-//! into sedimentrees and reading their heads.
+//! The tree store: a subduction peer over one redb file, committing receipts
+//! into sedimentrees, reading their heads, and folding them into views.
 
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
@@ -13,6 +13,7 @@ use sedimentree_core::loose_commit::id::CommitId;
 use subduction_core::connection::message::SyncMessage;
 use subduction_core::handler::sync::SyncHandler;
 use subduction_core::policy::open::OpenPolicy;
+use subduction_core::storage::traits::Storage;
 use subduction_core::subduction::Subduction;
 use subduction_core::subduction::builder::SubductionBuilder;
 use subduction_core::subduction::error::WriteError;
@@ -22,9 +23,14 @@ use subduction_iroh::transport::IrohTransport;
 use subduction_redb_storage::RedbStorage;
 use subduction_redb_storage::RedbStorageError;
 
+use crate::fold::Unopened;
+use crate::fold::View;
+use crate::fold::fold;
 use crate::id::TreeId;
 use crate::identity::Identity;
 use crate::identity::StateDir;
+use crate::receipt::EncodeError;
+use crate::receipt::Receipt;
 use crate::runtime::TokioSpawner;
 use crate::runtime::TokioTimer;
 
@@ -48,24 +54,6 @@ pub type Engine = Subduction<
 
 /// A failed local write, as subduction reports it for this engine.
 type EngineWriteError = WriteError<Sendable, RedbStorage, Transport, SyncMessage>;
-
-/// The bytes a commit carries.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct Content(Blob);
-
-impl From<Vec<u8>> for Content
-{
-    /// Take bytes as commit content.
-    ///
-    /// # Specification
-    /// trivial.
-    #[inline]
-    fn from(bytes: Vec<u8>) -> Self
-    {
-        Self(Blob::new(bytes))
-    }
-}
 
 /// A tree's heads: the commits no other commit in the tree names as a
 /// parent, ordered by commit id.
@@ -123,6 +111,8 @@ pub struct Peer
 {
     /// The subduction engine over the store.
     engine: Arc<Engine>,
+    /// The store itself, read directly for the signed commits a view folds.
+    storage: RedbStorage,
     /// The identity the engine signs with and the endpoint binds.
     identity: Identity,
     /// The runtime the engine's tasks and its connections' tasks run on.
@@ -137,7 +127,8 @@ impl Peer
     /// - requires: called from within a Tokio runtime, which runs the engine.
     /// - ensures: the store's redb file exists beneath `state` and is held by
     ///   this peer; the engine signs with `identity`'s signer and admits every
-    ///   peer and every write (the open policy).
+    ///   peer and every write (the open policy): authority is the fold's
+    ///   concern ([`Peer::view`]), not storage's.
     /// - fails: [`OpenError::Runtime`] outside a Tokio runtime,
     ///   [`OpenError::Storage`] when the store cannot be created or opened,
     ///   including when another process holds it.
@@ -164,7 +155,7 @@ impl Peer
             RedbStorage::new(&path).map_err(|source| OpenError::Storage { path, source })?;
         let (engine, _handler, listener, manager) = SubductionBuilder::new()
             .signer(identity.signer().clone())
-            .storage(storage, Arc::new(OpenPolicy))
+            .storage(storage.clone(), Arc::new(OpenPolicy))
             .spawner(TokioSpawner::new(runtime.clone()))
             .timer(TokioTimer)
             .build::<Sendable, Transport>();
@@ -172,6 +163,7 @@ impl Peer
         drop(runtime.spawn(manager));
         Ok(Self {
             engine,
+            storage,
             identity,
             runtime,
         })
@@ -206,41 +198,46 @@ impl Peer
         &self.runtime
     }
 
-    /// Append `content` to `tree` as a commit on the tree's current heads.
+    /// Append `receipt` to `tree` as a commit on the tree's current heads.
     ///
     /// # Specification
-    /// - ensures: returns the commit id, the BLAKE3 digest of `content`; on
-    ///   success the commit is durable in the store and its parents are the
-    ///   tree's heads as they stood before the call, so after it the tree's
-    ///   heads are exactly this commit.
-    /// - ensures: content already committed to `tree` is the commit already
+    /// - ensures: the commit's blob is the receipt's encoding and its id the
+    ///   BLAKE3 digest of that blob, which the call returns; on success the
+    ///   commit is durable in the store, signed by this peer, and its parents
+    ///   are the tree's heads as they stood before the call, so after it the
+    ///   tree's heads are exactly this commit.
+    /// - ensures: a receipt already committed to `tree` is the commit already
     ///   there: the call writes nothing and returns that commit's id, so a
     ///   commit never names itself or a descendant as a parent.
-    /// - fails: [`CommitError::Read`] when the tree cannot be read from
-    ///   storage, [`CommitError::Write`] when the commit cannot be stored.
+    /// - ensures: the receipt is stored under `tree` whatever tree it names;
+    ///   the fold refuses one that names another ([`Peer::view`]).
+    /// - fails: [`CommitError::Encode`] when the receipt cannot be encoded,
+    ///   [`CommitError::Read`] when the tree cannot be read from storage,
+    ///   [`CommitError::Write`] when the commit cannot be stored.
     /// - panics: none.
     /// - intension: a commit at a fragment boundary is stored as a loose
     ///   commit; no fragment is built for it.
     ///
     /// # Errors
+    /// - [`CommitError::Encode`]: the codec refused the receipt.
     /// - [`CommitError::Read`]: the tree's heads cannot be read.
     /// - [`CommitError::Write`]: the commit cannot be stored.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — two distinct contents committed in turn, then the
+    /// - hypothesis: L3 — two distinct receipts committed in turn, then the
     ///   first again, separate chaining from re-commit: the ids are compared
-    ///   with independently computed digests, and the heads after each step are
-    ///   compared exactly.
+    ///   with independently computed digests of the encodings, and the heads
+    ///   after each step are compared exactly.
     /// - witness: `store::tests::commits_chain_on_the_heads_and_survive_a_reopen`
-    /// - witness: `store::tests::committing_present_content_changes_nothing`
+    /// - witness: `store::tests::committing_a_present_receipt_changes_nothing`
     #[inline]
     pub async fn commit(
         &self,
         tree: TreeId,
-        content: Content,
+        receipt: Receipt,
     ) -> Result<CommitId, CommitError>
     {
-        let blob = content.0;
+        let blob = receipt.encode().map_err(CommitError::Encode)?;
         let id = CommitId::new(Digest::<Blob>::hash(&blob).into_bytes());
         let heads = self.heads(tree).await.map_err(CommitError::Read)?;
         // `heads` has just hydrated the tree into the engine's resident set,
@@ -258,6 +255,39 @@ impl Peer
             .await
             .map_err(CommitError::Write)?;
         Ok(id)
+    }
+
+    /// Fold `tree`'s stored commits into its view.
+    ///
+    /// # Specification
+    /// - ensures: the view is the fold of every loose commit stored for `tree`,
+    ///   each authored by its verified signer, so two peers holding the same
+    ///   commits compute equal views whatever order they arrived in.
+    /// - fails: [`ViewError::Load`] when the commits cannot be read,
+    ///   [`ViewError::Unopened`] when none of them is the tree's Open,
+    ///   including for a tree the store has never seen.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ViewError::Load`]: the storage read fails.
+    /// - [`ViewError::Unopened`]: the tree has no Open.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the same signed commits, by two authors, saved into
+    ///   two stores in opposite orders yield equal views whose owner, member,
+    ///   notes and refusal are compared exactly; an unknown tree is unopened.
+    /// - witness: `store::tests::two_stores_given_one_commit_set_in_two_orders_agree`
+    #[inline]
+    pub async fn view(
+        &self,
+        tree: TreeId,
+    ) -> Result<View, ViewError>
+    {
+        let commits = Storage::<Sendable>::load_loose_commits(&self.storage, tree.sedimentree())
+            .await
+            .map_err(ViewError::Load)?;
+        let view = fold(tree, commits)?;
+        Ok(view)
     }
 
     /// Read `tree`'s heads from the store.
@@ -313,12 +343,27 @@ pub enum OpenError
 #[derive(Debug, thiserror::Error)]
 pub enum CommitError
 {
+    /// The codec refused the receipt.
+    #[error(transparent)]
+    Encode(EncodeError),
     /// The tree's heads cannot be read.
     #[error("cannot read the tree")]
     Read(#[source] HeadsError),
     /// The commit cannot be stored.
     #[error("cannot store the commit")]
     Write(#[source] EngineWriteError),
+}
+
+/// Why a tree has no view.
+#[derive(Debug, thiserror::Error)]
+pub enum ViewError
+{
+    /// The tree's commits cannot be read.
+    #[error("cannot read the tree's commits")]
+    Load(#[source] RedbStorageError),
+    /// No commit is the tree's Open.
+    #[error(transparent)]
+    Unopened(#[from] Unopened),
 }
 
 /// Why a tree's heads cannot be read.
@@ -330,56 +375,51 @@ pub struct HeadsError(#[source] RedbStorageError);
 #[cfg(test)]
 mod tests
 {
-    use sedimentree_core::loose_commit::id::CommitId;
+    use alloc::collections::BTreeSet;
+    use alloc::string::String;
 
-    use super::Content;
+    use future_form::Sendable;
+    use sedimentree_core::loose_commit::id::CommitId;
+    use subduction_core::storage::traits::Storage;
+
     use super::Peer;
+    use super::ViewError;
+    use crate::fold::Refusal;
     use crate::id::TreeId;
     use crate::identity::Identity;
     use crate::identity::StateDir;
+    use crate::receipt::Receipt;
+    use crate::testing::commit;
+    use crate::testing::id;
+    use crate::testing::key;
+    use crate::testing::other;
+    use crate::testing::owner;
+    use crate::testing::runtime;
 
     /// The tree every test commits to.
     const TREE: &str = "7472656574726565747265657472656574726565747265657472656574726565";
 
-    /// A multi-threaded runtime, as the peer binary runs.
+    /// A tree no test commits to.
+    const UNKNOWN: &str = "756e6b6e6f776e756e6b6e6f776e756e6b6e6f776e756e6b6e6f776e756e6b6e";
+
+    /// The commit id the store must assign to `receipt`: the BLAKE3 digest of
+    /// its encoding, computed here with the reference implementation,
+    /// independently of the store.
     ///
     /// # Specification
     /// trivial.
-    fn runtime() -> tokio::runtime::Runtime
+    fn digest(receipt: &Receipt) -> CommitId
     {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
+        CommitId::new(*blake3::hash(receipt.encode().unwrap().as_slice()).as_bytes())
     }
 
-    /// The commit id the store must assign to `content`: its BLAKE3 digest,
-    /// computed here with the reference implementation, independently of
-    /// the store.
+    /// A note of `text` on the test tree.
     ///
     /// # Specification
     /// trivial.
-    fn digest(content: &Content) -> CommitId
+    fn note(text: String) -> Receipt
     {
-        CommitId::new(*blake3::hash(content.0.as_slice()).as_bytes())
-    }
-
-    /// The first content committed.
-    ///
-    /// # Specification
-    /// trivial.
-    fn first() -> Content
-    {
-        Content::from(b"first".to_vec())
-    }
-
-    /// The second content committed.
-    ///
-    /// # Specification
-    /// trivial.
-    fn second() -> Content
-    {
-        Content::from(b"second".to_vec())
+        Receipt::note(TREE.parse().unwrap(), text).unwrap()
     }
 
     /// Open a peer on `state`, creating its identity as needed.
@@ -397,15 +437,16 @@ mod tests
         let root = tempfile::tempdir().unwrap();
         let state = StateDir::from(root.path().to_path_buf());
         let tree = TREE.parse::<TreeId>().unwrap();
+        let (first, second) = (note("first".into()), note("second".into()));
         runtime().block_on(async {
             let peer = open(&state);
             let unknown = peer.heads(tree).await.unwrap();
             assert_eq!(unknown.iter().count(), 0, "an unknown tree has no heads");
-            let first_id = peer.commit(tree, first()).await.unwrap();
+            let first_id = peer.commit(tree, first.clone()).await.unwrap();
             assert_eq!(
                 first_id,
-                digest(&first()),
-                "a commit id is the content's BLAKE3 digest"
+                digest(&first),
+                "a commit id is the BLAKE3 digest of the receipt's encoding"
             );
             let heads = peer.heads(tree).await.unwrap();
             assert_eq!(
@@ -413,11 +454,11 @@ mod tests
                 [first_id],
                 "one commit is the head"
             );
-            let second_id = peer.commit(tree, second()).await.unwrap();
+            let second_id = peer.commit(tree, second.clone()).await.unwrap();
             assert_eq!(
                 second_id,
-                digest(&second()),
-                "a commit id is the content's BLAKE3 digest"
+                digest(&second),
+                "a commit id is the BLAKE3 digest of the receipt's encoding"
             );
             let heads = peer.heads(tree).await.unwrap();
             assert_eq!(
@@ -447,7 +488,7 @@ mod tests
             let heads = peer.heads(tree).await.unwrap();
             assert_eq!(
                 heads.iter().copied().collect::<Vec<_>>(),
-                [digest(&second())],
+                [digest(&second)],
                 "the store survives a reopen"
             );
             drop(peer);
@@ -455,19 +496,20 @@ mod tests
     }
 
     #[test]
-    fn committing_present_content_changes_nothing()
+    fn committing_a_present_receipt_changes_nothing()
     {
         let root = tempfile::tempdir().unwrap();
         let state = StateDir::from(root.path().to_path_buf());
         let tree = TREE.parse::<TreeId>().unwrap();
+        let first = note("first".into());
         runtime().block_on(async {
             let peer = open(&state);
-            let first_id = peer.commit(tree, first()).await.unwrap();
-            let second_id = peer.commit(tree, second()).await.unwrap();
-            let again = peer.commit(tree, first()).await.unwrap();
+            let first_id = peer.commit(tree, first.clone()).await.unwrap();
+            let second_id = peer.commit(tree, note("second".into())).await.unwrap();
+            let again = peer.commit(tree, first).await.unwrap();
             assert_eq!(
                 again, first_id,
-                "present content is the commit already there"
+                "a present receipt is the commit already there"
             );
             let heads = peer.heads(tree).await.unwrap();
             assert_eq!(
@@ -478,6 +520,65 @@ mod tests
             let commits = peer.engine.get_commits(tree.sedimentree()).await.unwrap();
             assert_eq!(commits.len(), 2, "nothing was written for the re-commit");
             drop(peer);
+        });
+    }
+
+    #[test]
+    fn two_stores_given_one_commit_set_in_two_orders_agree()
+    {
+        let (root_a, root_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let tree = TREE.parse::<TreeId>().unwrap();
+        let (owner, other) = (owner(), other());
+        runtime().block_on(async {
+            let opened = commit(&owner, tree, &[], &Receipt::open(tree).unwrap()).await;
+            let early = commit(&other, tree, &[&opened], &note("early".into())).await;
+            let granted = Receipt::grant(tree, key(&other)).unwrap();
+            let granted = commit(&owner, tree, &[&early], &granted).await;
+            let late = commit(&other, tree, &[&granted], &note("late".into())).await;
+            let arrivals = [opened, early.clone(), granted, late];
+
+            let a = open(&StateDir::from(root_a.path().to_path_buf()));
+            let b = open(&StateDir::from(root_b.path().to_path_buf()));
+            for commit in arrivals.iter().cloned() {
+                Storage::<Sendable>::save_loose_commit(&a.storage, tree.sedimentree(), commit)
+                    .await
+                    .unwrap();
+            }
+            for commit in arrivals.iter().rev().cloned() {
+                Storage::<Sendable>::save_loose_commit(&b.storage, tree.sedimentree(), commit)
+                    .await
+                    .unwrap();
+            }
+            let view = a.view(tree).await.unwrap();
+            assert_eq!(
+                b.view(tree).await.unwrap(),
+                view,
+                "the order the commits arrived in leaves no trace"
+            );
+            assert_eq!(view.owner(), key(&owner), "the Open's signer owns the tree");
+            assert_eq!(
+                *view.members(),
+                BTreeSet::from([key(&other)]),
+                "the grant's peer is a member"
+            );
+            assert_eq!(
+                view.notes(),
+                [(key(&other), String::from("late"))],
+                "the note made after the grant is admitted"
+            );
+            assert_eq!(
+                view.refused(),
+                [(id(&early), Refusal::NoAuthority)],
+                "the note made before the grant stays refused"
+            );
+            assert!(
+                matches!(
+                    a.view(UNKNOWN.parse().unwrap()).await,
+                    Err(ViewError::Unopened(_))
+                ),
+                "a tree never seen has no Open"
+            );
+            drop((a, b));
         });
     }
 }

@@ -52,6 +52,13 @@ version = "0.3"
 default-features = false
 features = ["alloc"]
 
+# The operating system's random source: a receipt's operation fence.
+# consumers:
+# - record-tree
+[workspace.dependencies.getrandom]
+version = "0.4"
+default-features = false
+
 # QUIC endpoints dialed by public key, with relay and hole punching.
 # features:
 # - tls-ring: the crypto provider the `N0` preset requires
@@ -79,12 +86,31 @@ default-features = false
 version = "0.3"
 default-features = false
 
+# The receipt codec's stand-in, confined to `Receipt::encode` and
+# `Receipt::decode` until receipts encode through the value plane.
+# consumers:
+# - record-tree
+[workspace.dependencies.postcard]
+version = "1.1"
+default-features = false
+
 # The sedimentree: tree and commit identities, blobs.
 # consumers:
 # - record-tree
 [workspace.dependencies.sedimentree_core]
 version = "0.15"
 default-features = false
+
+# `derive(Serialize, Deserialize)` for the stand-in codec's private mirror
+# of a receipt.
+# features:
+# - derive: the derives on the mirror and its kind
+# consumers:
+# - record-tree
+[workspace.dependencies.serde]
+version = "1.0"
+default-features = false
+features = ["derive"]
 
 # The subduction sync protocol: the peer, its builder, storage policy.
 # consumers:
