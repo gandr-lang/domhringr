@@ -27,7 +27,7 @@ The record plane stores signed receipts in sedimentrees, folds them into views, 
 | -------- | --- |
 | `subduction_core`, [crate documentation](https://docs.rs/subduction_core) | Signed commit storage and batch synchronization. |
 | `sedimentree_core`, [crate documentation](https://docs.rs/sedimentree_core) | Causal trees, commit ids, and signed payloads. |
-| `subduction_redb`, [crate documentation](https://docs.rs/subduction_redb) | Durable redb storage. |
+| `subduction_redb_storage`, [crate documentation](https://docs.rs/subduction_redb_storage) | Durable redb storage. |
 | `iroh`, [crate documentation](https://docs.rs/iroh) | Endpoint discovery, direct connections, and relays. |
 | `tokio`, [crate documentation](https://docs.rs/tokio) | Runtime, task spawning, and timers. |
 | `gandr-storage-values`, [crate documentation](https://github.com/gandr-lang/gandr/tree/main/crates/storage-values) | Canonical receipt tokens and flat encoding. |
