@@ -40,6 +40,7 @@ const SCOPES = [
   "face",
   "oracle",
   "pipeline",
+  "record",
   "tool",
   "ci",
   "config",
