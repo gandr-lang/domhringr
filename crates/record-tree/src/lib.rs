@@ -30,6 +30,17 @@
 //! order into the task's [`Step`]s and its [`Current`] attempt: who holds the
 //! slot ([`Slot`]) and whether it is reported on ([`Answer`]).
 //!
+//! The work is checked on the task's record. A judge rules on a dispatch
+//! ([`Kind::Verdict`]): each question's [`Ruling`], a [`Readout`] of the
+//! probability on each option or the reason none was read ([`Unread`]). A
+//! runner records a playbook step's verifier run on a dispatch
+//! ([`Kind::Verified`]): the step's identifier ([`StepId`]), the hash of the
+//! process's output and how it ended ([`Status`]). The judge of a verdict
+//! grades it ([`Kind::Graded`]): a [`Grade`] per answer and the grades
+//! composed. Each moves no slot and answers no attempt, and the fold admits
+//! each only from the key it names — the judge, the runner, the verdict's
+//! judge — while its dispatch is current.
+//!
 //! A tree, the paths in it and its commits are named by [`Anchor`]s,
 //! `domhringr://<authority>/<path>` and `domhringr://<authority>/.commit/<id>`,
 //! whose [`Authority`] is the tree's key, a DNS name ([`Domain`]) or a label
@@ -80,6 +91,7 @@
 extern crate alloc;
 
 mod anchor;
+mod check;
 mod fold;
 mod id;
 mod identity;
@@ -104,6 +116,12 @@ pub use anchor::Reference;
 pub use anchor::Resolution;
 pub use anchor::Scope;
 pub use anchor::Target;
+pub use check::Code;
+pub use check::Grade;
+pub use check::ParseStepIdError;
+pub use check::Signal;
+pub use check::Status;
+pub use check::StepId;
 pub use fold::Refusal;
 pub use fold::Unopened;
 pub use fold::Verdict;

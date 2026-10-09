@@ -1,7 +1,7 @@
 //! Tasks: a tree read as a task — the operator's dispatch of a brief to a
-//! seat, that seat's reports, handoffs and retirement, and the verdicts
-//! judges rule on it — and where the task stands once its commits are
-//! folded.
+//! seat, that seat's reports, handoffs and retirement, the verdicts judges
+//! rule on it, the verifications runners record on it and the gradings of
+//! its verdicts — and where the task stands once its commits are folded.
 //!
 //! A dispatch names the seat it puts in the task's slot and the brief
 //! ([`Brief`]): an anchor, or the hash of the brief's content
@@ -13,9 +13,13 @@
 //! reported, or stalled because its slot was retired without a report — is
 //! read from the receipts alone, never from a clock. A judge's verdict names
 //! the current dispatch, the rubric and the transcript by hash, and rules on
-//! each question asked ([`Ruling`]); it is a step of the task and leaves the
-//! attempt's standing as it was: which judge a task trusts, and what its
-//! rulings decide, is the rubric's.
+//! each question asked ([`Ruling`]); a runner's verification names the
+//! current dispatch, the playbook by hash, the step by its identifier
+//! ([`StepId`]), the verifier's output by hash and how its process ended
+//! ([`Status`]); a grading names a verdict and grades each of its answers
+//! ([`Grade`]). Each is a step of the task and leaves the attempt's standing
+//! as it was: which judge or runner a task trusts, and what its checks
+//! decide, is the playbook's and the rubric's.
 //!
 //! [`ContentHash`]: crate::id::ContentHash
 
@@ -28,6 +32,9 @@ use core::str::FromStr;
 use sedimentree_core::loose_commit::id::CommitId;
 
 use crate::anchor::Anchor;
+use crate::check::Grade;
+use crate::check::Status;
+use crate::check::StepId;
 use crate::id::ContentHash;
 use crate::id::PeerKey;
 use crate::line::Field;
@@ -223,6 +230,38 @@ pub enum Step
         /// Each question's hash and its ruling, in the order asked.
         answers: Vec<(ContentHash, Ruling)>,
     },
+    /// The runner ran the verifier of `step` of `playbook` on `dispatch`:
+    /// the process wrote `output` and ended with `status`.
+    Verified
+    {
+        /// The dispatch the step was run on.
+        dispatch: CommitId,
+        /// The runner who ran it.
+        runner: PeerKey,
+        /// The hash of the playbook the step belongs to.
+        playbook: ContentHash,
+        /// The step whose verifier ran.
+        step: StepId,
+        /// The hash of the process's output.
+        output: ContentHash,
+        /// How the process ended.
+        status: Status,
+    },
+    /// The judge of `verdict` graded its answers against the band of the
+    /// rubric it ruled under.
+    Graded
+    {
+        /// The dispatch the verdict ruled on.
+        dispatch: CommitId,
+        /// The verdict graded.
+        verdict: CommitId,
+        /// The hash of the rubric the verdict ruled under.
+        rubric: ContentHash,
+        /// Each question's hash and its grade, in the verdict's order.
+        grades: Vec<(ContentHash, Grade)>,
+        /// The grades composed across the rubric.
+        composed: Grade,
+    },
 }
 
 /// Who a dispatch's slot is with.
@@ -416,15 +455,15 @@ impl Task
     }
 
     /// Record the admitted `step` of `commit`: a report, a handoff, a
-    /// retirement or a verdict.
+    /// retirement, a verdict, a verification or a grading.
     ///
     /// # Specification
     /// - ensures: the step is appended; when it answers the current attempt's
     ///   dispatch, a report makes `commit` the attempt's report, a handoff puts
     ///   its recipient in the slot, and a retirement retires the slot at
-    ///   `commit`. A verdict changes no attempt, and a step answering an
-    ///   earlier dispatch changes none either: a later dispatch superseded it.
-    /// - panics: none.
+    ///   `commit`. A verdict, a verification and a grading change no attempt,
+    ///   and a step answering an earlier dispatch changes none either: a later
+    ///   dispatch superseded it.
     pub(crate) fn answer(
         &mut self,
         commit: CommitId,
@@ -449,7 +488,9 @@ impl Task
                 | Step::Report { .. }
                 | Step::Handoff { .. }
                 | Step::Retire { .. }
-                | Step::Verdict { .. } => {},
+                | Step::Verdict { .. }
+                | Step::Verified { .. }
+                | Step::Graded { .. } => {},
             }
         }
         self.steps.push((commit, step));
@@ -461,9 +502,12 @@ impl fmt::Display for Task
     /// Write the task as lines: one per step in canonical order — `dispatch
     /// <commit> <seat> <brief>`, `report <commit> <dispatch> <author>
     /// <content> <summary>`, `handoff <commit> <dispatch> <from> <to>`,
-    /// `retire <commit> <dispatch> <author>`, or `verdict <commit> <dispatch>
+    /// `retire <commit> <dispatch> <author>`, `verdict <commit> <dispatch>
     /// <judge> <rubric> <transcript>` followed by `ruling <commit> <question>
-    /// <ruling>` per question asked — then where it stands: `undispatched`,
+    /// <ruling>` per question asked, `verified <commit> <dispatch> <runner>
+    /// <playbook> <step> <output> <status>`, or `graded <commit> <dispatch>
+    /// <verdict> <rubric> <composed>` followed by `grade <commit> <question>
+    /// <grade>` per question graded — then where it stands: `undispatched`,
     /// `reported <dispatch> <report>`, `stalled <dispatch> <retirement>` for a
     /// slot retired from without a report, or `dispatched <dispatch>
     /// <holder>`.
@@ -478,9 +522,9 @@ impl fmt::Display for Task
     /// # Adequacy
     /// - hypothesis: L3 — a task with a dispatch by anchor, a handoff, a report
     ///   whose summary holds a backslash, a retirement, a verdict with a read
-    ///   and an unread ruling and a second dispatch by content is printed and
-    ///   compared line for line, and each standing is printed by a case of its
-    ///   own.
+    ///   and an unread ruling, a verification, a grading of that verdict and a
+    ///   second dispatch by content is printed and compared line for line, and
+    ///   each standing is printed by a case of its own.
     /// - witness: `fold::tests::a_task_prints_one_line_per_step_and_its_standing`
     #[inline]
     fn fmt(
@@ -522,6 +566,35 @@ impl fmt::Display for Task
                     )?;
                     for &(question, ref ruling) in answers {
                         writeln!(f, "ruling {commit} {question} {ruling}")?;
+                    }
+                },
+                | Step::Verified {
+                    dispatch,
+                    runner,
+                    playbook,
+                    ref step,
+                    output,
+                    status,
+                } => {
+                    writeln!(
+                        f,
+                        "verified {commit} {dispatch} {runner} {playbook} {step} {output} \
+                         {status}"
+                    )?;
+                },
+                | Step::Graded {
+                    dispatch,
+                    verdict,
+                    rubric,
+                    ref grades,
+                    composed,
+                } => {
+                    writeln!(
+                        f,
+                        "graded {commit} {dispatch} {verdict} {rubric} {composed}"
+                    )?;
+                    for &(question, grade) in grades {
+                        writeln!(f, "grade {commit} {question} {grade}")?;
                     }
                 },
             }

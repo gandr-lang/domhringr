@@ -27,7 +27,9 @@ use crate::anchor::Anchor;
 use crate::anchor::Path;
 use crate::anchor::Resolution;
 use crate::anchor::Target;
+use crate::check::Grade;
 use crate::id::CommitPrefix;
+use crate::id::ContentHash;
 use crate::id::PeerKey;
 use crate::id::TreeId;
 use crate::line::Field;
@@ -38,6 +40,7 @@ use crate::presence::Presence;
 use crate::receipt::Kind;
 use crate::receipt::Operation;
 use crate::receipt::Receipt;
+use crate::ruling::Ruling;
 use crate::task::Step;
 use crate::task::Task;
 
@@ -416,17 +419,27 @@ pub enum Refusal
     /// A withdrawal of another member's presence by anyone but the owner: a
     /// member withdraws its own presence alone.
     ForeignPresence,
-    /// A report, a handoff, a retirement or a verdict whose dispatch is not
-    /// the admitted dispatch last in canonical order among the receipt's
-    /// ancestors: a later dispatch superseded it, or it names none.
+    /// A report, a handoff, a retirement, a verdict or a verification whose
+    /// dispatch is not the admitted dispatch last in canonical order among
+    /// the receipt's ancestors — or a grading whose verdict's dispatch is
+    /// not: a later dispatch superseded it, or it names none.
     NotCurrent,
     /// A report, a handoff or a retirement whose author does not hold the
     /// dispatch's slot among the receipt's ancestors: the seat dispatched, or
     /// the recipient of the slot's last handoff, holds it until it retires.
     NotHolder,
-    /// A verdict whose author is not the judge it names: a judge's verdict is
-    /// signed by its own key.
+    /// A verdict whose author is not the judge it names, or a grading whose
+    /// author is not its verdict's judge: a judge's verdict, and its grading,
+    /// is signed by its own key.
     NotJudge,
+    /// A verification whose author is not the runner it names: a runner's
+    /// verification is signed by its own key.
+    NotRunner,
+    /// A grading naming no verdict admitted among the receipt's ancestors.
+    NoVerdict,
+    /// A grading whose grades do not answer its verdict's: one grade per
+    /// answer, refused exactly where the judge read no ruling.
+    Misgraded,
 }
 
 impl fmt::Display for Refusal
@@ -454,6 +467,9 @@ impl fmt::Display for Refusal
             | Self::NotCurrent => "not current",
             | Self::NotHolder => "not holder",
             | Self::NotJudge => "not judge",
+            | Self::NotRunner => "not runner",
+            | Self::NoVerdict => "no verdict",
+            | Self::Misgraded => "misgraded",
         })
     }
 }
@@ -633,8 +649,34 @@ struct Past
     grantees: BTreeSet<PeerKey>,
     /// The peers given a slot by an admitted dispatch or handoff.
     seats: BTreeSet<PeerKey>,
+    /// The admitted verdicts.
+    verdicts: BTreeSet<CommitId>,
     /// The latest dispatch and its slot.
     course: Course,
+}
+
+/// An admitted verdict, as a grading of it reads it.
+struct Ruled
+{
+    /// The judge who ruled.
+    judge: PeerKey,
+    /// The dispatch ruled on.
+    dispatch: CommitId,
+    /// The hash of the rubric the questions come from.
+    rubric: ContentHash,
+    /// Each question's hash and whether the judge read its ruling, in the
+    /// order asked.
+    questions: Vec<(ContentHash, Reading)>,
+}
+
+/// Whether the judge read a question's ruling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reading
+{
+    /// A readout: a grade places it against the band.
+    Read,
+    /// No readout: its grade is refused.
+    Unread,
 }
 
 /// A commit awaiting its place in the canonical order.
@@ -688,8 +730,13 @@ struct Carry
 ///   dispatch's slot there: the seat dispatched, or the recipient of the slot's
 ///   admitted handoff last in canonical order there, unless an admitted
 ///   retirement from the slot comes later; or it is a verdict whose author is
-///   the judge it names and whose dispatch is the admitted dispatch last in
-///   canonical order among its ancestors, whoever holds the slot.
+///   the judge it names, or a verification whose author is the runner it names,
+///   and whose dispatch is the admitted dispatch last in canonical order among
+///   its ancestors, whoever holds the slot; or it is a grading whose verdict is
+///   admitted among its ancestors, whose author is that verdict's judge, whose
+///   grades number its answers with a refused grade exactly for each unread
+///   ruling, and whose verdict's dispatch is the admitted dispatch last in
+///   canonical order among its ancestors.
 /// - ensures: a refused commit is listed with the first refusal that holds,
 ///   checked in this order: [`Refusal::Undecodable`], [`Refusal::WrongTree`],
 ///   [`Refusal::Duplicate`] (an admitted commit earlier in canonical order
@@ -703,9 +750,15 @@ struct Carry
 ///   withdrawal of another's presence, for a report, a handoff or a retirement
 ///   [`Refusal::NotCurrent`] when its dispatch is not the latest among its
 ///   ancestors and [`Refusal::NotHolder`] when its author does not hold the
-///   slot there, and for a verdict [`Refusal::NotJudge`] when its author is not
-///   the judge it names, then [`Refusal::NotCurrent`] when its dispatch is not
-///   the latest among its ancestors.
+///   slot there, for a verdict [`Refusal::NotJudge`] when its author is not the
+///   judge it names and for a verification [`Refusal::NotRunner`] when its
+///   author is not the runner it names, then [`Refusal::NotCurrent`] when its
+///   dispatch is not the latest among its ancestors, and for a grading
+///   [`Refusal::NoVerdict`] when its verdict is not admitted among its
+///   ancestors, [`Refusal::NotJudge`] when its author is not that verdict's
+///   judge, [`Refusal::Misgraded`] when its grades do not answer the verdict's,
+///   then [`Refusal::NotCurrent`] when the verdict's dispatch is not the latest
+///   among its ancestors.
 /// - ensures: each path's binding is the admitted bind of that path last in
 ///   canonical order, each label's introduction the admitted introduction of
 ///   that label last in canonical order, the claims the domains of every
@@ -740,8 +793,13 @@ struct Carry
 ///   retirement, a report on a superseded and on an unknown dispatch, a report
 ///   concurrent with a later dispatch, a judge's verdict on a held and on a
 ///   retired slot, a verdict signed by another key than its judge's, a verdict
-///   on a superseded and on an unknown dispatch, an unopened tree and a parent
-///   cycle are each pinned by a case of their own.
+///   on a superseded and on an unknown dispatch, a runner's verification on a
+///   held and on a retired slot, one signed by another key than its runner's
+///   and one on a superseded dispatch, a judge's grading of its verdict, a
+///   grading signed by another key, of an unknown verdict and of one only
+///   concurrent with it, with a grade too few, a read answer refused and an
+///   unread answer met, and a grading after a later dispatch, an unopened tree
+///   and a parent cycle are each pinned by a case of their own.
 /// - witness: `fold::tests::a_view_is_the_same_whatever_order_commits_arrive_in`
 /// - witness: `fold::tests::a_note_by_a_non_member_is_refused`
 /// - witness: `fold::tests::a_note_by_a_peer_granted_in_its_causal_past_is_admitted`
@@ -767,6 +825,8 @@ struct Carry
 /// - witness: `fold::tests::a_report_on_a_superseded_dispatch_is_refused`
 /// - witness: `fold::tests::a_judge_rules_on_the_current_dispatch`
 /// - witness: `fold::tests::a_verdict_on_a_superseded_dispatch_is_refused`
+/// - witness: `fold::tests::a_runner_verifies_on_the_current_dispatch`
+/// - witness: `fold::tests::a_verdicts_judge_grades_its_answers`
 ///
 /// [`OpenProof::verify`]: crate::receipt::OpenProof::verify
 /// [`EndpointProof::verify`]: crate::receipt::EndpointProof::verify
@@ -825,7 +885,9 @@ pub fn fold(
                 | Kind::Report { .. }
                 | Kind::Handoff { .. }
                 | Kind::Retire { .. }
-                | Kind::Verdict { .. } => None,
+                | Kind::Verdict { .. }
+                | Kind::Verified { .. }
+                | Kind::Graded { .. } => None,
             },
             | Ok(_) | Err(_) => None,
         };
@@ -872,6 +934,7 @@ pub fn fold(
         .collect();
     let mut carries = BTreeMap::new();
     let mut admitted = BTreeMap::new();
+    let mut ruled = BTreeMap::new();
     for placed in (0_usize ..).map(Placed) {
         let ready_node = core::iter::from_fn(|| ready.pop_first())
             .find_map(|position| nodes.remove_entry(&position));
@@ -1015,12 +1078,75 @@ pub fn fold(
                             answers,
                         } => match past.course.current(dispatch) {
                             | Ok(()) => {
+                                let questions = answers
+                                    .iter()
+                                    .map(|&(question, ref ruling)| {
+                                        (question, match *ruling {
+                                            | Ruling::Read(_) => Reading::Read,
+                                            | Ruling::Unread(_) => Reading::Unread,
+                                        })
+                                    })
+                                    .collect();
+                                let _ruled_before = ruled.insert(node.commit, Ruled {
+                                    judge,
+                                    dispatch,
+                                    rubric,
+                                    questions,
+                                });
+                                let _verdict_before = past.verdicts.insert(node.commit);
                                 view.task.answer(node.commit, Step::Verdict {
                                     dispatch,
                                     judge,
                                     rubric,
                                     transcript,
                                     answers,
+                                });
+                                None
+                            },
+                            | Err(refusal) => Some(refusal),
+                        },
+                        | Kind::Verified { runner, .. } if node.author != runner => {
+                            Some(Refusal::NotRunner)
+                        },
+                        | Kind::Verified {
+                            dispatch,
+                            runner,
+                            playbook,
+                            step,
+                            output,
+                            status,
+                        } => match past.course.current(dispatch) {
+                            | Ok(()) => {
+                                view.task.answer(node.commit, Step::Verified {
+                                    dispatch,
+                                    runner,
+                                    playbook,
+                                    step,
+                                    output,
+                                    status,
+                                });
+                                None
+                            },
+                            | Err(refusal) => Some(refusal),
+                        },
+                        | Kind::Graded {
+                            verdict,
+                            grades,
+                            composed,
+                        } => match grading(&ruled, &past, node.author, verdict, &grades) {
+                            | Ok(ruling) => {
+                                let grades = ruling
+                                    .questions
+                                    .iter()
+                                    .zip(grades)
+                                    .map(|(&(question, _), grade)| (question, grade))
+                                    .collect();
+                                view.task.answer(node.commit, Step::Graded {
+                                    dispatch: ruling.dispatch,
+                                    verdict,
+                                    rubric: ruling.rubric,
+                                    grades,
+                                    composed,
                                 });
                                 None
                             },
@@ -1077,14 +1203,14 @@ fn canonical(
         .then_with(|| left.signed().as_bytes().cmp(right.signed().as_bytes()))
 }
 
-/// The causal past of the commit at `reader` — its grantees, its seats and its
-/// latest dispatch — read from its placed `parents`.
+/// The causal past of the commit at `reader` — its grantees, its seats, its
+/// verdicts and its latest dispatch — read from its placed `parents`.
 ///
 /// # Specification
-/// - ensures: returns the union of the placed parents' grantees and seats, and
-///   the latest of their courses; a parent not placed yet (a cycle) contributes
-///   nothing. Each carry is read once per reader and dropped after its last
-///   reader, moved rather than copied when it is.
+/// - ensures: returns the union of the placed parents' grantees, seats and
+///   verdicts, and the latest of their courses; a parent not placed yet (a
+///   cycle) contributes nothing. Each carry is read once per reader and dropped
+///   after its last reader, moved rather than copied when it is.
 /// - panics: none.
 fn inherit(
     carries: &mut BTreeMap<Position, Carry>,
@@ -1095,6 +1221,7 @@ fn inherit(
     let mut past = Past {
         grantees: BTreeSet::new(),
         seats: BTreeSet::new(),
+        verdicts: BTreeSet::new(),
         course: Course::Undispatched,
     };
     for parent in parents {
@@ -1107,33 +1234,92 @@ fn inherit(
             let carried = slot.remove().past;
             join(&mut past.grantees, carried.grantees);
             join(&mut past.seats, carried.seats);
+            join(&mut past.verdicts, carried.verdicts);
             past.course = past.course.max(carried.course);
         }
         else {
             let carried = &slot.get().past;
             past.grantees.extend(carried.grantees.iter().copied());
             past.seats.extend(carried.seats.iter().copied());
+            past.verdicts.extend(carried.verdicts.iter().copied());
             past.course = past.course.max(carried.course);
         }
     }
     past
 }
 
-/// Add `carried` to `peers`, moving it whole when `peers` is empty.
+/// Add `carried` to `set`, moving it whole when `set` is empty.
 ///
 /// # Specification
 /// trivial.
-fn join(
-    peers: &mut BTreeSet<PeerKey>,
-    carried: BTreeSet<PeerKey>,
-)
+fn join<Member>(
+    set: &mut BTreeSet<Member>,
+    carried: BTreeSet<Member>,
+) where
+    Member: Ord,
 {
-    if peers.is_empty() {
-        *peers = carried;
+    if set.is_empty() {
+        *set = carried;
     }
     else {
-        peers.extend(carried);
+        set.extend(carried);
     }
+}
+
+/// The admitted verdict a grading by `author` of `verdict` into `grades`
+/// grades, as `past` reads it.
+///
+/// # Specification
+/// - ensures: `Ok` with the verdict as `ruled` holds it iff `verdict` is an
+///   admitted verdict in `past`, `author` is its judge, `grades` holds one
+///   grade per answer with [`Grade::Refused`] exactly where the ruling is
+///   unread, and the verdict's dispatch is current in `past`.
+/// - fails: the first refusal that holds, in this order:
+///   [`Refusal::NoVerdict`], [`Refusal::NotJudge`], [`Refusal::Misgraded`],
+///   [`Refusal::NotCurrent`].
+/// - panics: none.
+///
+/// # Errors
+/// - [`Refusal::NoVerdict`]: no admitted verdict `verdict` is in `past`.
+/// - [`Refusal::NotJudge`]: `author` is not the verdict's judge.
+/// - [`Refusal::Misgraded`]: `grades` does not answer the verdict's answers.
+/// - [`Refusal::NotCurrent`]: the verdict's dispatch is not current in `past`.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a grading by the judge is admitted, and one of an unknown
+///   verdict, of a verdict only concurrent with it, by another key, with a
+///   grade too few, a read answer refused, an unread answer met, and after a
+///   later dispatch each meet their own refusal.
+/// - witness: `fold::tests::a_verdicts_judge_grades_its_answers`
+fn grading<'ruled>(
+    ruled: &'ruled BTreeMap<CommitId, Ruled>,
+    past: &Past,
+    author: PeerKey,
+    verdict: CommitId,
+    grades: &[Grade],
+) -> Result<&'ruled Ruled, Refusal>
+{
+    let Some(ruling) = ruled
+        .get(&verdict)
+        .filter(|_ruled| past.verdicts.contains(&verdict))
+    else {
+        return Err(Refusal::NoVerdict);
+    };
+    if author != ruling.judge {
+        return Err(Refusal::NotJudge);
+    }
+    let answered = grades.len() == ruling.questions.len()
+        && grades
+            .iter()
+            .zip(&ruling.questions)
+            .all(|(&grade, &(_, reading))| {
+                (grade == Grade::Refused) == (reading == Reading::Unread)
+            });
+    if !answered {
+        return Err(Refusal::Misgraded);
+    }
+    past.course.current(ruling.dispatch)?;
+    Ok(ruling)
 }
 
 /// Record that `commit` admitted `operation`.
@@ -1176,6 +1362,10 @@ mod tests
     use crate::anchor::Path;
     use crate::anchor::Resolution;
     use crate::anchor::Target;
+    use crate::check::Code;
+    use crate::check::Grade;
+    use crate::check::Signal;
+    use crate::check::Status;
     use crate::id::Content;
     use crate::id::ContentHash;
     use crate::id::Endpoint;
@@ -1405,6 +1595,35 @@ mod tests
         let rubric = content("rubric".into());
         let transcript = content("transcript".into());
         Receipt::verdict(tree(), dispatch, judge, rubric, transcript, answers()).unwrap()
+    }
+
+    /// A fresh verification on `dispatch` by `runner` of the step `test`,
+    /// whose process wrote `output` and exited with `code`.
+    ///
+    /// # Specification
+    /// trivial.
+    fn verified(
+        dispatch: CommitId,
+        runner: PeerKey,
+        code: Code,
+    ) -> Receipt
+    {
+        let (playbook, output) = (content("playbook".into()), content("output".into()));
+        let step = "test".parse().unwrap();
+        let status = Status::Exited(code);
+        Receipt::verified(tree(), dispatch, runner, playbook, step, output, status).unwrap()
+    }
+
+    /// A fresh grading of `verdict` into `grades`, composed as refused.
+    ///
+    /// # Specification
+    /// trivial.
+    fn graded(
+        verdict: CommitId,
+        grades: Vec<Grade>,
+    ) -> Receipt
+    {
+        Receipt::graded(tree(), verdict, grades, Grade::Refused).unwrap()
     }
 
     /// The current attempt of `view`'s task.
@@ -2588,11 +2807,170 @@ mod tests
     }
 
     #[test]
+    fn a_runner_verifies_on_the_current_dispatch()
+    {
+        let (a, s) = (owner(), other());
+        let (r, stranger) = (
+            MemorySigner::from_bytes(&[5; 32]),
+            MemorySigner::from_bytes(&[7; 32]),
+        );
+        runtime().block_on(async {
+            let (passing, failing) = (Code::from(0_i32), Code::from(1_i32));
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let first = commit(&a, tree(), &[&opened], &dispatch(key(&s))).await;
+            let d = id(&first);
+            let passed = commit(&r, tree(), &[&first], &verified(d, key(&r), passing)).await;
+            let forged = commit(&stranger, tree(), &[&first], &verified(d, key(&r), passing)).await;
+            let by_owner = commit(&a, tree(), &[&first], &verified(d, key(&r), passing)).await;
+            let retirement = Receipt::retire(tree(), d).unwrap();
+            let retired = commit(&s, tree(), &[&passed], &retirement).await;
+            let failed = commit(&r, tree(), &[&retired], &verified(d, key(&r), failing)).await;
+            let second = commit(&a, tree(), &[&failed], &dispatch(key(&s))).await;
+            let stale = commit(&r, tree(), &[&second], &verified(d, key(&r), passing)).await;
+            let view = fold(tree(), vec![
+                opened,
+                first,
+                passed.clone(),
+                forged.clone(),
+                by_owner.clone(),
+                retired,
+                failed.clone(),
+                second,
+                stale.clone(),
+            ])
+            .unwrap();
+            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            assert_eq!(
+                refused,
+                BTreeMap::from([
+                    (id(&forged), Refusal::NotRunner),
+                    (id(&by_owner), Refusal::NotRunner),
+                    (id(&stale), Refusal::NotCurrent),
+                ]),
+                "a verification signed by any key but its runner's, the owner's among them, \
+                 and one on a superseded dispatch are refused"
+            );
+            let ran = |code: Code| Step::Verified {
+                dispatch: d,
+                runner: key(&r),
+                playbook: content("playbook".into()),
+                step: "test".parse().unwrap(),
+                output: content("output".into()),
+                status: Status::Exited(code),
+            };
+            assert_eq!(
+                view.task()
+                    .steps()
+                    .iter()
+                    .filter(|entry| matches!(entry.1, Step::Verified { .. }))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                [(id(&passed), ran(passing)), (id(&failed), ran(failing))],
+                "a runner's verification on the held slot and on the retired one are the \
+                 task's steps, a failing exit recorded as it ended"
+            );
+        });
+    }
+
+    #[test]
+    fn a_verdicts_judge_grades_its_answers()
+    {
+        let (a, s) = (owner(), other());
+        let (j, stranger) = (
+            MemorySigner::from_bytes(&[5; 32]),
+            MemorySigner::from_bytes(&[7; 32]),
+        );
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let dispatched = commit(&a, tree(), &[&opened], &dispatch(key(&s))).await;
+            let d = id(&dispatched);
+            let judged = commit(&j, tree(), &[&dispatched], &verdict(d, key(&j))).await;
+            let ruled = id(&judged);
+            let answered = vec![Grade::Met, Grade::Refused];
+            let grading = graded(ruled, answered.clone());
+            let admitted = commit(&j, tree(), &[&judged], &grading).await;
+            let forged = graded(ruled, answered.clone());
+            let forged = commit(&stranger, tree(), &[&judged], &forged).await;
+            let unknown = graded(CommitId::new([9; 32]), answered.clone());
+            let unknown = commit(&j, tree(), &[&judged], &unknown).await;
+            let concurrent = graded(ruled, answered.clone());
+            let concurrent = commit(&j, tree(), &[&dispatched], &concurrent).await;
+            let short = commit(&j, tree(), &[&judged], &graded(ruled, vec![Grade::Met])).await;
+            let read_refused = graded(ruled, vec![Grade::Refused, Grade::Refused]);
+            let read_refused = commit(&j, tree(), &[&judged], &read_refused).await;
+            let unread_met = graded(ruled, vec![Grade::Met, Grade::Met]);
+            let unread_met = commit(&j, tree(), &[&judged], &unread_met).await;
+            let second = commit(&a, tree(), &[&judged], &dispatch(key(&s))).await;
+            let stale = commit(&j, tree(), &[&second], &graded(ruled, answered)).await;
+            let view = fold(tree(), vec![
+                opened,
+                dispatched,
+                judged,
+                admitted.clone(),
+                forged.clone(),
+                unknown.clone(),
+                concurrent.clone(),
+                short.clone(),
+                read_refused.clone(),
+                unread_met.clone(),
+                second,
+                stale.clone(),
+            ])
+            .unwrap();
+            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            assert_eq!(
+                refused,
+                BTreeMap::from([
+                    (id(&forged), Refusal::NotJudge),
+                    (id(&unknown), Refusal::NoVerdict),
+                    (id(&concurrent), Refusal::NoVerdict),
+                    (id(&short), Refusal::Misgraded),
+                    (id(&read_refused), Refusal::Misgraded),
+                    (id(&unread_met), Refusal::Misgraded),
+                    (id(&stale), Refusal::NotCurrent),
+                ]),
+                "a grading by a key but the verdict's judge, of a verdict not in its past, \
+                 whose grades do not answer the verdict's, or after a later dispatch is \
+                 refused"
+            );
+            assert_eq!(
+                view.task()
+                    .steps()
+                    .iter()
+                    .filter(|entry| matches!(entry.1, Step::Graded { .. }))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                [(id(&admitted), Step::Graded {
+                    dispatch: d,
+                    verdict: ruled,
+                    rubric: content("rubric".into()),
+                    grades: vec![
+                        (content("read".into()), Grade::Met),
+                        (content("unread".into()), Grade::Refused),
+                    ],
+                    composed: Grade::Refused,
+                })],
+                "the judge's grading is a step naming its verdict's dispatch, rubric and \
+                 questions"
+            );
+        });
+    }
+
+    #[test]
     fn a_task_prints_one_line_per_step_and_its_standing()
     {
         let (s, t) = (key(&other()), key(&MemorySigner::from_bytes(&[5; 32])));
-        let [first, handed, reported, retired, judged, second, abandoned] =
-            [1, 2, 3, 4, 5, 6, 7].map(|byte| CommitId::new([byte; 32]));
+        let [
+            first,
+            handed,
+            reported,
+            retired,
+            judged,
+            verifying,
+            grading,
+            second,
+            abandoned,
+        ] = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(|byte| CommitId::new([byte; 32]));
         let hash = content("brief".into());
         let anchored = Brief::Anchor(Anchor::Path {
             authority: Authority::Key(tree()),
@@ -2641,11 +3019,28 @@ mod tests
                 (hash, Ruling::Unread(Unread::Tied)),
             ],
         });
+        task.answer(verifying, Step::Verified {
+            dispatch: first,
+            runner: t,
+            playbook: hash,
+            step: "lint".parse().unwrap(),
+            output: hash,
+            status: Status::Signalled(Signal::from(9_i32)),
+        });
+        task.answer(grading, Step::Graded {
+            dispatch: first,
+            verdict: judged,
+            rubric: hash,
+            grades: vec![(hash, Grade::Met), (hash, Grade::Refused)],
+            composed: Grade::Refused,
+        });
         let answered = format!(
             "{dispatch_line}handoff {handed} {first} {s} {t}\nreport {reported} {first} {t} \
              {hash} done \\\\ ok\nretire {retired} {first} {t}\nverdict {judged} {first} {s} \
              {hash} {hash}\nruling {judged} {hash} read B A=0.25 B=0.75 outside=0\nruling \
-             {judged} {hash} unread tied\n"
+             {judged} {hash} unread tied\nverified {verifying} {first} {t} {hash} lint {hash} \
+             signal 9\ngraded {grading} {first} {judged} {hash} refused\ngrade {grading} \
+             {hash} met\ngrade {grading} {hash} refused\n"
         );
         assert_eq!(
             task.to_string(),

@@ -18,7 +18,7 @@ The record plane stores signed receipts in sedimentrees, folds them into views, 
 
 ## Synopsis
 
-**What.** `domhringr-record-tree` is the record plane's durable, replicated receipt store. It provides one sedimentree per tree, named by the tree's own verifying key, a view of each tree's owner, delegated write authority, admitted notes, bound paths, claimed DNS names, introduced trees, the book of which member is reachable at which endpoint, the task its seat receipts and judges' verdicts make of the tree, and admitted and refused commits, and the resolution against those views of an anchor naming a tree, a path in it, `domhringr://<authority>/<path>`, or a commit in it, `domhringr://<authority>/.commit/<commit-id>`, whose authority takes three forms: the tree's key, a DNS name, or a label.
+**What.** `domhringr-record-tree` is the record plane's durable, replicated receipt store. It provides one sedimentree per tree, named by the tree's own verifying key, a view of each tree's owner, delegated write authority, admitted notes, bound paths, claimed DNS names, introduced trees, the book of which member is reachable at which endpoint, the task its seat receipts, judges' verdicts, runners' verifications and verdicts' gradings make of the tree, and admitted and refused commits, and the resolution against those views of an anchor naming a tree, a path in it, `domhringr://<authority>/<path>`, or a commit in it, `domhringr://<authority>/.commit/<commit-id>`, whose authority takes three forms: the tree's key, a DNS name, or a label.
 
 **Why.** Peers need the same interpretation of signed operations regardless of arrival order. Authority depends on a commit's causal past; retaining refused commits lets peers replicate the same evidence without treating every stored write as authorized.
 
@@ -40,8 +40,8 @@ The record plane stores signed receipts in sedimentrees, folds them into views, 
 ## Provided features
 
 - Persistent endpoint and signing identities in a state directory, and one minted key per tree opened.
-- Durable commits carrying `Open`, `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, `Retire`, or `Verdict` receipts; an `Open` carries the tree key's proof, a `Present` the presented endpoint key's.
-- Canonical views with causal authority checks, path bindings, owner-only name claims, label introductions, a book of each member's own presented endpoint, a task of seat receipts and verdicts with its current attempt, and explicit refusals.
+- Durable commits carrying `Open`, `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, `Retire`, `Verdict`, `Verified` or `Graded` receipts; an `Open` carries the tree key's proof, a `Present` the presented endpoint key's.
+- Canonical views with causal authority checks, path bindings, owner-only name claims, label introductions, a book of each member's own presented endpoint, a task of seat receipts, verdicts, verifications and gradings with its current attempt, and explicit refusals.
 - A judge's `Ruling` on a lettered question: read, as the answer `Letter` and each option's `Probability` with the mass outside the options (`Readout`), or unread for a named reason (`Unread`).
 - Anchors naming a tree, a path in it, or a commit in it by key, by DNS name, or by label, resolved by fold to a binding, to unbound, to a commit's verdict, to unknown, or to a named refusal; a `Reference` may abbreviate a commit id to a unique prefix of at least eight hex digits.
 - A `Witness` trait for a DNS name's candidate trees, with the `Dns` witness over `_domhringr.<domain>` TXT records and the `Static` witness supplied by hand.
@@ -185,6 +185,23 @@ Reversal: a content store reachable from the record — a blob plane — when a 
 
 Reversal: a verdict that settles the task — accepting or reopening the attempt — which needs the judge's authority in the course.
 
+**A runner's verification is admitted from the runner alone, on the current dispatch.** A `Verified { dispatch, runner, playbook, step, output, status }` records that the runner ran a playbook step's verifier on the dispatch: the BLAKE3 hash of the playbook, the step's identifier in it (`StepId`: 1 to 64 lowercase ASCII letters, digits and hyphens, beginning with a letter), the hash of what the process wrote to its output and error streams, and how the process ended (`Status`): `exit <code>` or `signal <number>`. A verification whose author is not the runner it names is refused `not runner`, one on another dispatch `not current`; an admitted one is a step of the task, printed `verified <commit> <dispatch> <runner> <playbook> <step> <output> <status>`, and changes no attempt: a failing verifier is recorded as it ended, and the operator acts on it.
+
+- the step without its playbook: a step's identifier names it only within its playbook, so two playbooks' `test` steps would read as one check.
+- a pass or fail flag: a process ended by a signal would read as one that failed its check, and what a nonzero code means is the verifier's to say.
+- the output's bytes: the receipt grows with every run, as a report's would; the bytes are the runner's to keep.
+
+Reversal: a check that reads another's output, which needs the bytes reachable from the record — the content store a report's hash waits on.
+
+**A grading is admitted from its verdict's judge alone, of a verdict in its causal past.** A `Graded { verdict, grades, composed }` names the verdict it grades and gives one `Grade` per answer, in the verdict's order — `met`, `unmet`, `undecided`, or `refused` for an unread ruling — and the grades composed across the rubric. The task, the rubric and the questions are the verdict's, so the grading names them through it rather than again. A grading naming no admitted verdict among its ancestors is refused `no verdict`, one whose author is not that verdict's judge `not judge`, one whose grades number other than the answers or are refused other than exactly where the ruling is unread `misgraded`, and one whose verdict's dispatch is no longer current `not current`; an admitted grading is a step of the task, printed `graded <commit> <dispatch> <verdict> <rubric> <composed>` and one `grade <commit> <question> <grade>` line per answer. The fold checks that a grade answers its ruling, never where the ruling stands against the band or how the grades compose: the band and the composition are the rubric's, which the record names by hash and does not hold.
+
+- the task and the rubric in the grading: a second statement of what the verdict records, free to disagree with it.
+- the grades inside the verdict: the judge's readout and the rubric's band are two acts, and a band revised later grades the same readout again without asking the judge again.
+- a grading from any member: two keys could grade one verdict differently, and the grades would not be the asking key's.
+- the fold recomputing grades and composition: it needs the rubric's band and rule, which are not in the record.
+
+Reversal: a rubric reachable from the record, when the fold can recompute each grade from the band and the readout and refuse a grading that misstates one.
+
 ## Networking
 
 A bound peer is reached by endpoint id alone: on the local network through mDNS and direct addresses, across networks through n0's relay and DNS. It binds an ephemeral UDP port, or a fixed one that a firewall rule can name. A sync dials the remote, runs one batch round for one tree, and disconnects; a dialer that knows the remote's addresses — from its presence in the book, or named by hand — names them in the dial, and the dial does not wait on the lookups. Each side reports the network path iroh selected — direct, relayed, or not yet chosen. A caller holds a link open instead with `Node::connect`, pulls trees over it with `Node::pull` — the other side may pull over the same link — and drops it with `Node::disconnect`.
@@ -233,6 +250,13 @@ Reversal: a change to an existing kind's payload.
 - fixed-point integers: a rounding step between the readout and the record, and a sum that no longer reads back exactly.
 
 Reversal: a change to the readout's form — another number of options, a log-probability — which needs a new kind.
+
+**A verification and a grading are new kinds under receipt version 2, a status and a grade constructors.** `Verified` and `Graded` follow the verdict for the same reason. A step is ASCII bytes that parse as a `StepId`; a status is a constructor, exited or signalled, holding one word, the 32 bits of the code's or the signal's two's-complement value; a grade is an empty constructor, and a grading writes its count of grades, the grades, then the composed grade. The decoder refuses a step `StepId` refuses, a status or a grade it does not know, and a word beyond 32 bits.
+
+- the code as signed decimal text: a second canonical form of each number, and a parser in the decoder.
+- one word carrying a flag bit beside the number: a case named by a bit rather than by a constructor, as the grammar names every other case.
+
+Reversal: a platform whose exit status does not fit 32 bits, which needs a new constructor.
 
 ## Dependencies
 

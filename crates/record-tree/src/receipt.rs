@@ -28,6 +28,11 @@
 //!            | open 0x0d · bytes dispatch (32) · bytes judge (32) · bytes rubric (32)
 //!                        · bytes transcript (32) · word count · answer{count}
 //!                        · close                                          Verdict
+//!            | open 0x0e · bytes dispatch (32) · bytes runner (32) · bytes playbook (32)
+//!                        · bytes step (ASCII) · bytes output (32) · status
+//!                        · close                                          Verified
+//!            | open 0x0f · bytes verdict (32) · word count · grade{count} · grade
+//!                        · close                                          Graded
 //! target    := open 0x01 · anchor · close                                 Anchor
 //!            | open 0x02 · bytes endpoint (32) · close                    Endpoint
 //!            | open 0x03 · bytes datum (UTF-8) · close                    Datum
@@ -51,41 +56,53 @@
 //!            | open 0x03 · close                                          Tied
 //!            | open 0x04 · close                                          Endpoint
 //!            | open 0x05 · close                                          Malformed
+//! status    := open 0x01 · word code · close                              Exited
+//!            | open 0x02 · word signal · close                            Signalled
+//! grade     := open 0x01 · close                                          Met
+//!            | open 0x02 · close                                          Unmet
+//!            | open 0x03 · close                                          Undecided
+//!            | open 0x04 · close                                          Refused
 //! ```
 //!
 //! A tree, in the receipt's header, as an authority or as the tree
 //! introduced, and an endpoint are ed25519 verifying keys; a grantee, a
-//! withdrawn peer, a seat, a handoff's recipient and a judge are 32-byte peer
-//! ids; a commit, an anchor's or the dispatch a report, a handoff, a
-//! retirement or a verdict names, is its whole 32-byte id, never a prefix; a
-//! content, a rubric, a transcript and a question are their 32-byte BLAKE3
-//! hashes; a path is its segments joined by `/`, none empty or beginning
-//! with `.`; a domain is a DNS name as [`Domain`] admits it, a label one as
-//! [`Label`] admits it, and a summary one as [`Summary`] admits it. An anchor
-//! is written as its typed parts, so each part takes the record and the
-//! refusal it takes elsewhere in a receipt. A presented endpoint lists its
-//! addresses in their order, each once: direct addresses first, IPv4 before
-//! IPv6, by address and then port, an IPv6 address without flow label or
-//! scope id; then relays by the URL's text, each an `http` or `https` URL
-//! written as it parses back and holding no `@`. A presence carries no time:
-//! its commit is when it holds since. A verdict lists its answers in the
-//! order the questions were asked; a probability is the IEEE 754 binary64
-//! encoding of a number from zero to one, never negative zero, and a read
-//! ruling lists one per option in letter order, as [`Readout::new`] admits
-//! them, then the mass outside the option letters. A readout's answer letter
-//! is not written: it is the option holding the most.
+//! withdrawn peer, a seat, a handoff's recipient, a judge and a runner are
+//! 32-byte peer ids; a commit, an anchor's or the dispatch a report, a
+//! handoff, a retirement, a verdict or a verification names, or the verdict
+//! a grading names, is its whole 32-byte id, never a prefix; a content, a
+//! rubric, a transcript, a question, a playbook and a verifier's output are
+//! their 32-byte BLAKE3 hashes; a path is its segments joined by `/`, none
+//! empty or beginning with `.`; a domain is a DNS name as [`Domain`] admits
+//! it, a label one as [`Label`] admits it, a summary one as [`Summary`]
+//! admits it, and a step one as [`StepId`] admits it. An anchor is written as
+//! its typed parts, so each part takes the record and the refusal it takes
+//! elsewhere in a receipt. A presented endpoint lists its addresses in their
+//! order, each once: direct addresses first, IPv4 before IPv6, by address and
+//! then port, an IPv6 address without flow label or scope id; then relays by
+//! the URL's text, each an `http` or `https` URL written as it parses back
+//! and holding no `@`. A presence carries no time: its commit is when it
+//! holds since. A verdict lists its answers in the order the questions were
+//! asked; a probability is the IEEE 754 binary64 encoding of a number from
+//! zero to one, never negative zero, and a read ruling lists one per option
+//! in letter order, as [`Readout::new`] admits them, then the mass outside the
+//! option letters. A readout's answer letter is not written: it is the option
+//! holding the most. A process's exit code and a signal's number are words
+//! holding the 32 bits of their two's-complement value. A grading lists one
+//! grade per answer of the verdict it grades, in that verdict's order, then
+//! the grades composed.
 //!
 //! The decoder admits exactly what the encoder writes, so a receipt has one
 //! blob. A constructor whose tag or payload it does not admit — another
 //! receipt tag or version, an unknown kind, target, brief, anchor, authority,
-//! address, ruling or reason, an id or hash of the wrong length (an
-//! abbreviated commit id among them), a tree or endpoint that is not a
-//! verifying key, text that is not UTF-8, a path with an empty or reserved
-//! segment, a malformed domain, label or summary, an IP address of another
-//! length, a port beyond 65535, a relay that is no canonical `http` or
-//! `https` URL or holds `@`, addresses out of order or repeated, a
-//! probability that is no probability or is negative zero, a read ruling
-//! [`Readout::new`] refuses — is refused as that constructor
+//! address, ruling, reason, status or grade, an id or hash of the wrong
+//! length (an abbreviated commit id among them), a tree or endpoint that is
+//! not a verifying key, text that is not UTF-8, a path with an empty or
+//! reserved segment, a malformed domain, label, summary or step, an IP
+//! address of another length, a port beyond 65535, a relay that is no
+//! canonical `http` or `https` URL or holds `@`, addresses out of order or
+//! repeated, a probability that is no probability or is negative zero, a read
+//! ruling [`Readout::new`] refuses, a code or a signal beyond 32 bits — is
+//! refused as that constructor
 //! ([`ValueError::UnexpectedConstructor`] at its open record): the value
 //! plane's refusals name token shapes, and this is the one that names the
 //! constructor a codec turns away.
@@ -118,6 +135,11 @@ use crate::anchor::Anchor;
 use crate::anchor::Authority;
 use crate::anchor::Path;
 use crate::anchor::Target;
+use crate::check::Code;
+use crate::check::Grade;
+use crate::check::Signal;
+use crate::check::Status;
+use crate::check::StepId;
 use crate::id::Address;
 use crate::id::ContentHash;
 use crate::id::Endpoint;
@@ -178,6 +200,12 @@ const RETIRE: u8 = 0x0c;
 
 /// The constructor tag of [`Kind::Verdict`].
 const VERDICT: u8 = 0x0d;
+
+/// The constructor tag of [`Kind::Verified`].
+const VERIFIED: u8 = 0x0e;
+
+/// The constructor tag of [`Kind::Graded`].
+const GRADED: u8 = 0x0f;
 
 /// The constructor tag of [`Target::Anchor`].
 const ANCHOR: u8 = 0x01;
@@ -241,6 +269,24 @@ const FAILED: u8 = 0x04;
 
 /// The constructor tag of [`Unread::Malformed`].
 const MALFORMED: u8 = 0x05;
+
+/// The constructor tag of [`Status::Exited`].
+const EXITED: u8 = 0x01;
+
+/// The constructor tag of [`Status::Signalled`].
+const SIGNALLED: u8 = 0x02;
+
+/// The constructor tag of [`Grade::Met`].
+const MET: u8 = 0x01;
+
+/// The constructor tag of [`Grade::Unmet`].
+const UNMET: u8 = 0x02;
+
+/// The constructor tag of [`Grade::Undecided`].
+const UNDECIDED: u8 = 0x03;
+
+/// The constructor tag of [`Grade::Refused`].
+const REFUSED: u8 = 0x04;
 
 /// The domain an Open proof is signed under: the first of the two 32-byte
 /// blocks of the message it signs, the owner's peer key the second.
@@ -507,6 +553,37 @@ pub enum Kind
         transcript: ContentHash,
         /// Each question's hash and its ruling, in the order asked.
         answers: Vec<(ContentHash, Ruling)>,
+    },
+    /// The author, the runner it names, ran the verifier of `step` of
+    /// `playbook` on `dispatch`: the process wrote `output` and ended with
+    /// `status`.
+    Verified
+    {
+        /// The dispatch the step was run on.
+        dispatch: CommitId,
+        /// The runner: the peer whose key signs the verification.
+        runner: PeerKey,
+        /// The hash of the playbook the step belongs to.
+        playbook: ContentHash,
+        /// The step whose verifier ran, by its identifier in `playbook`.
+        step: StepId,
+        /// The hash of what the process wrote to its output and error
+        /// streams, as one stream in the order written.
+        output: ContentHash,
+        /// How the process ended.
+        status: Status,
+    },
+    /// The author, the judge of `verdict`, grades that verdict's answers
+    /// against its rubric's band: one grade per answer, in its order, and
+    /// the grades composed.
+    Graded
+    {
+        /// The verdict graded.
+        verdict: CommitId,
+        /// Each answer's grade, in the verdict's order.
+        grades: Vec<Grade>,
+        /// The grades composed across the rubric.
+        composed: Grade,
     },
 }
 
@@ -826,6 +903,72 @@ impl Receipt
         }))
     }
 
+    /// A fresh [`Kind::Verified`] in `tree` on `dispatch` by `runner`: the
+    /// verifier of `step` of `playbook` wrote `output` and ended with
+    /// `status`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the verification, and
+    ///   carries a fresh fence ([`Operation::random`]); the fold admits it only
+    ///   from `runner`, and only while `dispatch` is current in its causal
+    ///   past.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn verified(
+        tree: TreeId,
+        dispatch: CommitId,
+        runner: PeerKey,
+        playbook: ContentHash,
+        step: StepId,
+        output: ContentHash,
+        status: Status,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Verified {
+            dispatch,
+            runner,
+            playbook,
+            step,
+            output,
+            status,
+        }))
+    }
+
+    /// A fresh [`Kind::Graded`] in `tree` of `verdict`: `grades`, one per
+    /// answer, and `composed`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the grading, and carries a
+    ///   fresh fence ([`Operation::random`]); the fold admits it only from the
+    ///   judge of `verdict`, an admitted verdict in its causal past, with one
+    ///   grade per answer, refused exactly where the answer is unread, and only
+    ///   while the verdict's dispatch is current.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn graded(
+        tree: TreeId,
+        verdict: CommitId,
+        grades: Vec<Grade>,
+        composed: Grade,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Graded {
+            verdict,
+            grades,
+            composed,
+        }))
+    }
+
     /// A fresh [`Kind::Withdraw`] in `tree` of the presence of `of`.
     ///
     /// # Specification
@@ -971,15 +1114,16 @@ impl CanonicalValue for Receipt
     /// # Adequacy
     /// - hypothesis: L3 — the flat forms of a note, a bind, a claim, an
     ///   introduction, a presence, a withdrawal, a dispatch by anchor and by
-    ///   content, a report, a handoff, a retirement and a verdict are compared
-    ///   byte for byte with records written independently, and every kind
-    ///   round-trips.
+    ///   content, a report, a handoff, a retirement, a verdict, a verification
+    ///   and a grading are compared byte for byte with records written
+    ///   independently, and every kind round-trips.
     /// - witness: `receipt::tests::a_note_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_bind_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_claim_and_an_introduction_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::a_presence_and_a_withdrawal_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::the_seat_receipts_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::a_verdict_encodes_to_its_fixed_layout`
+    /// - witness: `receipt::tests::a_verification_and_a_grading_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::every_kind_round_trips`
     #[inline]
     fn emit_tokens<Sink>(
@@ -1086,6 +1230,40 @@ impl CanonicalValue for Receipt
                     ruling.emit_tokens(sink)?;
                 }
             },
+            | Kind::Verified {
+                dispatch,
+                runner,
+                playbook,
+                ref step,
+                output,
+                status,
+            } => {
+                sink.open(ConstructorTag::from(VERIFIED))?;
+                sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(runner.peer_id().as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(playbook.digest().as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(step.as_ref().as_bytes()))?;
+                sink.bytes(TokenBytes::from(output.digest().as_bytes().as_slice()))?;
+                status.emit_tokens(sink)?;
+            },
+            | Kind::Graded {
+                verdict,
+                ref grades,
+                composed,
+            } => {
+                sink.open(ConstructorTag::from(GRADED))?;
+                sink.bytes(TokenBytes::from(verdict.as_bytes().as_slice()))?;
+                let count = u64::try_from(grades.len()).map_err(|_too_many| {
+                    ValueError::ArithmeticOverflow {
+                        quantity: ValueQuantity::TokenCount,
+                    }
+                })?;
+                sink.word(CanonicalWord::from(count))?;
+                for grade in grades {
+                    grade.emit_tokens(sink)?;
+                }
+                composed.emit_tokens(sink)?;
+            },
         }
         sink.close()?;
         sink.close()
@@ -1106,13 +1284,16 @@ impl CanonicalValue for Receipt
     ///   not a verifying key, a label that is not UTF-8 or not one [`Label`]
     ///   admits, a presence's proof or a withdrawn peer of the wrong length, a
     ///   seat, a dispatch, a content hash, a handoff's recipient, a judge, a
-    ///   rubric, a transcript or a question of the wrong length, a summary that
-    ///   is not UTF-8 or not one [`Summary`] admits; as [`Target`]'s decoder
-    ///   refuses for a bind's target, [`Endpoint`]'s for a presented endpoint,
-    ///   [`Brief`]'s for a dispatch's brief and [`Ruling`]'s for a verdict's
-    ///   ruling; and the reader's own refusals for a record of the wrong kind,
-    ///   fewer answers than a verdict's count or more, a truncated stream or an
-    ///   exhausted budget.
+    ///   rubric, a transcript, a question, a runner, a playbook, an output or a
+    ///   graded verdict of the wrong length, a summary that is not UTF-8 or not
+    ///   one [`Summary`] admits, a step that is not UTF-8 or not one [`StepId`]
+    ///   admits; as [`Target`]'s decoder refuses for a bind's target,
+    ///   [`Endpoint`]'s for a presented endpoint, [`Brief`]'s for a dispatch's
+    ///   brief, [`Ruling`]'s for a verdict's ruling, [`Status`]'s for a
+    ///   verification's status and [`Grade`]'s for a grade; and the reader's
+    ///   own refusals for a record of the wrong kind, fewer answers than a
+    ///   verdict's count or more, fewer grades than a grading's count or more,
+    ///   a truncated stream or an exhausted budget.
     /// - panics: none.
     ///
     /// # Errors
@@ -1232,6 +1413,36 @@ impl CanonicalValue for Receipt
                     rubric,
                     transcript,
                     answers,
+                }
+            },
+            | VERIFIED => {
+                let dispatch = opened.commit(reader)?;
+                let runner = opened.peer(reader)?;
+                let playbook = opened.content(reader)?;
+                let step = opened.step(reader)?;
+                let output = opened.content(reader)?;
+                let status = Status::decode_tokens(reader)?;
+                Kind::Verified {
+                    dispatch,
+                    runner,
+                    playbook,
+                    step,
+                    output,
+                    status,
+                }
+            },
+            | GRADED => {
+                let verdict = opened.commit(reader)?;
+                let count = u64::from(reader.read_word()?);
+                let mut grades = Vec::new();
+                for _place in 0 .. count {
+                    grades.push(Grade::decode_tokens(reader)?);
+                }
+                let composed = Grade::decode_tokens(reader)?;
+                Kind::Graded {
+                    verdict,
+                    grades,
+                    composed,
                 }
             },
             | _unknown => return Err(opened.refused()),
@@ -1923,6 +2134,148 @@ impl CanonicalValue for Ruling
     }
 }
 
+impl CanonicalValue for Status
+{
+    /// Walk the status into `sink` in the module grammar's order.
+    ///
+    /// # Specification
+    /// - ensures: on success `sink` received exactly one balanced value: the
+    ///   status's constructor holding one word, the 32 bits of the exit code's
+    ///   or the signal's two's-complement value.
+    /// - fails: propagates the sink's refusal unchanged.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: the sink refused a record.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a verification of a negative exit code is compared
+    ///   byte for byte with records written independently, and an exit and a
+    ///   signal round-trip.
+    /// - witness: `receipt::tests::a_verification_and_a_grading_encode_to_their_fixed_layouts`
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    #[inline]
+    fn emit_tokens<Sink>(
+        &self,
+        sink: &mut Sink,
+    ) -> Result<(), ValueError>
+    where
+        Sink: TokenSink + ?Sized,
+    {
+        let (tag, number) = match *self {
+            | Self::Exited(code) => (EXITED, i32::from(code)),
+            | Self::Signalled(signal) => (SIGNALLED, i32::from(signal)),
+        };
+        sink.open(ConstructorTag::from(tag))?;
+        let bits = u32::from_le_bytes(number.to_le_bytes());
+        sink.word(CanonicalWord::from(u64::from(bits)))?;
+        sink.close()
+    }
+
+    /// Read one status from `reader`.
+    ///
+    /// # Specification
+    /// - ensures: on success the status whose emission the records are, and the
+    ///   reader stands after the status's close.
+    /// - fails: [`ValueError::UnexpectedConstructor`] at the status's open
+    ///   record for an unknown status or a word beyond 32 bits; and the
+    ///   reader's own refusals for any other record or none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — witnessed through the receipt decoder: an exit and a
+    ///   signal round-trip, and an unknown status and a word of 33 bits each
+    ///   meet their refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    #[inline]
+    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    {
+        let opened = Opened::read(reader)?;
+        let status: fn(i32) -> Self = match u8::from(opened.tag) {
+            | EXITED => |number| Self::Exited(Code::from(number)),
+            | SIGNALLED => |number| Self::Signalled(Signal::from(number)),
+            | _unknown => return Err(opened.refused()),
+        };
+        let word = u64::from(reader.read_word()?);
+        let bits = u32::try_from(word).map_err(|_beyond| opened.refused())?;
+        reader.read_close()?;
+        Ok(status(i32::from_le_bytes(bits.to_le_bytes())))
+    }
+}
+
+impl CanonicalValue for Grade
+{
+    /// Walk the grade into `sink` in the module grammar's order.
+    ///
+    /// # Specification
+    /// - ensures: on success `sink` received exactly one balanced value: the
+    ///   grade's empty constructor.
+    /// - fails: propagates the sink's refusal unchanged.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: the sink refused a record.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a grading holding every grade is compared byte for
+    ///   byte with records written independently, and round-trips.
+    /// - witness: `receipt::tests::a_verification_and_a_grading_encode_to_their_fixed_layouts`
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    #[inline]
+    fn emit_tokens<Sink>(
+        &self,
+        sink: &mut Sink,
+    ) -> Result<(), ValueError>
+    where
+        Sink: TokenSink + ?Sized,
+    {
+        sink.open(ConstructorTag::from(match *self {
+            | Self::Met => MET,
+            | Self::Unmet => UNMET,
+            | Self::Undecided => UNDECIDED,
+            | Self::Refused => REFUSED,
+        }))?;
+        sink.close()
+    }
+
+    /// Read one grade from `reader`.
+    ///
+    /// # Specification
+    /// - ensures: on success the grade whose emission the records are, and the
+    ///   reader stands after the grade's close.
+    /// - fails: [`ValueError::UnexpectedConstructor`] at the grade's open
+    ///   record for an unknown grade; and the reader's own refusals for any
+    ///   other record or none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — witnessed through the receipt decoder: every grade
+    ///   round-trips, and an unknown grade meets its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    #[inline]
+    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    {
+        let opened = Opened::read(reader)?;
+        let grade = match u8::from(opened.tag) {
+            | MET => Self::Met,
+            | UNMET => Self::Unmet,
+            | UNDECIDED => Self::Undecided,
+            | REFUSED => Self::Refused,
+            | _unknown => return Err(opened.refused()),
+        };
+        reader.read_close()?;
+        Ok(grade)
+    }
+}
+
 /// A constructor's open record, as the receipt decoder read it.
 #[derive(Clone, Copy, Debug)]
 struct Opened
@@ -2156,6 +2509,29 @@ impl Opened
         Ok(probability)
     }
 
+    /// Read the next record as a step's identifier in this constructor.
+    ///
+    /// # Specification
+    /// - ensures: on success the step identifier the bytes record spells.
+    /// - fails: this constructor's refusal ([`Opened::refused`]) for bytes that
+    ///   are not UTF-8 or not an identifier [`StepId`] admits — empty, longer
+    ///   than 64 bytes, not beginning with a lowercase letter, or holding a
+    ///   character beside lowercase letters, digits and hyphens — and the
+    ///   reader's refusals for any other record or none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    fn step(
+        self,
+        reader: &mut TokenReader<'_>,
+    ) -> Result<StepId, ValueError>
+    {
+        let step = <&[u8]>::from(reader.read_bytes()?);
+        let step = core::str::from_utf8(step).map_err(|_not_utf8| self.refused())?;
+        step.parse::<StepId>().map_err(|_not_a_step| self.refused())
+    }
+
     /// The refusal of this constructor: its tag or its payload is not one the
     /// receipt grammar admits.
     ///
@@ -2199,6 +2575,11 @@ mod tests
     use crate::anchor::Anchor;
     use crate::anchor::Authority;
     use crate::anchor::Target;
+    use crate::check::Code;
+    use crate::check::Grade;
+    use crate::check::Signal;
+    use crate::check::Status;
+    use crate::check::StepId;
     use crate::id::ContentHash;
     use crate::id::Endpoint;
     use crate::id::EndpointKey;
@@ -2311,6 +2692,29 @@ mod tests
             receipts.push(
                 Receipt::verdict(tree(), dispatch, peer, content, content, answered).unwrap(),
             );
+        }
+        let step = "build-and-test".parse::<StepId>().unwrap();
+        for status in [
+            Status::Exited(Code::from(0_i32)),
+            Status::Exited(Code::from(i32::MIN)),
+            Status::Signalled(Signal::from(9_i32)),
+        ] {
+            receipts.push(
+                Receipt::verified(
+                    tree(),
+                    dispatch,
+                    peer,
+                    content,
+                    step.clone(),
+                    content,
+                    status,
+                )
+                .unwrap(),
+            );
+        }
+        let grades = vec![Grade::Met, Grade::Unmet, Grade::Undecided, Grade::Refused];
+        for (graded, composed) in [(vec![], Grade::Met), (grades, Grade::Refused)] {
+            receipts.push(Receipt::graded(tree(), dispatch, graded, composed).unwrap());
         }
         let secret = iroh::SecretKey::from_bytes(&[7; 32]);
         let proof = EndpointProof::sign(&secret, peer);
@@ -2814,10 +3218,10 @@ mod tests
         receipt[3] = bytes(&[0x0f; 17]);
         assert_eq!(refused(&receipt), Err(constructor(1, 0)), "a long fence");
         let mut receipt = note(b"hi");
-        receipt[4] = open(14);
+        receipt[4] = open(16);
         assert_eq!(
             refused(&receipt),
-            Err(constructor(14, 4)),
+            Err(constructor(16, 4)),
             "an unknown kind"
         );
         let mut receipt = note(b"hi");
@@ -3310,6 +3714,188 @@ mod tests
                 }) if position == at(15)
             ),
             "a count above the answers given"
+        );
+        let verified = |runner: &[u8], step: &[u8], status: Vec<Vec<u8>>| {
+            seated(
+                14,
+                [
+                    vec![
+                        bytes(&[0x0d; 32]),
+                        bytes(runner),
+                        bytes(&[0x0e; 32]),
+                        bytes(step),
+                        bytes(&[0x0c; 32]),
+                    ],
+                    status,
+                ]
+                .concat(),
+            )
+        };
+        let status = |tag: u8, number: u64| vec![open(tag), word(number), close()];
+        for (records, case) in [
+            (
+                verified(&peer, b"build-2", status(1, 0)),
+                "the well-formed verification of an exit",
+            ),
+            (
+                verified(&peer, b"b", status(2, u64::from(u32::MAX))),
+                "the well-formed verification of a signal",
+            ),
+        ] {
+            assert!(refused(&records).is_ok(), "{case} decodes");
+        }
+        let long_step = "a".repeat(65);
+        for (records, case) in [
+            (
+                verified(&peer[.. 31], b"b", status(1, 0)),
+                "a verification by a short runner",
+            ),
+            (verified(&peer, b"", status(1, 0)), "an empty step"),
+            (
+                verified(&peer, long_step.as_bytes(), status(1, 0)),
+                "a step of 65 bytes",
+            ),
+            (verified(&peer, b"Build", status(1, 0)), "an uppercase step"),
+            (
+                verified(&peer, &[0x62, 0xff], status(1, 0)),
+                "a step that is not UTF-8",
+            ),
+        ] {
+            assert_eq!(refused(&records), Err(constructor(14, 4)), "{case}");
+        }
+        assert_eq!(
+            refused(&verified(&peer, b"b", status(3, 0))),
+            Err(constructor(3, 10)),
+            "an unknown status"
+        );
+        assert_eq!(
+            refused(&verified(&peer, b"b", status(1, 0x1_0000_0000))),
+            Err(constructor(1, 10)),
+            "an exit code beyond 32 bits"
+        );
+        let grade = |tag: u8| vec![open(tag), close()];
+        let graded = |verdict: &[u8], count: u64, grades: Vec<Vec<u8>>| {
+            seated(15, [vec![bytes(verdict), word(count)], grades].concat())
+        };
+        for (records, case) in [
+            (
+                graded(&[0x0d; 32], 0, grade(1)),
+                "the well-formed grading of no answer",
+            ),
+            (
+                graded(&[0x0d; 32], 2, [grade(3), grade(4), grade(2)].concat()),
+                "the well-formed grading of two answers",
+            ),
+        ] {
+            assert!(refused(&records).is_ok(), "{case} decodes");
+        }
+        assert_eq!(
+            refused(&graded(&[0x0d; 31], 0, grade(1))),
+            Err(constructor(15, 4)),
+            "a grading of a short verdict"
+        );
+        assert_eq!(
+            refused(&graded(&[0x0d; 32], 1, [grade(5), grade(1)].concat())),
+            Err(constructor(5, 7)),
+            "an unknown grade"
+        );
+        assert_eq!(
+            refused(&graded(&[0x0d; 32], 0, grade(0))),
+            Err(constructor(0, 7)),
+            "an unknown composed grade"
+        );
+        assert!(
+            matches!(
+                refused(&graded(&[0x0d; 32], 2, [grade(1), grade(1)].concat())),
+                Err(ValueError::UnexpectedToken {
+                    found: TokenKind::Close,
+                    position,
+                    ..
+                }) if position == at(11)
+            ),
+            "a count above the grades given"
+        );
+    }
+
+    #[test]
+    fn a_verification_and_a_grading_encode_to_their_fixed_layouts()
+    {
+        let bytes = |payload: &[u8]| {
+            let length = u64::try_from(payload.len()).unwrap().to_le_bytes();
+            [&[0x03_u8][..], &length, payload].concat()
+        };
+        let word = |value: u64| [&[0x02_u8][..], &value.to_le_bytes()].concat();
+        let peer = PEER.parse::<PeerKey>().unwrap();
+        let hash = |byte: u8| ContentHash::from(blake3::Hash::from_bytes([byte; 32]));
+        let header = [
+            vec![0x01_u8, 0x01],
+            word(2),
+            bytes(tree().key().as_bytes()),
+            bytes(&[0x0f; 16]),
+        ]
+        .concat();
+        for (status, encoded, case) in [
+            (
+                Status::Exited(Code::from(i32::MIN)),
+                [vec![0x01, 0x01], word(0x8000_0000), vec![0x05]].concat(),
+                "the most negative exit code as its 32 two's-complement bits",
+            ),
+            (
+                Status::Signalled(Signal::from(15_i32)),
+                [vec![0x01, 0x02], word(15), vec![0x05]].concat(),
+                "a signal's number",
+            ),
+        ] {
+            let receipt = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Verified {
+                dispatch: CommitId::new([0x0d; 32]),
+                runner: peer,
+                playbook: hash(0x0e),
+                step: "b-1".parse().unwrap(),
+                output: hash(0x0c),
+                status,
+            });
+            let expected = [
+                header.clone(),
+                vec![0x01, 0x0e],
+                bytes(&[0x0d; 32]),
+                bytes(peer.peer_id().as_bytes()),
+                bytes(&[0x0e; 32]),
+                bytes(b"b-1"),
+                bytes(&[0x0c; 32]),
+                encoded,
+                vec![0x05, 0x05],
+            ]
+            .concat();
+            assert_eq!(
+                receipt.encode().unwrap().as_slice(),
+                expected,
+                "open receipt, version word, tree, fence, open verification, dispatch, \
+                 runner, playbook, step, output, the status: {case}; two closes"
+            );
+        }
+        let receipt = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Graded {
+            verdict: CommitId::new([0x0d; 32]),
+            grades: vec![Grade::Met, Grade::Unmet, Grade::Undecided, Grade::Refused],
+            composed: Grade::Refused,
+        });
+        let expected = [
+            header,
+            vec![0x01, 0x0f],
+            bytes(&[0x0d; 32]),
+            word(4),
+            vec![
+                0x01, 0x01, 0x05, 0x01, 0x02, 0x05, 0x01, 0x03, 0x05, 0x01, 0x04, 0x05,
+            ],
+            vec![0x01, 0x04, 0x05],
+            vec![0x05, 0x05],
+        ]
+        .concat();
+        assert_eq!(
+            receipt.encode().unwrap().as_slice(),
+            expected,
+            "open receipt, version word, tree, fence, open grading, verdict, grade count, \
+             met, unmet, undecided and refused each an empty constructor, the composed \
+             grade, two closes"
         );
     }
 
