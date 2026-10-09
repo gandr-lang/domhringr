@@ -1,7 +1,7 @@
 #:tombi toml-version = "v1.0.0"
 #:schema https://mise.jdx.dev/schema/mise-task.json
 
-# #44: Actions is disabled. Run the workflow, not a shell approximation of it.
+# Run the workflow, not a shell approximation of it.
 # The installed-CLI lane builds committed HEAD, so commit changes before this
 # gate. A linked worktree's .git file points outside act's copied workspace;
 # a disposable full clone preserves history and keeps generated install pins
@@ -14,6 +14,9 @@
 # to act for runner-image selection without changing the committed workflow.
 # Each invocation gives a disposable workflow copy a unique name, isolating
 # containers across repositories and worktrees. The checkout stays unchanged.
+# --rm covers completed jobs, including failures; the exit/signal trap removes
+# this run's containers, networks and volumes. Startup reaps abandoned runs
+# by workflow-process liveness, never age, and leaves act-toolcache untouched.
 # Offline action mode reuses cached actions without fetching; cache misses
 # still download the pinned action.
 # act resets Git indexes even offline, so each invocation snapshots the shared
@@ -30,24 +33,77 @@ tools.yq = "4.54.1"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
+remove_run() {
+  local run_id=$1 kind ids resource status=0
+  for kind in container network volume; do
+    case "$kind" in
+      container) ids=$(docker ps -aq --filter "name=^/act-CI-tmp-${run_id}-") ;;
+      network) ids=$(docker network ls -q --filter "name=^act-CI-tmp-${run_id}-") ;;
+      volume) ids=$(docker volume ls -q --filter "name=^act-CI-tmp-${run_id}-") ;;
+    esac || { status=1; continue; }
+    while IFS= read -r resource; do
+      [[ -n "$resource" ]] || continue
+      docker "$kind" rm -f "$resource" || status=1
+    done <<< "$ids"
+  done
+  return "$status"
+}
+
+# Snapshot names before probing processes; a new run cannot lose resources
+# absent from the snapshot. A process-query error must not imply an orphan.
+{% raw %}
+names=$(docker ps -a --filter name=act-CI-tmp- --format '{{.Names}}')
+names+=$'\n'$(docker network ls --filter name=act-CI-tmp- --format '{{.Name}}')
+names+=$'\n'$(docker volume ls --filter name=act-CI-tmp- --format '{{.Name}}')
+{% endraw %}
+seen=' '
+while IFS= read -r name; do
+  [[ "$name" =~ ^act-CI-tmp-([[:alnum:]]+)- ]] || continue
+  run_id=${BASH_REMATCH[1]}
+  [[ "$seen" != *" $run_id "* ]] || continue
+  seen+="$run_id "
+  if pgrep -f "[t]mp[.]${run_id}/ci[.]yml" >/dev/null; then
+    continue
+  else
+    status=$?
+    [[ "$status" == 1 ]] || exit "$status"
+  fi
+  remove_run "$run_id"
+done <<< "$names"
+
 scratch=$(mktemp -d)
+run_id=${scratch##*/tmp.}
 action_cache="${XDG_CACHE_HOME:-$HOME/.cache}/act"
 lockdir="${action_cache}.publish-lock"
 publish=
 locked=false
+act_pid=
 cleanup() {
-  if [[ "$locked" == true ]]; then rmdir "$lockdir"; fi
-  if [[ -n "$publish" ]]; then rm -rf "$publish"; fi
-  rm -rf "$scratch"
+  local status=$?
+  trap - EXIT INT TERM
+  if [[ -n "$act_pid" ]]; then
+    kill -TERM "$act_pid" 2>/dev/null || true
+    wait "$act_pid" || true
+  fi
+  remove_run "$run_id" || { if [[ "$status" == 0 ]]; then status=1; fi; }
+  if [[ "$locked" == true ]]; then rmdir "$lockdir" || status=1; fi
+  if [[ -n "$publish" ]]; then rm -rf "$publish" || status=1; fi
+  rm -rf "$scratch" || status=1
+  exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 mkdir -p "$action_cache" "$scratch/actions"
 cp -R "$action_cache/." "$scratch/actions/"
 git clone --quiet --local --no-hardlinks -- "{{config_root}}" "$scratch/checkout"
 mise run sibling:sync --clone "$scratch/checkout"
 cd "$scratch/checkout"
 ACT_RUN_ID=${scratch##*/} yq '.name += "-" + strenv(ACT_RUN_ID)' .github/workflows/ci.yml > "$scratch/ci.yml"
-act workflow_dispatch --workflows "$scratch/ci.yml" --action-cache-path "$scratch/actions" --action-offline-mode --use-gitignore=false "$@"
+act workflow_dispatch --workflows "$scratch/ci.yml" --action-cache-path "$scratch/actions" --action-offline-mode --rm --use-gitignore=false "$@" &
+act_pid=$!
+wait "$act_pid"
+act_pid=
 publish=$(mktemp -d "${action_cache}.publish.XXXXXXXX")
 for entry in "$scratch/actions/"*; do
   [[ -d "$entry" && ! -e "$action_cache/${entry##*/}" ]] || continue
