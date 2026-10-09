@@ -33,14 +33,14 @@ The record plane stores signed receipts in sedimentrees, folds them into views, 
 | `subduction_redb_storage`, [crate documentation](https://docs.rs/subduction_redb_storage) | Durable redb storage. |
 | `iroh`, [crate documentation](https://docs.rs/iroh) | Endpoint discovery, direct connections, and relays. |
 | `tokio`, [crate documentation](https://docs.rs/tokio) | Runtime, task spawning, and timers. |
-| `gandr-storage-values`, [crate documentation](https://github.com/gandr-lang/gandr/tree/main/crates/storage-values) | Canonical receipt tokens and flat encoding. |
+| `gandr-storage-values`, [crate documentation](https://github.com/gandr-lang/gandr/tree/main/crates/storage-values) | Canonical receipt tokens and flat encoding, and the manifest digest evidence is named by. |
 | `getrandom`, [crate documentation](https://docs.rs/getrandom/0.4) | Operating-system randomness for operation fences. |
-| `blake3`, [crate documentation](https://docs.rs/blake3) | The hash a report names its content by. |
+| `blake3`, [crate documentation](https://docs.rs/blake3) | The hash a brief, a playbook, a rubric and a question are named by. |
 
 ## Provided features
 
 - Persistent endpoint and signing identities in a state directory, and one minted key per tree opened.
-- Durable commits carrying `Open`, `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, `Retire`, `Verdict`, `Verified`, `Graded`, `Decide` or `Landed` receipts; an `Open` carries the tree key's proof, a `Present` the presented endpoint key's.
+- Durable commits carrying `Open`, `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, `Retire`, `Verdict`, `Verified`, `Graded`, `Decide` or `Landed` receipts; an `Open` carries the tree key's proof, a `Present` the presented endpoint key's; a report's content, a verdict's transcript and a verification's output are named by their value manifest's digest, and `Task::evidence` lists each with the peer that holds it.
 - Canonical views with causal authority checks, path bindings, owner-only name claims, label introductions, a book of each member's own presented endpoint, a task of seat receipts, verdicts, verifications, gradings, decisions and landings with its current attempt and how far it has progressed, and explicit refusals.
 - A judge's `Ruling` on a lettered question: read, as the answer `Letter` and each option's `Probability` with the mass outside the options (`Readout`), or unread for a named reason (`Unread`).
 - Anchors naming a tree, a path in it, or a commit in it by key, by DNS name, or by label, resolved by fold to a binding, to unbound, to a commit's verdict, to unknown, or to a named refusal; a `Reference` may abbreviate a commit id to a unique prefix of at least eight hex digits.
@@ -156,7 +156,7 @@ Reversal: a book that cannot go stale, as when a dial that fails at a presence f
 
 ## Tasks
 
-A tree is also a task. A `Dispatch { seat, brief }` names the peer that is to act and the brief it acts on — an anchor, or a content hash; a `Report { dispatch, content, summary }` answers a dispatch with the BLAKE3 hash of what the seat produced and a one-line summary of at most 256 bytes; a `Handoff { dispatch, to }` moves the dispatch's slot to another peer; a `Retire { dispatch }` gives the slot up. `View::task` holds every admitted seat receipt in canonical order and the current attempt — the admitted dispatch last in canonical order, its slot, held or retired, its answer, awaited or reported, and its progress past the report, as the decisions below state it — and prints as one line per step and one saying where the task stands: `undispatched`; for an attempt checked past its report, `verified <dispatch> <verification>`, `graded <dispatch> <grading> <composed>`, `decided <dispatch> <decision-commit> <decision>` or `landed <dispatch> <landing> <revision>`; otherwise `dispatched <dispatch> <holder>`, `reported <dispatch> <report>` or `stalled <dispatch> <retirement>`.
+A tree is also a task. A `Dispatch { seat, brief }` names the peer that is to act and the brief it acts on — an anchor, or a content hash; a `Report { dispatch, content, summary }` answers a dispatch with the manifest digest of what the seat produced, kept as evidence, and a one-line summary of at most 256 bytes; a `Handoff { dispatch, to }` moves the dispatch's slot to another peer; a `Retire { dispatch }` gives the slot up. `View::task` holds every admitted seat receipt in canonical order and the current attempt — the admitted dispatch last in canonical order, its slot, held or retired, its answer, awaited or reported, and its progress past the report, as the decisions below state it — and prints as one line per step and one saying where the task stands: `undispatched`; for an attempt checked past its report, `verified <dispatch> <verification>`, `graded <dispatch> <grading> <composed>`, `decided <dispatch> <decision-commit> <decision>` or `landed <dispatch> <landing> <revision>`; otherwise `dispatched <dispatch> <holder>`, `reported <dispatch> <report>` or `stalled <dispatch> <retirement>`.
 
 **A dispatch is admitted from the owner or a member; a report, a handoff and a retirement from the dispatch's holder alone, on the current dispatch, both judged in the receipt's causal past.** The fold carries, beside a commit's grantees and seats, the course of the task in its causal past: the latest dispatch there and who holds its slot. A receipt naming another dispatch is refused `not current`, and one whose author does not hold the slot there `not holder`; so a report on a superseded dispatch, a second report after a handoff, and a report after the slot was retired are refused alike, whatever order they arrive in, while a report concurrent with a later dispatch is admitted as a step that answers nothing current. A dispatched seat may present its endpoint and withdraw its own presence without a grant: the seat is reached through the task's book, and it holds no other authority in the tree.
 
@@ -171,13 +171,14 @@ Reversal: a dispatch that names several seats or slots, which needs a slot per s
 
 Reversal: an operator loop that retires on its own deadline, which then writes the retirement it already reads.
 
-**A report names its content by hash and retains no bytes.** The tree records what was produced, not where it lives; the bytes are the seat's to keep or publish.
+**A receipt names evidence by its value manifest and carries no bytes.** A report's content, a verdict's transcript and a verification's output are committed into gandr's value plane as chunk DAGs, and the receipt names each by its `ManifestDigest`: the BLAKE3 digest of the manifest, which binds the root, the length and the profile the value was cut under. `domhringr-record-evidence` holds the bytes beside the tree store and reads them back by that digest, from its own store or fetched from the peer that holds them; `Task::evidence` lists every digest a task names with that peer — a report's author, a verdict's judge, a verification's runner — in canonical order. The tree records what was produced; the evidence plane holds it, so an operator on another machine reads what it judges.
 
 - the bytes in the receipt: a tree grows with every artifact, and a sync carries what only a reader of that artifact needs.
+- the BLAKE3 hash of the flat bytes: names the bytes but resolves through nothing the record can reach, and a reader can check them only whole.
 
-Reversal: a content store reachable from the record — a blob plane — when a report's hash resolves through it.
+Reversal: a change to the value plane's manifest identity, which needs a new receipt version naming the new one.
 
-**A judge's verdict is admitted from the judge alone, on the current dispatch, judged in the receipt's causal past.** A `Verdict { dispatch, judge, rubric, transcript, answers }` names the judge, the BLAKE3 hashes of the rubric its questions come from and of the transcript it read, and one ruling per question, each question named by its hash, in the order asked. A ruling is `read <letter> A=<p> B=<p> … outside=<p>` — the answer, each option's probability, summing to one, and the mass the judge put outside the options — or `unread <reason>`: `no letter`, `outside`, `tied`, `endpoint` or `malformed`. A verdict whose author is not the judge it names is refused `not judge`, one on another dispatch `not current`; an admitted verdict is a step of the task, printed `verdict <commit> <dispatch> <judge> <rubric> <transcript>` and one `ruling <commit> <question> <ruling>` line per question, and changes no attempt: a ruling informs the operator, who acts on it with a receipt of their own.
+**A judge's verdict is admitted from the judge alone, on the current dispatch, judged in the receipt's causal past.** A `Verdict { dispatch, judge, rubric, transcript, answers }` names the judge, the BLAKE3 hash of the rubric its questions come from, the manifest digest of the transcript it read, kept as evidence, and one ruling per question, each question named by its hash, in the order asked. A ruling is `read <letter> A=<p> B=<p> … outside=<p>` — the answer, each option's probability, summing to one, and the mass the judge put outside the options — or `unread <reason>`: `no letter`, `outside`, `tied`, `endpoint` or `malformed`. A verdict whose author is not the judge it names is refused `not judge`, one on another dispatch `not current`; an admitted verdict is a step of the task, printed `verdict <commit> <dispatch> <judge> <rubric> <transcript>` and one `ruling <commit> <question> <ruling>` line per question, and changes no attempt: a ruling informs the operator, who acts on it with a receipt of their own.
 
 - a judge granted by the tree: the operator chooses the judge by acting on its verdict, so the fold checks only that the judge speaks for itself.
 - a verdict as a report: a report answers the dispatch, and the seat alone answers it.
@@ -185,13 +186,13 @@ Reversal: a content store reachable from the record — a blob plane — when a 
 
 Reversal: a verdict that settles the task — accepting or reopening the attempt — which needs the judge's authority in the course.
 
-**A runner's verification is admitted from the runner alone, on the current dispatch.** A `Verified { dispatch, runner, playbook, step, output, status }` records that the runner ran a playbook step's verifier on the dispatch: the BLAKE3 hash of the playbook, the step's identifier in it (`StepId`: 1 to 64 lowercase ASCII letters, digits and hyphens, beginning with a letter), the hash of what the process wrote to its output and error streams, and how the process ended (`Status`): `exit <code>` or `signal <number>`. A verification whose author is not the runner it names is refused `not runner`, one on another dispatch `not current`; an admitted one is a step of the task, printed `verified <commit> <dispatch> <runner> <playbook> <step> <output> <status>`, and advances the attempt to verified: a failing verifier is recorded as it ended, and the operator acts on it.
+**A runner's verification is admitted from the runner alone, on the current dispatch.** A `Verified { dispatch, runner, playbook, step, output, status }` records that the runner ran a playbook step's verifier on the dispatch: the BLAKE3 hash of the playbook, the step's identifier in it (`StepId`: 1 to 64 lowercase ASCII letters, digits and hyphens, beginning with a letter), the manifest digest of what the process wrote to its output and error streams, kept as evidence, and how the process ended (`Status`): `exit <code>` or `signal <number>`. A verification whose author is not the runner it names is refused `not runner`, one on another dispatch `not current`; an admitted one is a step of the task, printed `verified <commit> <dispatch> <runner> <playbook> <step> <output> <status>`, and advances the attempt to verified: a failing verifier is recorded as it ended, and the operator acts on it.
 
 - the step without its playbook: a step's identifier names it only within its playbook, so two playbooks' `test` steps would read as one check.
 - a pass or fail flag: a process ended by a signal would read as one that failed its check, and what a nonzero code means is the verifier's to say.
-- the output's bytes: the receipt grows with every run, as a report's would; the bytes are the runner's to keep.
+- the output's bytes in the receipt: the receipt grows with every run, as a report's would.
 
-Reversal: a check that reads another's output, which needs the bytes reachable from the record — the content store a report's hash waits on.
+Reversal: a check that reads the output and error streams apart, which needs a digest per stream.
 
 **A grading is admitted from its verdict's judge alone, of a verdict in its causal past.** A `Graded { verdict, grades, composed }` names the verdict it grades and gives one `Grade` per answer, in the verdict's order — `met`, `unmet`, `undecided`, or `refused` for an unread ruling — and the grades composed across the rubric. The task, the rubric and the questions are the verdict's, so the grading names them through it rather than again. A grading naming no admitted verdict among its ancestors is refused `no verdict`, one whose author is not that verdict's judge `not judge`, one whose grades number other than the answers or are refused other than exactly where the ruling is unread `misgraded`, and one whose verdict's dispatch is no longer current `not current`; an admitted grading is a step of the task, printed `graded <commit> <dispatch> <verdict> <rubric> <composed>` and one `grade <commit> <question> <grade>` line per answer, and advances the attempt to graded. The fold checks that a grade answers its ruling, never where the ruling stands against the band or how the grades compose: the band and the composition are the rubric's, which the record names by hash and does not hold.
 
@@ -253,45 +254,53 @@ Two identities name a receipt and neither stands in for the other. The `CommitId
 
 Reversal: an incompatible change to the value plane's token grammar or flat form requires a matching receipt version change; moving receipts into the value plane's store makes the blob a `ContentPtr` and changes what the commit id hashes.
 
-**A bind's target carries its anchor as typed parts, not as anchor text.** The target is a constructor — anchor, endpoint, or datum — and an anchor a constructor for what it names in its tree — nothing, a path, or a commit — around an authority constructor — key, DNS name, or label. Each part is the record the receipt grammar already uses for its kind: a 32-byte key, a DNS name or label as UTF-8 bytes, a path as its text, a commit id as its 32 bytes. Each part has one encoding, the decoder refuses what the parsers refuse (an empty or reserved segment, a short key, a commit id of other than 32 bytes), and an abbreviated commit has none. The receipt grammar is version 2; a receipt of any other version is refused.
+**A bind's target carries its anchor as typed parts, not as anchor text.** The target is a constructor — anchor, endpoint, or datum — and an anchor a constructor for what it names in its tree — nothing, a path, or a commit — around an authority constructor — key, DNS name, or label. Each part is the record the receipt grammar already uses for its kind: a 32-byte key, a DNS name or label as UTF-8 bytes, a path as its text, a commit id as its 32 bytes. Each part has one encoding, the decoder refuses what the parsers refuse (an empty or reserved segment, a short key, a commit id of other than 32 bytes), and an abbreviated commit has none. The receipt grammar is version 3; a receipt of any other version is refused.
 
 - the anchor's text as one UTF-8 record: a second canonical form to keep in step with the parser, its refusals reached only by parsing decoded text.
 - a commit id and a tree id as targets of their own beside the anchor: two spellings of what an anchor names.
 
 Reversal: a new form within a tree or a new authority adds a constructor under a new receipt version.
 
-**A presence and a withdrawal are new kinds under receipt version 2.** A decoder that predates them refuses them as an unknown kind, folded as undecodable, while every receipt it knows keeps its blob and its commit id; a version change would make every new receipt unreadable to it instead.
+**A presence and a withdrawal are new kinds, not a new version.** A decoder that predates them refuses them as an unknown kind, folded as undecodable, while every receipt it knows keeps its blob and its commit id; a version change would make every new receipt unreadable to it instead.
 
-- receipt version 3: an old decoder refuses notes and binds it could read.
+- a new receipt version: an old decoder refuses notes and binds it could read.
 
 Reversal: a change to an existing kind's payload, which needs a new version.
 
-**The seat receipts are new kinds under receipt version 2, and a brief a constructor.** `Dispatch`, `Report`, `Handoff` and `Retire` follow the presence and the withdrawal for the same reason; a brief is an anchor, as a bind's target carries it, or a content hash of 32 bytes; a summary is UTF-8 bytes that parse as a summary.
+**The seat receipts are new kinds, not a new version, and a brief a constructor.** `Dispatch`, `Report`, `Handoff` and `Retire` follow the presence and the withdrawal for the same reason; a brief is an anchor, as a bind's target carries it, or a content hash of 32 bytes; a summary is UTF-8 bytes that parse as a summary.
 
-- receipt version 3: an old decoder refuses every receipt it could read.
+- a new receipt version: an old decoder refuses every receipt it could read.
 
 Reversal: a change to an existing kind's payload.
 
-**A verdict is a new kind under receipt version 2, and a ruling a constructor.** `Verdict` follows the seat receipts for the same reason. A read ruling is a word per option, in letter order, then a word for the mass outside the options, each the IEEE 754 binary64 bits of a number from zero to one, never negative zero; its answer letter is not written, since it is the option holding the most. An unread ruling is a constructor naming its reason. The decoder refuses a probability out of `[0, 1]` or negative zero, a readout `Readout::new` refuses — fewer than two options or more than twenty-six, a sum other than one, a tie — and a reason it does not know.
+**A verdict is a new kind, and a ruling a constructor.** `Verdict` follows the seat receipts for the same reason. A read ruling is a word per option, in letter order, then a word for the mass outside the options, each the IEEE 754 binary64 bits of a number from zero to one, never negative zero; its answer letter is not written, since it is the option holding the most. An unread ruling is a constructor naming its reason. The decoder refuses a probability out of `[0, 1]` or negative zero, a readout `Readout::new` refuses — fewer than two options or more than twenty-six, a sum other than one, a tie — and a reason it does not know.
 
 - probabilities as decimal text: a second canonical form of each number, and a parser in the decoder.
 - fixed-point integers: a rounding step between the readout and the record, and a sum that no longer reads back exactly.
 
 Reversal: a change to the readout's form — another number of options, a log-probability — which needs a new kind.
 
-**A verification and a grading are new kinds under receipt version 2, a status and a grade constructors.** `Verified` and `Graded` follow the verdict for the same reason. A step is ASCII bytes that parse as a `StepId`; a status is a constructor, exited or signalled, holding one word, the 32 bits of the code's or the signal's two's-complement value; a grade is an empty constructor, and a grading writes its count of grades, the grades, then the composed grade. The decoder refuses a step `StepId` refuses, a status or a grade it does not know, and a word beyond 32 bits.
+**A verification and a grading are new kinds, a status and a grade constructors.** `Verified` and `Graded` follow the verdict for the same reason. A step is ASCII bytes that parse as a `StepId`; a status is a constructor, exited or signalled, holding one word, the 32 bits of the code's or the signal's two's-complement value; a grade is an empty constructor, and a grading writes its count of grades, the grades, then the composed grade. The decoder refuses a step `StepId` refuses, a status or a grade it does not know, and a word beyond 32 bits.
 
 - the code as signed decimal text: a second canonical form of each number, and a parser in the decoder.
 - one word carrying a flag bit beside the number: a case named by a bit rather than by a constructor, as the grammar names every other case.
 
 Reversal: a platform whose exit status does not fit 32 bits, which needs a new constructor.
 
-**A decision and a landing are new kinds under receipt version 2, with a decision constructor and a revision of either git width.** `Decide` and `Landed` follow the grading for the same reason. A `Decide` writes its dispatch, its operator's 32-byte peer id, then the decision: a constructor, land and abandon empty, rework holding its reason as one bytes record that parses as a `Summary`; a `Landed` writes its decision, then the revision as one bytes record of 20 or 32 bytes. The decoder refuses a decision it does not know, a reason `Summary` refuses, and a revision of any other length.
+**A decision and a landing are new kinds, with a decision constructor and a revision of either git width.** `Decide` and `Landed` follow the grading for the same reason. A `Decide` writes its dispatch, its operator's 32-byte peer id, then the decision: a constructor, land and abandon empty, rework holding its reason as one bytes record that parses as a `Summary`; a `Landed` writes its decision, then the revision as one bytes record of 20 or 32 bytes. The decoder refuses a decision it does not know, a reason `Summary` refuses, and a revision of any other length.
 
 - a revision padded to 32 bytes: a padded SHA-1 id reads back as a SHA-256 one.
 - the reason as a field of every decision, empty for land and abandon: an absence named by an empty value, which a decoder must then refuse elsewhere.
 
 Reversal: a version control system whose ids are neither width, which needs a revision constructor per system.
+
+**Evidence is named by manifest digest under receipt version 3.** A report's content, a verdict's transcript and a verification's output are each the 32 bytes of a `ManifestDigest`, where version 2 held the BLAKE3 hash of the bytes in the same 32 bytes. The layout is unchanged and the meaning is not, so the version moves: a version-2 receipt is refused at its version word as an unexpected constructor, never read as naming a manifest, and a version-2 decoder refuses every version-3 receipt the same way.
+
+- new kinds beside the old, a digest report beside a hash report: two kinds for one step of the task, and a fold that must say which counts.
+- a constructor per evidence field, hash or digest: a receipt could still name evidence no reader can dereference.
+- the old version read on: a hash read as a digest names a manifest that does not exist, and the refusal arrives at the read instead of at the decode.
+
+Reversal: a change to an existing kind's payload, which needs a new version again.
 
 ## Dependencies
 
@@ -309,11 +318,11 @@ Reversal: a high-risk advisory against `getrandom`, its departure from the depen
 
 Reversal: iroh no longer exporting its resolver, or a witness that needs record types or DNSSEC validation the resolver does not expose.
 
-**A report's content hash is `blake3` 1.8 with no features.** It is the hash sedimentree names commits by, already in the graph through sedimentree, iroh and subduction, so it adds no crate to the build.
+**A content hash is `blake3` 1.8 with no features.** It names a brief, a playbook, a rubric and a question; it is the hash sedimentree names commits by, already in the graph through sedimentree, iroh and subduction, so it adds no crate to the build. Evidence is named by the value plane's manifest digest instead (§ Tasks).
 
 - SHA-256: a second hash function, and a crate the graph does not otherwise need.
 
-Reversal: a value-plane content pointer standing for report content, when a report names that instead.
+Reversal: a brief, a playbook or a rubric reachable from the record, when it is named by a manifest digest as evidence is.
 
 **subduction_iroh is built without its `server` feature.** The node accepts connections itself to route them by ALPN, so the crate's server half is unused.
 

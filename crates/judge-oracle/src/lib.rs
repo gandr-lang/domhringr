@@ -4,8 +4,9 @@
 //! probability per option — or records why it read none.
 //!
 //! A [`Question`] is its text and its options, named by the hash of its
-//! canonical form; a [`Transcript`] is the content asked about, held or named
-//! by its hash. A [`Backend`] answers a question about a transcript with a
+//! canonical form; a [`Transcript`] is the content asked about, staged as
+//! evidence and named by its value manifest. A [`Backend`] answers a question
+//! about a transcript with a
 //! [`Readout`](domhringr_record_tree::Readout) or a [`Refusal`], whose
 //! [`Refusal::reason`] is what a verdict records
 //! ([`Unread`](domhringr_record_tree::Unread)): never a default letter.

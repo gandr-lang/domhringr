@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
   "crates/judge-oracle",
+  "crates/record-evidence",
   "crates/record-tree",
   "crates/seat-slot",
   "crates/strategy-document",
@@ -26,17 +27,19 @@ publish = false
 # on only because a build or a test failed without it.
 [workspace.dependencies]
 
-# The reference BLAKE3: a report's content hash, the name iroh-blobs gives the
-# same bytes, and the tests' independent oracle for commit ids. Already in the
-# graph under sedimentree's commit ids, so it adds no build.
+# The reference BLAKE3: a brief's, a playbook's, a rubric's and a question's
+# content hash, and the tests' independent oracle for commit ids. Already in
+# the graph under sedimentree's commit ids, so it adds no build.
 # consumers:
 # - record-tree
 [workspace.dependencies.blake3]
 version = "1.8"
 default-features = false
 
-# Hex text for peer, endpoint and commit ids, decoded into fixed buffers.
+# Hex text for peer, endpoint and commit ids and manifest digests, decoded
+# into fixed buffers.
 # consumers:
+# - record-evidence
 # - record-tree
 [workspace.dependencies.data-encoding]
 version = "2.11"
@@ -50,9 +53,21 @@ default-features = false
 [workspace.dependencies.domhringr-judge-oracle]
 path = "crates/judge-oracle"
 
+# The evidence plane: reports, verifier outputs and transcripts as value-plane
+# chunk DAGs, the store and the fetch stream.
+# consumers:
+# - judge-oracle
+# - seat-slot
+# - strategy-document
+# - surface-driver
+# - surface-peer
+[workspace.dependencies.domhringr-record-evidence]
+path = "crates/record-evidence"
+
 # The record library: the tree store, the endpoint, sync.
 # consumers:
 # - judge-oracle
+# - record-evidence
 # - seat-slot
 # - strategy-document
 # - surface-driver
@@ -92,13 +107,25 @@ version = "0.3"
 default-features = false
 features = ["alloc"]
 
-# The value plane's canonical token form: a receipt's flat bytes, the body a
-# chunk of the value plane frames, so a receipt stored today commits through
-# the chunk DAG later without re-encoding. The gandr sibling sits at
-# `vendor/gandr` at the revision `[workspace.metadata.siblings]` pins.
+# The typed chunker's constants, kappa and the token cap, that the evidence
+# profile pins. No dependencies of its own, and already in the graph under
+# the value plane, so it adds no build.
+# consumers:
+# - record-evidence
+[workspace.dependencies.gandr-storage-chunker]
+path = "vendor/gandr/crates/storage-chunker"
+default-features = false
+
+# The value plane: a receipt's flat bytes, the body a chunk frames, and the
+# chunk DAGs and manifests evidence is committed as and named by. The gandr
+# sibling sits at `vendor/gandr` at the revision
+# `[workspace.metadata.siblings]` pins.
 # consumers:
 # - judge-oracle
+# - record-evidence
 # - record-tree
+# - surface-driver
+# - surface-peer
 [workspace.dependencies.gandr-storage-values]
 path = "vendor/gandr/crates/storage-values"
 default-features = false
@@ -118,6 +145,7 @@ default-features = false
 #   directly reachable across networks
 # consumers:
 # - judge-oracle
+# - record-evidence
 # - record-tree
 # - seat-slot
 [workspace.dependencies.iroh]
@@ -213,10 +241,13 @@ default-features = false
 version = "0.3"
 default-features = false
 
-# Throwaway directories: the driver's checkouts and the state it grades, and
-# the state directories of the process-level and library tests.
+# Throwaway directories and files: the driver's checkouts and the state it
+# grades, the evidence store's files written beside their names and renamed
+# into place, and the state directories of the process-level and library
+# tests.
 # consumers:
 # - surface-driver
+# - record-evidence
 # - surface-peer (dev)
 # - seat-slot (dev)
 # - strategy-document (dev)
@@ -225,14 +256,15 @@ default-features = false
 version = "3.27"
 default-features = false
 
-# `derive(Error)` for the record library's, the seat's, the strategy
-# documents' and the binaries' error enums.
+# `derive(Error)` for the record library's, the evidence plane's, the seat's,
+# the strategy documents' and the binaries' error enums.
 # consumers:
 # - judge-oracle
 # - surface-driver
 # - surface-peer
 # - seat-slot
 # - strategy-document
+# - record-evidence
 # - record-tree
 [workspace.dependencies.thiserror]
 version = "2.0"
@@ -241,13 +273,15 @@ default-features = false
 # The async runtime under iroh, subduction and the binaries.
 # features:
 # - rt-multi-thread: the binaries' and the tests' multi-threaded runtime
-# - time: `tokio::time::timeout` behind subduction's call deadlines
+# - time: `tokio::time::timeout` behind subduction's call deadlines and the
+#   evidence fetch's
 # - sync: the seat's event channel and its lock on the dispatches it acts on
 # consumers:
 # - judge-oracle (dev)
 # - surface-driver
 # - surface-peer
 # - seat-slot
+# - record-evidence
 # - record-tree
 [workspace.dependencies.tokio]
 version = "1"

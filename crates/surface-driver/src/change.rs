@@ -17,6 +17,7 @@ use std::process::Command;
 use std::process::Output;
 use std::process::Stdio;
 
+use domhringr_record_evidence::Evidence;
 use domhringr_record_tree::Answer;
 use domhringr_record_tree::CommitId;
 use domhringr_record_tree::Current;
@@ -30,6 +31,7 @@ use domhringr_record_tree::Revision;
 use domhringr_record_tree::Step;
 use domhringr_record_tree::TreeId;
 use domhringr_record_tree::View;
+use gandr_storage_values::ManifestDigest;
 use tempfile::TempDir;
 
 use crate::RunError;
@@ -143,12 +145,25 @@ pub enum ParseChangeError
     Commit(#[source] ParseRevisionError),
 }
 
-/// The current dispatch of the task `view` folds and the change its report
-/// names.
+/// The current attempt's report, as the driver acts on it.
+pub struct Reported
+{
+    /// The current dispatch.
+    pub dispatch: CommitId,
+    /// The seat that reported.
+    pub author: PeerKey,
+    /// The report's content, by its value manifest.
+    pub content: ManifestDigest,
+    /// The change its summary names.
+    pub change: Change,
+}
+
+/// The report on the current dispatch of the task `view` folds, and the
+/// change it names.
 ///
 /// # Specification
-/// - ensures: yields the current attempt's dispatch and the change the summary
-///   of its report reads as ([`Change`]).
+/// - ensures: yields the current attempt's dispatch, its report's author and
+///   content, and the change the report's summary reads as ([`Change`]).
 /// - fails: [`RunError::Undispatched`] when the task has no dispatch,
 ///   [`RunError::Unreported`] when the current dispatch has no report, and
 ///   [`RunError::Change`] when the summary names no change.
@@ -159,9 +174,10 @@ pub enum ParseChangeError
 ///
 /// # Adequacy
 /// - hypothesis: L3 — the process tests verify, decide and land the change a
-///   seat's script reports.
+///   seat's script reports, and read the report the operator fetched by the
+///   content named.
 /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
-pub fn reported(view: &View) -> Result<(CommitId, Change), RunError>
+pub fn reported(view: &View) -> Result<Reported, RunError>
 {
     let Current::Attempt(ref attempt) = *view.task().current()
     else {
@@ -171,12 +187,17 @@ pub fn reported(view: &View) -> Result<(CommitId, Change), RunError>
     else {
         return Err(RunError::Unreported);
     };
-    let summary = view
+    let (author, content, summary) = view
         .task()
         .steps()
         .iter()
         .find_map(|&(commit, ref step)| match *step {
-            | Step::Report { ref summary, .. } if commit == report => Some(summary),
+            | Step::Report {
+                author,
+                content,
+                ref summary,
+                ..
+            } if commit == report => Some((author, content, summary)),
             | Step::Report { .. }
             | Step::Dispatch { .. }
             | Step::Handoff { .. }
@@ -189,7 +210,41 @@ pub fn reported(view: &View) -> Result<(CommitId, Change), RunError>
         })
         .ok_or(RunError::Unreported)?;
     let change = summary.as_ref().parse().map_err(RunError::Change)?;
-    Ok((attempt.dispatch(), change))
+    Ok(Reported {
+        dispatch: attempt.dispatch(),
+        author,
+        content,
+        change,
+    })
+}
+
+/// Read the content of `reported` from `evidence`, and write `change
+/// <branch> <commit>` and `report <digest>`.
+///
+/// # Specification
+/// - ensures: the report's content is held whole ([`Evidence::read`]) before
+///   either line is written.
+/// - fails: [`RunError::Evidence`] as the read refuses, and
+///   [`RunError::Output`] when standard output cannot be written.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process tests read both lines from `verify`, `decide`
+///   and `land`, and the content the digest names in the operator's store.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
+pub fn announce(
+    reported: &Reported,
+    evidence: &Evidence,
+) -> Result<(), RunError>
+{
+    let _content = evidence.read(reported.content)?;
+    emit(&format_args!(
+        "change {}\nreport {}\n",
+        reported.change, reported.content
+    ))
 }
 
 /// What git is run to do, as an error names it.
@@ -569,19 +624,20 @@ fn merge(
 }
 
 /// Land the change of `tree`'s current attempt in the repository at
-/// `repository`, as `operator`.
+/// `repository`, as `operator`, its report read from `evidence`.
 ///
 /// # Specification
 /// - ensures: requires the attempt's progress to be a decision to land made by
-///   `operator`; writes `change <branch> <commit>`, merges the change
-///   ([`merge`]), commits the landing of that decision at the revision the
-///   branch then stands at, and writes `landed <commit-id> <revision>`.
+///   `operator`; reads the report and writes `change <branch> <commit>` and
+///   `report <digest>` ([`announce`]), merges the change ([`merge`]), commits
+///   the landing of that decision at the revision the branch then stands at,
+///   and writes `landed <commit-id> <revision>`.
 /// - fails: [`RunError::View`] when the task cannot be folded, as [`reported`],
 ///   [`RunError::Landed`] when the attempt has landed, [`RunError::NotLand`]
 ///   when its decision is to rework or abandon, [`RunError::NoDecision`] when
 ///   it has no decision, [`RunError::OtherOperator`] when another operator
-///   decided it — each before git is run — as [`merge`], with nothing
-///   committed, and [`RunError::Random`], [`RunError::Commit`] and
+///   decided it, as [`announce`] — each before git is run — as [`merge`], with
+///   nothing committed, and [`RunError::Random`], [`RunError::Commit`] and
 ///   [`RunError::Output`].
 /// - panics: none.
 ///
@@ -596,13 +652,14 @@ fn merge(
 /// - witness: `operator::tests::a_refused_merge_commits_nothing`
 pub async fn land(
     peer: &Peer,
+    evidence: &Evidence,
     operator: PeerKey,
     tree: TreeId,
     repository: &Path,
 ) -> Result<(), RunError>
 {
     let view = peer.view(tree).await?;
-    let (_dispatch, change) = reported(&view)?;
+    let reported = reported(&view)?;
     let Current::Attempt(ref attempt) = *view.task().current()
     else {
         return Err(RunError::Undispatched);
@@ -639,8 +696,8 @@ pub async fn land(
     if let Some(decider) = decider.filter(|&decider| decider != operator) {
         return Err(RunError::OtherOperator(decider));
     }
-    emit(&format_args!("change {change}\n"))?;
-    let merge = merge(repository, &change)?;
+    announce(&reported, evidence)?;
+    let merge = merge(repository, &reported.change)?;
     let landed = peer
         .commit(tree, Receipt::landed(tree, decided, merge)?)
         .await?;

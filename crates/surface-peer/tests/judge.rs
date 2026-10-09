@@ -236,17 +236,20 @@ mod tests
     ///   from an empty table: it prints `transcript t` and `ruling q unread
     ///   malformed`, exits 0, and names the cause on standard error. From a
     ///   table recording `read A A=0.9 B=0.1 outside=0` for q about t, the same
-    ///   ask, by T's file and by t alone, prints that ruling, whose letter is
-    ///   `A` and whose option probabilities sum to one. With the endpoint
-    ///   configured at a loopback address where nothing listens, the ask prints
-    ///   `ruling q unread endpoint` and exits 0; with no endpoint configured,
-    ///   it fails naming the missing configuration. A verdict on O's open task,
-    ///   which has no dispatch, fails before asking anything. Once O dispatches
-    ///   S, O's verdict on Q and on R (`main`, `other`), which the table does
-    ///   not hold, prints the transcript line, `ruling q read A …`, `ruling r
-    ///   unread malformed` and its commit V; O's local replay prints `dispatch
-    ///   D S content <brief>`, `verdict V D O <rubric> t`, the two ruling lines
-    ///   under V, and `dispatched D S`: the verdict answers no attempt.
+    ///   ask by T's file prints that ruling, whose letter is `A` and whose
+    ///   option probabilities sum to one; by t alone, before anything keeps it,
+    ///   the ask exits 1 with nothing printed, naming `evidence t is not held`.
+    ///   With the endpoint configured at a loopback address where nothing
+    ///   listens, the ask prints `ruling q unread endpoint` and exits 0; with
+    ///   no endpoint configured, it fails naming the missing configuration. A
+    ///   verdict on O's open task, which has no dispatch, fails before asking
+    ///   anything. Once O dispatches S, O's verdict on Q and on R (`main`,
+    ///   `other`), which the table does not hold, prints the transcript line,
+    ///   `ruling q read A …`, `ruling r unread malformed` and its commit V, and
+    ///   keeps t: the ask by t alone then prints the same ruling. O's local
+    ///   replay prints `dispatch D S content <brief>`, `verdict V D O <rubric>
+    ///   t`, the two ruling lines under V, `dispatched D S` — the verdict
+    ///   answers no attempt — and `evidence t held`.
     /// - panics: on any contract violation.
     #[test]
     fn a_judge_rules_on_a_transcript_and_replay_shows_the_verdict()
@@ -343,10 +346,16 @@ mod tests
             "the table answers the question about the transcript"
         );
         let named = [OsString::from("--transcript"), OsString::from(&transcript)];
+        let unheld = run(&mut ask(&named, &from_table(&table)));
+        assert!(!unheld.status.success(), "{unheld:?}");
+        assert!(
+            printed(&unheld).is_empty(),
+            "an unheld transcript is refused before any question is asked"
+        );
         assert_eq!(
-            finish(&mut ask(&named, &from_table(&table))),
-            ruled,
-            "a transcript named by its hash is the same transcript"
+            diagnosed(&unheld),
+            [format!("domhringr-peer: evidence {transcript} is not held")],
+            "a transcript named by its digest is read from the evidence store"
         );
         let fields = read.split(' ').collect::<Vec<_>>();
         let ["read", "A", ref options @ .., outside] = *fields.as_slice()
@@ -448,6 +457,11 @@ mod tests
             format!("ruling {other_question} unread malformed")
         );
         assert_eq!(
+            finish(&mut ask(&named, &from_table(&table))),
+            ruled,
+            "the verdict kept the transcript, so its digest names the same transcript"
+        );
+        assert_eq!(
             finish(peer(o).args(["replay", tree.as_str(), "--local"])),
             [
                 format!("dispatch {dispatch} {s_peer} content {BRIEF}"),
@@ -455,8 +469,9 @@ mod tests
                 format!("ruling {commit} {question} {read}"),
                 format!("ruling {commit} {other_question} unread malformed"),
                 format!("dispatched {dispatch} {s_peer}"),
+                format!("evidence {transcript} held"),
             ],
-            "the replay shows the verdict, which answers no attempt"
+            "the replay shows the verdict, which answers no attempt, and its transcript held"
         );
     }
 }

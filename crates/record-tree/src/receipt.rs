@@ -129,6 +129,8 @@ use core::net::SocketAddr;
 use gandr_storage_values::CanonicalValue;
 use gandr_storage_values::CanonicalWord;
 use gandr_storage_values::ConstructorTag;
+use gandr_storage_values::MANIFEST_DIGEST_LEN;
+use gandr_storage_values::ManifestDigest;
 use gandr_storage_values::TokenBody;
 use gandr_storage_values::TokenBytes;
 use gandr_storage_values::TokenOffset;
@@ -169,8 +171,10 @@ use crate::ruling::Unread;
 use crate::task::Brief;
 use crate::task::Summary;
 
-/// The receipt format this crate writes, and the only one it reads.
-const VERSION: u64 = 2;
+/// The receipt format this crate writes, and the only one it reads: version
+/// 3 names a report's content, a verifier's output and a judged transcript by
+/// the identity of their value manifest.
+const VERSION: u64 = 3;
 
 /// The receipt's constructor tag.
 const RECEIPT: u8 = 0x01;
@@ -548,8 +552,8 @@ pub enum Kind
     {
         /// The dispatch reported on.
         dispatch: CommitId,
-        /// The hash of the report's content.
-        content: ContentHash,
+        /// The report's content: the identity of its value manifest.
+        content: ManifestDigest,
         /// The report's one-line summary.
         summary: Summary,
     },
@@ -577,8 +581,9 @@ pub enum Kind
         judge: PeerKey,
         /// The hash of the rubric the questions come from.
         rubric: ContentHash,
-        /// The hash of the transcript the questions are asked about.
-        transcript: ContentHash,
+        /// The transcript the questions are asked about: the identity of its
+        /// value manifest.
+        transcript: ManifestDigest,
         /// Each question's hash and its ruling, in the order asked.
         answers: Vec<(ContentHash, Ruling)>,
     },
@@ -595,9 +600,9 @@ pub enum Kind
         playbook: ContentHash,
         /// The step whose verifier ran, by its identifier in `playbook`.
         step: StepId,
-        /// The hash of what the process wrote to its output and error
-        /// streams, as one stream in the order written.
-        output: ContentHash,
+        /// What the process wrote to its output and error streams, as one
+        /// stream in the order written: the identity of its value manifest.
+        output: ManifestDigest,
         /// How the process ended.
         status: Status,
     },
@@ -849,7 +854,7 @@ impl Receipt
     }
 
     /// A fresh [`Kind::Report`] in `tree` on `dispatch`, naming `content` by
-    /// its hash with `summary`.
+    /// its value manifest with `summary`.
     ///
     /// # Specification
     /// - ensures: the receipt names `tree`, records the report on `dispatch`,
@@ -865,7 +870,7 @@ impl Receipt
     pub fn report(
         tree: TreeId,
         dispatch: CommitId,
-        content: ContentHash,
+        content: ManifestDigest,
         summary: Summary,
     ) -> Result<Self, RandomError>
     {
@@ -939,7 +944,7 @@ impl Receipt
         dispatch: CommitId,
         judge: PeerKey,
         rubric: ContentHash,
-        transcript: ContentHash,
+        transcript: ManifestDigest,
         answers: Vec<(ContentHash, Ruling)>,
     ) -> Result<Self, RandomError>
     {
@@ -974,7 +979,7 @@ impl Receipt
         runner: PeerKey,
         playbook: ContentHash,
         step: StepId,
-        output: ContentHash,
+        output: ManifestDigest,
         status: Status,
     ) -> Result<Self, RandomError>
     {
@@ -1299,7 +1304,7 @@ impl CanonicalValue for Receipt
             } => {
                 sink.open(ConstructorTag::from(REPORT))?;
                 sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
-                sink.bytes(TokenBytes::from(content.digest().as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(content.as_ref()))?;
                 let summary: &str = summary.as_ref();
                 sink.bytes(TokenBytes::from(summary.as_bytes()))?;
             },
@@ -1323,7 +1328,7 @@ impl CanonicalValue for Receipt
                 sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
                 sink.bytes(TokenBytes::from(judge.peer_id().as_bytes().as_slice()))?;
                 sink.bytes(TokenBytes::from(rubric.digest().as_bytes().as_slice()))?;
-                sink.bytes(TokenBytes::from(transcript.digest().as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(transcript.as_ref()))?;
                 let count = u64::try_from(answers.len()).map_err(|_too_many| {
                     ValueError::ArithmeticOverflow {
                         quantity: ValueQuantity::TokenCount,
@@ -1348,7 +1353,7 @@ impl CanonicalValue for Receipt
                 sink.bytes(TokenBytes::from(runner.peer_id().as_bytes().as_slice()))?;
                 sink.bytes(TokenBytes::from(playbook.digest().as_bytes().as_slice()))?;
                 sink.bytes(TokenBytes::from(step.as_ref().as_bytes()))?;
-                sink.bytes(TokenBytes::from(output.digest().as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(output.as_ref()))?;
                 status.emit_tokens(sink)?;
             },
             | Kind::Graded {
@@ -1499,7 +1504,7 @@ impl CanonicalValue for Receipt
             },
             | REPORT => {
                 let dispatch = opened.commit(reader)?;
-                let content = opened.content(reader)?;
+                let content = opened.manifest(reader)?;
                 let summary = opened.summary(reader)?;
                 Kind::Report {
                     dispatch,
@@ -1520,7 +1525,7 @@ impl CanonicalValue for Receipt
                 let dispatch = opened.commit(reader)?;
                 let judge = opened.peer(reader)?;
                 let rubric = opened.content(reader)?;
-                let transcript = opened.content(reader)?;
+                let transcript = opened.manifest(reader)?;
                 let count = u64::from(reader.read_word()?);
                 let mut answers = Vec::new();
                 for _place in 0 .. count {
@@ -1541,7 +1546,7 @@ impl CanonicalValue for Receipt
                 let runner = opened.peer(reader)?;
                 let playbook = opened.content(reader)?;
                 let step = opened.step(reader)?;
-                let output = opened.content(reader)?;
+                let output = opened.manifest(reader)?;
                 let status = Status::decode_tokens(reader)?;
                 Kind::Verified {
                     dispatch,
@@ -2670,6 +2675,29 @@ impl Opened
         Ok(ContentHash::from(blake3::Hash::from_bytes(content)))
     }
 
+    /// Read the next record as the 32-byte identity of a value manifest in
+    /// this constructor.
+    ///
+    /// # Specification
+    /// - ensures: on success the manifest digest the bytes record spells.
+    /// - fails: this constructor's refusal ([`Opened::refused`]) for bytes of
+    ///   another length, and the reader's refusals for any other record or
+    ///   none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    fn manifest(
+        self,
+        reader: &mut TokenReader<'_>,
+    ) -> Result<ManifestDigest, ValueError>
+    {
+        let digest = <&[u8]>::from(reader.read_bytes()?);
+        let digest = <[u8; MANIFEST_DIGEST_LEN]>::try_from(digest)
+            .map_err(|_wrong_length| self.refused())?;
+        Ok(ManifestDigest::from(digest))
+    }
+
     /// Read the next record as a report's summary in this constructor.
     ///
     /// # Specification
@@ -2795,6 +2823,7 @@ mod tests
     use core::net::SocketAddr;
 
     use gandr_storage_values::ConstructorTag;
+    use gandr_storage_values::ManifestDigest;
     use gandr_storage_values::TokenKind;
     use gandr_storage_values::TokenOffset;
     use gandr_storage_values::ValueError;
@@ -2836,6 +2865,16 @@ mod tests
 
     /// A content hash whose bytes are all `0x0e`.
     const CONTENT: &str = "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e";
+
+    /// The evidence a report, a verdict and a verification name: the manifest
+    /// digest whose bytes are all `0x0e`.
+    ///
+    /// # Specification
+    /// trivial.
+    fn evidence() -> ManifestDigest
+    {
+        ManifestDigest::from([0x0e; 32])
+    }
 
     /// The tree the receipts name.
     ///
@@ -2895,7 +2934,13 @@ mod tests
         receipts.extend([
             Receipt::dispatch(tree(), peer, briefed).unwrap(),
             Receipt::dispatch(tree(), peer, Brief::Content(content)).unwrap(),
-            Receipt::report(tree(), dispatch, content, "done: größer".parse().unwrap()).unwrap(),
+            Receipt::report(
+                tree(),
+                dispatch,
+                evidence(),
+                "done: größer".parse().unwrap(),
+            )
+            .unwrap(),
             Receipt::handoff(tree(), dispatch, peer).unwrap(),
             Receipt::retire(tree(), dispatch).unwrap(),
         ]);
@@ -2925,7 +2970,7 @@ mod tests
         }
         for answered in [vec![], answers] {
             receipts.push(
-                Receipt::verdict(tree(), dispatch, peer, content, content, answered).unwrap(),
+                Receipt::verdict(tree(), dispatch, peer, content, evidence(), answered).unwrap(),
             );
         }
         let step = "build-and-test".parse::<StepId>().unwrap();
@@ -2941,7 +2986,7 @@ mod tests
                     peer,
                     content,
                     step.clone(),
-                    content,
+                    evidence(),
                     status,
                 )
                 .unwrap(),
@@ -3018,7 +3063,7 @@ mod tests
             text: String::from("hi"),
         });
         let mut expected = vec![0x01_u8, 0x01];
-        expected.extend_from_slice(&[0x02, 2, 0, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[0x02, 3, 0, 0, 0, 0, 0, 0, 0]);
         expected.extend_from_slice(&[0x03, 32, 0, 0, 0, 0, 0, 0, 0]);
         expected.extend_from_slice(tree().key().as_bytes());
         expected.extend_from_slice(&[0x03, 16, 0, 0, 0, 0, 0, 0, 0]);
@@ -3100,7 +3145,7 @@ mod tests
                 target,
             });
             let mut expected = vec![0x01_u8, 0x01];
-            expected.extend_from_slice(&[0x02, 2, 0, 0, 0, 0, 0, 0, 0]);
+            expected.extend_from_slice(&[0x02, 3, 0, 0, 0, 0, 0, 0, 0]);
             expected.extend(bytes(tree().key().as_bytes()));
             expected.extend(bytes(&[0x0f; 16]));
             expected.extend_from_slice(&[0x01, 0x04]);
@@ -3120,7 +3165,7 @@ mod tests
     {
         let header = || {
             let mut header = vec![0x01_u8, 0x01];
-            header.extend_from_slice(&[0x02, 2, 0, 0, 0, 0, 0, 0, 0]);
+            header.extend_from_slice(&[0x02, 3, 0, 0, 0, 0, 0, 0, 0]);
             header.extend_from_slice(&[0x03, 32, 0, 0, 0, 0, 0, 0, 0]);
             header.extend_from_slice(tree().key().as_bytes());
             header.extend_from_slice(&[0x03, 16, 0, 0, 0, 0, 0, 0, 0]);
@@ -3167,7 +3212,7 @@ mod tests
         let word = |value: u64| [&[0x02_u8][..], &value.to_le_bytes()].concat();
         let header = || {
             let mut header = vec![0x01_u8, 0x01];
-            header.extend(word(2));
+            header.extend(word(3));
             header.extend(bytes(tree().key().as_bytes()));
             header.extend(bytes(&[0x0f; 16]));
             header
@@ -3238,7 +3283,7 @@ mod tests
         };
         let header = [
             vec![0x01_u8, 0x01],
-            word(2),
+            word(3),
             bytes(tree().key().as_bytes()),
             bytes(&[0x0f; 16]),
         ]
@@ -3284,7 +3329,7 @@ mod tests
             (
                 Kind::Report {
                     dispatch,
-                    content,
+                    content: evidence(),
                     summary: "done".parse().unwrap(),
                 },
                 [
@@ -3294,7 +3339,7 @@ mod tests
                     bytes(b"done"),
                 ]
                 .concat(),
-                "open report, dispatch, content hash, summary",
+                "open report, dispatch, content manifest, summary",
             ),
             (
                 Kind::Handoff { dispatch, to: peer },
@@ -3347,7 +3392,7 @@ mod tests
         let note = |text: &[u8]| {
             vec![
                 open(1),
-                word(2),
+                word(3),
                 bytes(&tree),
                 bytes(&fence),
                 open(3),
@@ -3359,7 +3404,7 @@ mod tests
         let bind = |path: &[u8], target: Vec<Vec<u8>>| {
             let mut records = vec![
                 open(1),
-                word(2),
+                word(3),
                 bytes(&tree),
                 bytes(&fence),
                 open(4),
@@ -3380,7 +3425,7 @@ mod tests
         let claim = |domain: &[u8]| {
             vec![
                 open(1),
-                word(2),
+                word(3),
                 bytes(&tree),
                 bytes(&fence),
                 open(5),
@@ -3392,7 +3437,7 @@ mod tests
         let introduce = |introduced: &[u8], label: &[u8]| {
             vec![
                 open(1),
-                word(2),
+                word(3),
                 bytes(&tree),
                 bytes(&fence),
                 open(6),
@@ -3448,12 +3493,38 @@ mod tests
             Err(constructor(2, 0)),
             "a foreign receipt tag"
         );
-        let mut receipt = note(b"hi");
-        receipt[1] = word(1);
+        for earlier in [1, 2] {
+            let mut receipt = note(b"hi");
+            receipt[1] = word(earlier);
+            assert_eq!(
+                refused(&receipt),
+                Err(constructor(1, 0)),
+                "version {earlier}, before evidence was named by its manifest"
+            );
+        }
+        let report = |version: u64| {
+            vec![
+                open(1),
+                word(version),
+                bytes(&tree),
+                bytes(&fence),
+                open(0x0a),
+                bytes(&[0x0d; 32]),
+                bytes(&[0x0e; 32]),
+                bytes(b"done"),
+                close(),
+                close(),
+            ]
+        };
+        assert!(
+            refused(&report(3)).is_ok(),
+            "a report naming its content's manifest decodes"
+        );
         assert_eq!(
-            refused(&receipt),
+            refused(&report(2)),
             Err(constructor(1, 0)),
-            "the previous version"
+            "a version 2 report, whose 32 bytes hash the content itself, is refused by its \
+             version, never read as naming a manifest"
         );
         let mut receipt = note(b"hi");
         receipt[2] = bytes(&tree[.. 31]);
@@ -3639,7 +3710,7 @@ mod tests
             records
         };
         let present = |presented: Vec<Vec<u8>>, proof: &[u8]| {
-            let mut records = vec![open(1), word(2), bytes(&tree), bytes(&fence), open(7)];
+            let mut records = vec![open(1), word(3), bytes(&tree), bytes(&fence), open(7)];
             records.extend(presented);
             records.extend([bytes(proof), close(), close()]);
             records
@@ -3744,7 +3815,7 @@ mod tests
         assert_eq!(
             refused(&[
                 open(1),
-                word(2),
+                word(3),
                 bytes(&tree),
                 bytes(&fence),
                 open(8),
@@ -3756,7 +3827,7 @@ mod tests
             "a short withdrawn peer"
         );
         let seated = |tag: u8, payload: Vec<Vec<u8>>| {
-            let mut records = vec![open(1), word(2), bytes(&tree), bytes(&fence), open(tag)];
+            let mut records = vec![open(1), word(3), bytes(&tree), bytes(&fence), open(tag)];
             records.extend(payload);
             records.extend([close(), close()]);
             records
@@ -4158,7 +4229,7 @@ mod tests
         let hash = |byte: u8| ContentHash::from(blake3::Hash::from_bytes([byte; 32]));
         let header = [
             vec![0x01_u8, 0x01],
-            word(2),
+            word(3),
             bytes(tree().key().as_bytes()),
             bytes(&[0x0f; 16]),
         ]
@@ -4180,7 +4251,7 @@ mod tests
                 runner: peer,
                 playbook: hash(0x0e),
                 step: "b-1".parse().unwrap(),
-                output: hash(0x0c),
+                output: ManifestDigest::from([0x0c; 32]),
                 status,
             });
             let expected = [
@@ -4238,7 +4309,7 @@ mod tests
         let peer = PEER.parse::<PeerKey>().unwrap();
         let header = [
             vec![0x01_u8, 0x01],
-            vec![0x02, 2, 0, 0, 0, 0, 0, 0, 0],
+            vec![0x02, 3, 0, 0, 0, 0, 0, 0, 0],
             bytes(tree().key().as_bytes()),
             bytes(&[0x0f; 16]),
         ]
@@ -4326,7 +4397,7 @@ mod tests
             dispatch: CommitId::new([0x0d; 32]),
             judge: peer,
             rubric: hash(0x0e),
-            transcript: hash(0x0c),
+            transcript: ManifestDigest::from([0x0c; 32]),
             answers: vec![
                 (hash(0x0b), Ruling::Read(readout)),
                 (hash(0x0a), Ruling::Unread(Unread::NoLetter)),
@@ -4334,7 +4405,7 @@ mod tests
         });
         let expected = [
             vec![0x01_u8, 0x01],
-            word(2),
+            word(3),
             bytes(tree().key().as_bytes()),
             bytes(&[0x0f; 16]),
             vec![0x01, 0x0d],

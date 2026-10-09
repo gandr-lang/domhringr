@@ -1,11 +1,13 @@
 //! `verify` and `decide`: checking a reported change, and deciding on it.
 //!
-//! Both name the task's current dispatch and its change before they check
-//! anything, and record each check as the peer's `playbook run` and `rubric
-//! grade` do: a verification per verifier, a verdict and its grading per
-//! rubric, this peer the runner and the judge. `decide` then reads every
-//! check on the dispatch together — the rubrics it graded and the latest
-//! verification of each step — and records the operator's decision.
+//! Both name the task's current dispatch and its change, and read its report
+//! from the evidence store, before they check anything, and record each check
+//! as the peer's `playbook run` and `rubric grade` do: a verification per
+//! verifier, its output kept as evidence, and a verdict and its grading per
+//! rubric, its transcript kept as evidence, this peer the runner and the
+//! judge. `decide` then reads every check on the dispatch together — the
+//! rubrics it graded and the latest verification of each step — and records
+//! the operator's decision.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -18,6 +20,7 @@ use domhringr_judge_oracle::ChatCompletions;
 use domhringr_judge_oracle::Config;
 use domhringr_judge_oracle::Question;
 use domhringr_judge_oracle::Transcript;
+use domhringr_record_evidence::Evidence;
 use domhringr_record_tree::Code;
 use domhringr_record_tree::CommitId;
 use domhringr_record_tree::ContentHash;
@@ -48,24 +51,29 @@ use crate::report;
 
 /// Run the verifier steps of the playbook at `file` on the change `tree`'s
 /// current attempt reports, as `runner`, in a checkout of it from the
-/// repository at `repository`.
+/// repository at `repository`, the report read from and the outputs kept in
+/// `evidence`.
 ///
 /// # Specification
 /// - ensures: reads the playbook and its rubrics, then names the current
-///   dispatch and its change ([`change::reported`]) before running anything,
-///   and writes `change <branch> <commit>` and `playbook <hash> <name>`; checks
-///   the commit out ([`Checkout::new`]), runs each verifier step in order in
-///   the checkout on a blocking thread and commits its verification — `runner`,
-///   the playbook's hash, the step, the output's hash and the status — writing
-///   `verified <commit-id> <step> <output-hash> <status>`; then removes the
-///   checkout, whatever the steps did. Question steps are not asked.
+///   dispatch and its change ([`change::reported`]) and reads its report
+///   ([`change::announce`]) before running anything, writing `change <branch>
+///   <commit>`, `report <digest>` and `playbook <hash> <name>`; checks the
+///   commit out ([`Checkout::new`]), runs each verifier step in order in the
+///   checkout on a blocking thread, keeps its output in `evidence` and commits
+///   its verification — `runner`, the playbook's hash, the step, the output's
+///   digest and the status — writing `verified <commit-id> <step>
+///   <output-digest> <status>`; then removes the checkout, whatever the steps
+///   did. Question steps are not asked.
 /// - fails: [`RunError::Load`] as [`Plan::read`] refuses, [`RunError::View`]
-///   and as [`change::reported`], as [`Checkout::new`], [`RunError::Join`] when
-///   a verifier's thread fails, [`RunError::Verify`] when a verifier does not
-///   run to its end — the verifications before it stay committed —
-///   [`RunError::Random`] and [`RunError::Commit`] when a receipt cannot be
-///   committed, [`RunError::Output`] when standard output cannot be written,
-///   and as [`Checkout::remove`], a failure of the steps reported first.
+///   and as [`change::reported`] and [`change::announce`], as
+///   [`Checkout::new`], [`RunError::Join`] when a verifier's thread fails,
+///   [`RunError::Verify`] when a verifier does not run to its end and
+///   [`RunError::Evidence`] when its output cannot be kept — the verifications
+///   before it stay committed — [`RunError::Random`] and [`RunError::Commit`]
+///   when a receipt cannot be committed, [`RunError::Output`] when standard
+///   output cannot be written, and as [`Checkout::remove`], a failure of the
+///   steps reported first.
 /// - panics: none.
 ///
 /// # Errors
@@ -74,10 +82,12 @@ use crate::report;
 /// # Adequacy
 /// - hypothesis: L3 — the process tests verify two reported changes by a
 ///   verifier that passes only in a checkout of a change's own commit, read its
-///   line, find the checkout removed, and read the task verified.
+///   lines, find the checkout removed, read the report and the output in the
+///   operator's store by the digests printed, and read the task verified.
 /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 pub async fn verify(
     peer: &Peer,
+    evidence: &Evidence,
     runner: PeerKey,
     tree: TreeId,
     file: &Path,
@@ -86,25 +96,36 @@ pub async fn verify(
 {
     let plan = Plan::read(file)?;
     let view = peer.view(tree).await?;
-    let (dispatch, change) = change::reported(&view)?;
+    let reported = change::reported(&view)?;
+    change::announce(&reported, evidence)?;
     let playbook = plan.playbook();
     emit(&format_args!(
-        "change {change}\nplaybook {} {}\n",
+        "playbook {} {}\n",
         playbook.hash(),
         playbook.document().name()
     ))?;
-    let checkout = Checkout::new(repository, &change)?;
+    let checkout = Checkout::new(repository, &reported.change)?;
     let mut ran = Ok(());
     for step in playbook.document().steps() {
         let Bound::Verifier(ref verifier) = *step.bound()
         else {
             continue;
         };
-        let (verifier, directory) = (verifier.clone(), checkout.path().to_path_buf());
-        let run = match tokio::task::spawn_blocking(move || verifier.run(&directory)).await {
-            | Ok(Ok(run)) => run,
+        let (verifier, directory, keeping) = (
+            verifier.clone(),
+            checkout.path().to_path_buf(),
+            evidence.clone(),
+        );
+        let kept = tokio::task::spawn_blocking(move || -> Result<_, RunError> {
+            let run = verifier.run(&directory)?;
+            let output = keeping.commit(run.output())?;
+            Ok((output, run.status()))
+        })
+        .await;
+        let (output, status) = match kept {
+            | Ok(Ok(kept)) => kept,
             | Ok(Err(failure)) => {
-                ran = Err(RunError::Verify(failure));
+                ran = Err(failure);
                 break;
             },
             | Err(failure) => {
@@ -117,21 +138,19 @@ pub async fn verify(
             tree,
             Receipt::verified(
                 tree,
-                dispatch,
+                reported.dispatch,
                 runner,
                 playbook.hash(),
                 step.id().clone(),
-                run.output(),
-                run.status(),
+                output,
+                status,
             ),
         )
         .await
         .and_then(|commit| {
             emit(&format_args!(
-                "verified {commit} {} {} {}\n",
-                step.id(),
-                run.output(),
-                run.status()
+                "verified {commit} {} {output} {status}\n",
+                step.id()
             ))
         });
         if verified.is_err() {
@@ -163,12 +182,14 @@ async fn record(
     Ok(peer.commit(tree, receipt?).await?)
 }
 
-/// Where a decision is committed: the store, the operator and the task.
+/// Where a decision is committed: the stores, the operator and the task.
 #[derive(Clone, Copy)]
 pub struct Deciding<'store>
 {
-    /// The store.
+    /// The tree store.
     pub peer: &'store Peer,
+    /// The evidence store the report is read from and transcripts kept in.
+    pub evidence: &'store Evidence,
     /// This peer: the operator, and the judge of each verdict.
     pub operator: PeerKey,
     /// The task.
@@ -180,8 +201,9 @@ pub struct Deciding<'store>
 ///
 /// # Specification
 /// - ensures: reads every rubric, names the current dispatch and its change
-///   ([`change::reported`]) before asking anything, writes `change <branch>
-///   <commit>`, and writes the change into a temporary state directory
+///   ([`change::reported`]) and reads its report ([`change::announce`]) before
+///   asking anything, writing `change <branch> <commit>` and `report <digest>`,
+///   and writes the change into a temporary state directory
 ///   ([`change::state`]). Writes `step <id> <status>` for the latest
 ///   verification of each step on the dispatch, in step order, each met when it
 ///   exited 0 and unmet otherwise; grades each rubric in order over every
@@ -193,8 +215,9 @@ pub struct Deciding<'store>
 ///   operator and writes `decide <commit-id> <decision>`. Undecided or refused
 ///   commits nothing and ends in [`Completion::Undecided`].
 /// - fails: [`RunError::Load`] as [`Loaded::read`] refuses, [`RunError::View`]
-///   and as [`change::reported`], as [`change::state`], as [`grade`], and
-///   [`RunError::Random`], [`RunError::Commit`] and [`RunError::Output`].
+///   and as [`change::reported`] and [`change::announce`], as
+///   [`change::state`], as [`grade`], and [`RunError::Random`],
+///   [`RunError::Commit`] and [`RunError::Output`].
 /// - panics: none.
 ///
 /// # Errors
@@ -219,8 +242,9 @@ pub async fn decide(
         .map(|file| Loaded::<Rubric>::read(file))
         .collect::<Result<Vec<_>, _>>()?;
     let view = on.peer.view(on.tree).await?;
-    let (dispatch, change) = change::reported(&view)?;
-    emit(&format_args!("change {change}\n"))?;
+    let reported = change::reported(&view)?;
+    change::announce(&reported, on.evidence)?;
+    let (dispatch, change) = (reported.dispatch, reported.change);
     let state = change::state(repository, &change)?;
     let mut grades = Vec::new();
     let mut failure = None;
@@ -313,17 +337,19 @@ struct Graded
 /// them, and commit the grading, as `on` names.
 ///
 /// # Specification
-/// - ensures: writes `rubric <hash> <name>` and `transcript <hash>`; asks each
-///   question in the names' order as [`rulings`] asks, writing each ruling's
-///   line; commits the verdict of `on`'s operator, the judge, on `dispatch` —
-///   the rubric's hash, the transcript's and each question's with its ruling —
+/// - ensures: writes `rubric <hash> <name>` and `transcript <digest>`; asks
+///   each question in the names' order as [`rulings`] asks, writing each
+///   ruling's line; keeps the transcript in `on`'s evidence store and commits
+///   the verdict of `on`'s operator, the judge, on `dispatch` — the rubric's
+///   hash, the transcript's digest and each question's hash with its ruling —
 ///   and writes `verdict <commit-id>`; grades each ruling against the rubric's
 ///   band, writing `grade <question-hash> <grade>` per question; commits the
 ///   grading of that verdict and writes `graded <commit-id> <composed>`.
-/// - fails: [`RunError::State`] when a state file cannot be read, as
-///   [`rulings`] fails, [`RunError::Random`] and [`RunError::Commit`] when a
-///   receipt cannot be committed, and [`RunError::Output`] when standard output
-///   cannot be written.
+/// - fails: [`RunError::State`] when a state file cannot be read or the
+///   transcript cannot be staged, [`RunError::Evidence`] when it cannot be
+///   kept, as [`rulings`] fails, [`RunError::Random`] and [`RunError::Commit`]
+///   when a receipt cannot be committed, and [`RunError::Output`] when standard
+///   output cannot be written.
 /// - panics: none.
 ///
 /// # Errors
@@ -347,7 +373,7 @@ async fn grade(
         rubric.document().name()
     ))?;
     let transcript = rubric.document().transcript(directory)?;
-    emit(&format_args!("transcript {}\n", transcript.hash()))?;
+    emit(&format_args!("transcript {}\n", transcript.digest()))?;
     let (names, questions): (Vec<_>, Vec<_>) = rubric
         .document()
         .questions()
@@ -372,12 +398,13 @@ async fn grade(
         .map_or(Unmet::Nothing, |(name, _grade)| {
             Unmet::Question(name.to_string())
         });
+    on.evidence.keep(transcript.staged())?;
     let verdict = Receipt::verdict(
         on.tree,
         dispatch,
         on.operator,
         rubric.hash(),
-        transcript.hash(),
+        transcript.digest(),
         answers,
     );
     let verdict = record(on.peer, on.tree, verdict).await?;

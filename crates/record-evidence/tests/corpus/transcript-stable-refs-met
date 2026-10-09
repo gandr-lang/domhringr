@@ -1,0 +1,19 @@
+<state name="change.diff">
+diff --git a/crates/strategy-document/README.md b/crates/strategy-document/README.md
+--- a/crates/strategy-document/README.md
++++ b/crates/strategy-document/README.md
+@@ -164,3 +164,5 @@
+ **A ruling is graded by the probability on its true criterion against the band.** At or above `high` it is `met`, at or below `low` `unmet`, strictly between `undecided`; an unread ruling is `refused`.
+ 
+ **A rubric's grades compose as the conjunction of its criteria.** Any `unmet` makes the composition `unmet`; otherwise any `refused` makes it `refused`; otherwise any `undecided` makes it `undecided`; otherwise it is `met`, as is an empty composition.
++
++The conjunction is the strong three-valued one of S. C. Kleene, _Introduction to Metamathematics_, North-Holland, 1952, ISBN 978-0-7204-2103-3, § 64, with refusal placed between failure and indecision. The band it reads is the one [Rubrics](#rubrics) states, and the grader that composes it landed in commit 712b1aacbd1342b61f48362ce64b00785de1db1d.
+</state>
+<state name="commits.txt">
+commit 3f2a9c4d7e1b8a6f5c0d2e4b9a7c1f3e5d8b6a20
+
+docs(strategy): cite the conjunction a rubric's grades compose by
+
+The composition section names the logic it follows and where the
+grader that implements it landed, so a reader can check both.
+</state>

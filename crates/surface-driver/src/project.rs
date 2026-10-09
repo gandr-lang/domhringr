@@ -12,6 +12,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::str::FromStr;
 
+use domhringr_record_evidence::Evidence;
 use domhringr_record_tree::Aim;
 use domhringr_record_tree::Anchor;
 use domhringr_record_tree::Answer;
@@ -38,8 +39,10 @@ use domhringr_record_tree::TreeKey;
 use domhringr_record_tree::View;
 use domhringr_record_tree::ViewError;
 use domhringr_seat_slot::Wake;
+use gandr_storage_values::ManifestDigest;
 
 use crate::RunError;
+use crate::change;
 use crate::emit;
 use crate::report;
 
@@ -219,7 +222,7 @@ enum Found
 /// - hypothesis: L3 — the process tests verify, decide and land tasks by name
 ///   after a dispatch bound them.
 /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
-pub async fn task(
+async fn task(
     peer: &Peer,
     project: TreeId,
     task: &TaskName,
@@ -519,44 +522,170 @@ impl Store
     }
 }
 
-/// The store, holding `tree`'s current report: synced from the task's seat
-/// first when the attempt awaits one.
+/// Whose report's content the evidence store lacks.
+enum Unheld
+{
+    /// The current attempt's report names content not held whole.
+    Report
+    {
+        /// The seat that reported, which holds the content.
+        author: PeerKey,
+        /// The content.
+        content: ManifestDigest,
+    },
+    /// Nothing to fetch: the store holds the content whole, or the task has
+    /// no report on its current dispatch to act on.
+    Nothing,
+}
+
+/// Whose report's content on the task `tree` `evidence` lacks, as the local
+/// store folds it.
 ///
 /// # Specification
-/// - ensures: when the current dispatch's seat holds the slot without a report,
-///   binds an ephemeral endpoint and syncs the task from that seat
-///   ([`catch_up`]), returning the store bound; otherwise returns it alone.
-/// - fails: [`RunError::View`] when the task cannot be folded,
-///   [`RunError::Bind`] when the endpoint cannot bind, and as [`catch_up`], the
-///   endpoint closed first.
+/// trivial.
+async fn unheld(
+    peer: &Peer,
+    tree: TreeId,
+    evidence: &Evidence,
+) -> Result<Unheld, RunError>
+{
+    let view = match peer.view(tree).await {
+        | Ok(view) => view,
+        | Err(ViewError::Unopened(_)) => return Ok(Unheld::Nothing),
+        | Err(failure) => return Err(RunError::View(failure)),
+    };
+    Ok(match change::reported(&view) {
+        | Ok(reported) if evidence.read(reported.content).is_err() => Unheld::Report {
+            author: reported.author,
+            content: reported.content,
+        },
+        | Ok(_) | Err(_) => Unheld::Nothing,
+    })
+}
+
+/// Fetch the report `content` of the task `tree` of `project` from its
+/// `author` over `node`, into `evidence`.
+///
+/// # Specification
+/// - ensures: reaches the author as [`reach`] does, through the books, and
+///   fetches the content ([`domhringr_record_evidence::fetch`]): every chunk of
+///   its closure checked and the value kept before this returns.
+/// - fails: [`RunError::Reach`] as [`reach`] fails, and [`RunError::Fetch`] as
+///   the fetch refuses.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError`]: as listed above.
+async fn fetch(
+    node: &Node,
+    project: TreeId,
+    tree: TreeId,
+    (author, content): (PeerKey, ManifestDigest),
+    evidence: &Evidence,
+) -> Result<(), RunError>
+{
+    let remote = reach(node.peer(), project, tree, author, At::Book).await?;
+    let _content =
+        domhringr_record_evidence::fetch(node, remote.endpoint(), content, evidence).await?;
+    Ok(())
+}
+
+/// The task `name` names in `project`, and the store holding its current
+/// report and the report's content: the task synced from its seat first
+/// when the attempt awaits a report, and the content fetched from the
+/// report's author when `evidence` lacks it.
+///
+/// # Specification
+/// - ensures: names the task's tree as [`task`] does. When the current
+///   dispatch's seat holds the slot without a report, binds an ephemeral
+///   endpoint and syncs the task from that seat ([`catch_up`]). Then, when the
+///   current attempt's report names content `evidence` does not hold whole,
+///   binds an ephemeral endpoint unless bound and fetches the content from the
+///   report's author ([`fetch`]). Returns the tree, and the store bound when it
+///   dialed and alone otherwise; a task with no report on its current dispatch
+///   to act on is returned as it stands, for the command to refuse.
+/// - fails: as [`task`], [`RunError::View`] when the task cannot be folded,
+///   [`RunError::Bind`] when the endpoint cannot bind, and as [`catch_up`] and
+///   [`fetch`], the endpoint closed first.
 /// - panics: none.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — the process tests verify a change the operator learns of
-///   only by this sync, the seat having reported after its wake.
+/// - hypothesis: L3 — the process tests verify, decide and land tasks by name
+///   after a dispatch bound them; verify a change the operator learns of only
+///   by this sync, the seat having reported after its wake; and verify and
+///   decide changes whose reports the operator holds only by this fetch, the
+///   listing having synced the reports alone.
 /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
+/// - witness: `operator::tests::a_refused_merge_commits_nothing`
 pub async fn caught_up(
     peer: Peer,
     project: TreeId,
+    name: &TaskName,
+    evidence: &Evidence,
+) -> Result<(TreeId, Store), RunError>
+{
+    let tree = task(&peer, project, name).await?;
+    let awaiting = awaited(&peer, tree).await?;
+    let store = match awaiting {
+        | Awaiting::Nothing => Store::Local(peer),
+        | Awaiting::Seat(seat) => {
+            let node = peer.bind(BindPort::Ephemeral, &[]).await?;
+            if let Err(failure) = catch_up(&node, project, tree, seat).await {
+                node.close().await;
+                drop(node);
+                return Err(RunError::Reach(failure));
+            }
+            Store::Bound(node)
+        },
+    };
+    holding(store, project, tree, evidence)
+        .await
+        .map(|store| (tree, store))
+}
+
+/// `store`, holding the content of the report on `tree`'s current dispatch:
+/// fetched from the report's author when `evidence` lacks it.
+///
+/// # Specification
+/// - ensures: when the current attempt's report names content `evidence` does
+///   not hold whole ([`unheld`]), binds an ephemeral endpoint unless bound and
+///   fetches the content from the report's author ([`fetch`]), returning the
+///   store bound; otherwise returns `store` as it was.
+/// - fails: [`RunError::View`] when the task cannot be folded,
+///   [`RunError::Bind`] when the endpoint cannot bind, and as [`fetch`], the
+///   endpoint closed first.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError`]: as listed above.
+async fn holding(
+    store: Store,
+    project: TreeId,
     tree: TreeId,
+    evidence: &Evidence,
 ) -> Result<Store, RunError>
 {
-    let Awaiting::Seat(seat) = awaited(&peer, tree).await?
-    else {
-        return Ok(Store::Local(peer));
-    };
-    let node = peer.bind(BindPort::Ephemeral, &[]).await?;
-    match catch_up(&node, project, tree, seat).await {
-        | Ok(()) => Ok(Store::Bound(node)),
+    let lacking = match unheld(store.peer(), tree, evidence).await {
+        | Ok(Unheld::Report { author, content }) => (author, content),
+        | Ok(Unheld::Nothing) => return Ok(store),
         | Err(failure) => {
-            node.close().await;
-            drop(node);
-            Err(RunError::Reach(failure))
+            store.close().await;
+            return Err(failure);
         },
+    };
+    let node = match store {
+        | Store::Local(peer) => peer.bind(BindPort::Ephemeral, &[]).await?,
+        | Store::Bound(node) => node,
+    };
+    if let Err(failure) = fetch(&node, project, tree, lacking, evidence).await {
+        node.close().await;
+        drop(node);
+        return Err(failure);
     }
+    Ok(Store::Bound(node))
 }
 
 /// List the seats and the tasks of `project`, as `operator`.

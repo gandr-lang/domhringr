@@ -4,13 +4,15 @@
 //! A backend answers with a readout or a [`Refusal`] naming why it read none;
 //! the refusal's [`Refusal::reason`] is what a verdict records, so an
 //! unanswered question is recorded as unread for that reason and never as a
-//! default letter. [`Static`] answers from a table keyed by the question's and
-//! the transcript's hashes: a fixed backend for tests, and the replay of
-//! rulings already recorded.
+//! default letter. [`Static`] answers from a table keyed by the question's
+//! hash and the transcript's manifest: a fixed backend for tests, and the
+//! replay of rulings already recorded.
 
 use core::str::FromStr;
 use std::collections::HashMap;
 
+use domhringr_record_evidence::ParseDigestError;
+use domhringr_record_evidence::ParsedDigest;
 use domhringr_record_tree::ContentHash;
 use domhringr_record_tree::ParseIdError;
 use domhringr_record_tree::ParseRulingError;
@@ -18,6 +20,7 @@ use domhringr_record_tree::Probability;
 use domhringr_record_tree::Readout;
 use domhringr_record_tree::Ruling;
 use domhringr_record_tree::Unread;
+use gandr_storage_values::ManifestDigest;
 
 use crate::question::Question;
 use crate::question::TextError;
@@ -157,19 +160,19 @@ pub enum MalformedError
     Unlisted,
 }
 
-/// A backend answering from a table: the ruling for each question about each
-/// transcript, by their hashes.
+/// A backend answering from a table: the ruling for each question, by its
+/// hash, about each transcript, by its manifest.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct Static(HashMap<(ContentHash, ContentHash), Ruling>);
+pub struct Static(HashMap<(ContentHash, ManifestDigest), Ruling>);
 
-impl FromIterator<(ContentHash, ContentHash, Ruling)> for Static
+impl FromIterator<(ContentHash, ManifestDigest, Ruling)> for Static
 {
-    /// A table holding each triple's ruling for its question, the first hash,
-    /// about its transcript, the second.
+    /// A table holding each triple's ruling for its question, the hash,
+    /// about its transcript, the manifest digest.
     ///
     /// # Specification
-    /// - ensures: a pair of hashes holds the ruling of the last triple naming
+    /// - ensures: a pair of names holds the ruling of the last triple naming
     ///   it, and a pair no triple names holds none.
     /// - panics: none.
     ///
@@ -180,7 +183,7 @@ impl FromIterator<(ContentHash, ContentHash, Ruling)> for Static
     #[inline]
     fn from_iter<Triples>(iter: Triples) -> Self
     where
-        Triples: IntoIterator<Item = (ContentHash, ContentHash, Ruling)>,
+        Triples: IntoIterator<Item = (ContentHash, ManifestDigest, Ruling)>,
     {
         Self(
             iter.into_iter()
@@ -195,16 +198,18 @@ impl FromStr for Static
     type Err = ParseTableError;
 
     /// Read a table from its text: one ruling a line, `<question>
-    /// <transcript> <ruling>`, the hashes as 64 hex digits and the ruling as
-    /// [`Ruling`] writes it.
+    /// <transcript> <ruling>`, the question's hash and the transcript's
+    /// manifest digest as 64 hex digits each and the ruling as [`Ruling`]
+    /// writes it.
     ///
     /// # Specification
     /// - ensures: every line that is not empty contributes its triple, a later
     ///   line naming the same pair replacing an earlier one.
     /// - fails: [`ParseTableError::Form`] for a line of fewer than three
-    ///   fields, [`ParseTableError::Hash`] for a field that is no hash, and
-    ///   [`ParseTableError::Ruling`] for a ruling that does not read, each
-    ///   naming its line from one.
+    ///   fields, [`ParseTableError::Hash`] for a question that is no hash,
+    ///   [`ParseTableError::Transcript`] for a transcript that is no manifest
+    ///   digest, and [`ParseTableError::Ruling`] for a ruling that does not
+    ///   read, each naming its line from one.
     /// - panics: none.
     ///
     /// # Errors
@@ -213,8 +218,8 @@ impl FromStr for Static
     /// # Adequacy
     /// - hypothesis: L3 — a table of a read ruling, an unread one, a blank line
     ///   and a replaced pair answers each recorded pair and refuses an
-    ///   unrecorded one; a short line, a bad hash and a bad ruling each meet
-    ///   their own refusal at their line.
+    ///   unrecorded one; a short line, a bad hash, a bad digest and a bad
+    ///   ruling each meet their own refusal at their line.
     /// - witness: `backend::tests::a_table_answers_what_it_records`
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
@@ -230,13 +235,13 @@ impl FromStr for Static
             else {
                 return Err(ParseTableError::Form { line });
             };
-            let hash = |field: &str| {
-                field
-                    .parse::<ContentHash>()
-                    .map_err(|source| ParseTableError::Hash { line, source })
-            };
-            let question = hash(question)?;
-            let transcript = hash(transcript)?;
+            let question = question
+                .parse::<ContentHash>()
+                .map_err(|source| ParseTableError::Hash { line, source })?;
+            let transcript = transcript
+                .parse::<ParsedDigest>()
+                .map_err(|source| ParseTableError::Transcript { line, source })?;
+            let transcript = ManifestDigest::from(transcript);
             let ruling = ruling
                 .parse::<Ruling>()
                 .map_err(|source| ParseTableError::Ruling { line, source })?;
@@ -251,10 +256,10 @@ impl Backend for Static
     /// The table's ruling for `question` about `transcript`.
     ///
     /// # Specification
-    /// - ensures: the readout the table records for the pair of hashes.
+    /// - ensures: the readout the table records for the pair of names.
     /// - fails: [`Refusal::Recorded`] with the reason the table records for an
     ///   unread pair, and [`MalformedError::Unlisted`] for a pair the table
-    ///   does not hold; the transcript's content is never read.
+    ///   does not hold; the transcript's text is never read.
     /// - panics: none.
     ///
     /// # Errors
@@ -262,7 +267,7 @@ impl Backend for Static
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a read pair, an unread pair and an unlisted pair are
-    ///   asked about a transcript named alone, each meeting its own outcome.
+    ///   asked about a transcript, each meeting its own outcome.
     /// - witness: `backend::tests::a_table_answers_what_it_records`
     #[inline]
     fn ask(
@@ -271,7 +276,7 @@ impl Backend for Static
         transcript: &Transcript,
     ) -> impl Future<Output = Result<Readout, Refusal>> + Send
     {
-        let answered = match self.0.get(&(question.hash(), transcript.hash())) {
+        let answered = match self.0.get(&(question.hash(), transcript.digest())) {
             | Some(&Ruling::Read(ref readout)) => Ok(readout.clone()),
             | Some(&Ruling::Unread(reason)) => Err(Refusal::Recorded(reason)),
             | None => Err(Refusal::Malformed(MalformedError::Unlisted)),
@@ -291,8 +296,8 @@ pub enum ParseTableError
         /// The line, counted from one.
         line: usize,
     },
-    /// A field is not a hash.
-    #[error("line {line}: cannot read the hash")]
+    /// A question is not a hash.
+    #[error("line {line}: cannot read the question's hash")]
     Hash
     {
         /// The line, counted from one.
@@ -300,6 +305,16 @@ pub enum ParseTableError
         /// Why the field is no hash.
         #[source]
         source: ParseIdError,
+    },
+    /// A transcript is not a manifest digest.
+    #[error("line {line}: cannot read the transcript's manifest digest")]
+    Transcript
+    {
+        /// The line, counted from one.
+        line: usize,
+        /// Why the field is no digest.
+        #[source]
+        source: ParseDigestError,
     },
     /// The ruling does not read.
     #[error("line {line}: cannot read the ruling")]
@@ -330,7 +345,6 @@ mod tests
     use super::Refusal;
     use super::Static;
     use crate::question::Question;
-    use crate::question::TextError;
     use crate::question::Transcript;
 
     #[test]
@@ -344,14 +358,13 @@ mod tests
             .unwrap()
         };
         let (read, unread, unlisted) = (ask("that"), ask("neither"), ask("both"));
-        let transcript =
-            Transcript::named(Transcript::held(Content::from(b"text".to_vec())).hash());
+        let transcript = Transcript::held(Content::from(b"text".to_vec())).unwrap();
         let table = format!(
             "{q} {t} read A A=0.75 B=0.25 outside=0\n\n{q} {t} read B A=0.25 B=0.75 \
              outside=0.5\n{u} {t} unread tied\n",
             q = read.hash(),
             u = unread.hash(),
-            t = transcript.hash(),
+            t = transcript.digest(),
         );
         let table = table.parse::<Static>().unwrap();
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -387,10 +400,17 @@ mod tests
         );
         assert!(
             matches!(
-                format!("{hash} 0e unread tied").parse::<Static>(),
+                format!("0e {hash} unread tied").parse::<Static>(),
                 Err(ParseTableError::Hash { line: 1, .. })
             ),
-            "a transcript that is no hash"
+            "a question that is no hash"
+        );
+        assert!(
+            matches!(
+                format!("{hash} 0e unread tied").parse::<Static>(),
+                Err(ParseTableError::Transcript { line: 1, .. })
+            ),
+            "a transcript that is no manifest digest"
         );
         assert!(
             matches!(
@@ -408,6 +428,10 @@ mod tests
     fn each_refusal_records_its_reason()
     {
         let probability = Probability::try_from(0.5_f64).unwrap();
+        let binary = Transcript::held(Content::from(vec![0xff]))
+            .unwrap()
+            .text()
+            .unwrap_err();
         for (refusal, reason) in [
             (Refusal::NoLetter, Unread::NoLetter),
             (
@@ -420,7 +444,7 @@ mod tests
             (Refusal::Tied, Unread::Tied),
             (Refusal::Endpoint(EndpointError::Logprob), Unread::Endpoint),
             (
-                Refusal::Malformed(MalformedError::Text(TextError::Unheld)),
+                Refusal::Malformed(MalformedError::Text(binary)),
                 Unread::Malformed,
             ),
             (Refusal::Recorded(Unread::Outside), Unread::Outside),

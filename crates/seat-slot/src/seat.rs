@@ -1,17 +1,19 @@
 //! The seat: a node serving wakes, acting on the dispatches it holds through
-//! a command surface, and reporting.
+//! a command surface, reporting, and answering fetches of its evidence.
 //!
-//! [`serve`] accepts on a node bound with [`PROTOCOL`]: a linked peer is
-//! announced, and each wake is answered on a task of its own. Answering pulls
-//! the task from the operator, folds it, and replies woken only when the
-//! wake's dispatch is the task's current attempt and this seat holds its
-//! slot; the seat presents itself in the task first when the task's book
-//! lacks it, so the operator reaches it through the book from then on. A
-//! woken dispatch not yet reported on is acted on: the surface's program runs
-//! with the brief, and its standard output becomes the report — the content
-//! by its BLAKE3 hash, the first line as the summary. On start the seat
-//! resumes every dispatch it holds unreported in the trees its store holds,
-//! so a seat restarted mid-work finishes it.
+//! [`serve`] accepts on a node bound with [`PROTOCOL`] and the evidence
+//! protocol ([`domhringr_record_evidence::PROTOCOL`]): a linked peer is
+//! announced, each wake is answered on a task of its own, and each fetch is
+//! answered from the seat's evidence store. Answering a wake pulls the task
+//! from the operator, folds it, and replies woken only when the wake's
+//! dispatch is the task's current attempt and this seat holds its slot; the
+//! seat presents itself in the task first when the task's book lacks it, so
+//! the operator reaches it through the book from then on. A woken dispatch
+//! not yet reported on is acted on: the surface's program runs with the
+//! brief, and its standard output becomes the report — committed to the
+//! evidence store and named by its value manifest, the first line as the
+//! summary. On start the seat resumes every dispatch it holds unreported in
+//! the trees its store holds, so a seat restarted mid-work finishes it.
 
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
@@ -20,6 +22,10 @@ use std::process::Command;
 use std::process::ExitStatus;
 use std::process::Stdio;
 
+use domhringr_record_evidence::Evidence;
+use domhringr_record_evidence::EvidenceError;
+use domhringr_record_evidence::ServeError;
+use domhringr_record_evidence::Served;
 use domhringr_record_tree::AcceptError;
 use domhringr_record_tree::Accepted;
 use domhringr_record_tree::Anchor;
@@ -29,7 +35,6 @@ use domhringr_record_tree::Brief;
 use domhringr_record_tree::CommitError;
 use domhringr_record_tree::CommitId;
 use domhringr_record_tree::Content;
-use domhringr_record_tree::ContentHash;
 use domhringr_record_tree::Current;
 use domhringr_record_tree::Incoming;
 use domhringr_record_tree::Node;
@@ -106,6 +111,10 @@ pub enum Event
         /// The report's commit.
         report: CommitId,
     },
+    /// The seat answered a fetch of its evidence, as this says.
+    Served(Served),
+    /// A fetch's stream failed before its answer was written.
+    Unserved(ServeError),
     /// The seat acted on `dispatch` in `tree` and committed no report.
     Unreported
     {
@@ -130,6 +139,8 @@ struct Seat
     node: Arc<Node>,
     /// What the seat acts through.
     surface: Surface,
+    /// Where the seat's reports are kept and fetches answered from.
+    evidence: Evidence,
     /// The dispatches being acted on now, so a wake during an act starts no
     /// second one.
     acting: Mutex<BTreeSet<CommitId>>,
@@ -137,24 +148,27 @@ struct Seat
     events: mpsc::UnboundedSender<Event>,
 }
 
-/// Serve wakes on `node` as a seat acting through `surface`, and resume the
-/// dispatches it holds.
+/// Serve wakes and fetches on `node` as a seat acting through `surface` and
+/// keeping its reports in `evidence`, and resume the dispatches it holds.
 ///
 /// # Specification
 /// - requires: called within a Tokio runtime; `node` was bound with
-///   [`PROTOCOL`] among its protocols.
+///   [`PROTOCOL`] and [`domhringr_record_evidence::PROTOCOL`] among its
+///   protocols.
 /// - ensures: returns at once with the receiver of the seat's events, the
 ///   serving running on tasks of its own. Each accepted link is an
 ///   [`Event::Accepted`] and each refused connection an [`Event::Unaccepted`];
-///   each wake is answered as [`answer`] states; every dispatch whose slot this
-///   seat holds, unreported, in a tree its store holds is acted on as [`act`]
-///   states. Once the endpoint closes the last event is [`Event::Closed`].
+///   each wake is answered as [`answer`] states and each fetch as [`give`]
+///   states; every dispatch whose slot this seat holds, unreported, in a tree
+///   its store holds is acted on as [`act`] states. Once the endpoint closes
+///   the last event is [`Event::Closed`].
 /// - panics: none.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — an operator wakes a seat serving in-process: the seat
 ///   announces the link, replies woken, presents itself, acts through a program
-///   and reports; a wake to a dispatch it no longer holds is declined; a seat
+///   and reports, and the operator fetches the report's content from the seat
+///   by its name; a wake to a dispatch it no longer holds is declined; a seat
 ///   started over a store that holds a dispatch to it, unreported, acts on it
 ///   and reports unwoken.
 /// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
@@ -164,12 +178,14 @@ struct Seat
 pub fn serve(
     node: Arc<Node>,
     surface: Surface,
+    evidence: Evidence,
 ) -> mpsc::UnboundedReceiver<Event>
 {
     let (events, heard) = mpsc::unbounded_channel();
     let seat = Arc::new(Seat {
         node,
         surface,
+        evidence,
         acting: Mutex::new(BTreeSet::new()),
         events,
     });
@@ -182,8 +198,8 @@ pub fn serve(
 /// task of its own.
 ///
 /// # Specification
-/// - ensures: as [`serve`] states for links, refusals and wakes; a connection
-///   under another protocol the node accepts is closed and told as
+/// - ensures: as [`serve`] states for links, refusals, wakes and fetches; a
+///   connection under another protocol the node accepts is closed and told as
 ///   [`AcceptError::Protocol`]. Ends after telling [`Event::Closed`].
 /// - panics: none.
 async fn accept(seat: Arc<Seat>)
@@ -196,6 +212,12 @@ async fn accept(seat: Arc<Seat>)
                 connection,
             }) if protocol == PROTOCOL => {
                 drop(tokio::spawn(answer(Arc::clone(&seat), connection)));
+            },
+            | Ok(Incoming::Protocol {
+                protocol,
+                connection,
+            }) if protocol == domhringr_record_evidence::PROTOCOL => {
+                drop(tokio::spawn(give(Arc::clone(&seat), connection)));
             },
             | Ok(Incoming::Protocol { connection, .. }) => {
                 connection.close(iroh::endpoint::VarInt::from_u32(0), b"unknown protocol");
@@ -243,6 +265,24 @@ async fn answer(
     }
 }
 
+/// Answer the fetch `connection` carries from the seat's evidence store.
+///
+/// # Specification
+/// - ensures: answers as [`domhringr_record_evidence::answer`] states, then
+///   tells [`Event::Served`] with what was sent, or [`Event::Unserved`] when
+///   the stream failed.
+/// - panics: none.
+async fn give(
+    seat: Arc<Seat>,
+    connection: iroh::endpoint::Connection,
+)
+{
+    match domhringr_record_evidence::answer(&seat.evidence, connection).await {
+        | Ok(served) => seat.tell(Event::Served(served)),
+        | Err(failure) => seat.tell(Event::Unserved(failure)),
+    }
+}
+
 /// Resume every dispatch this seat holds unreported in the trees its store
 /// holds.
 ///
@@ -287,10 +327,11 @@ async fn resume(seat: Arc<Seat>)
 /// - ensures: with [`Surface::Hold`], nothing. With [`Surface::Program`], when
 ///   no act on the same dispatch is running, runs the program as
 ///   [`Surface::Program`] states and, when it exits 0 with a first line
-///   [`Summary`] admits, commits a report on the dispatch: the BLAKE3 hash of
-///   its whole standard output, and that line. Tells [`Event::Reported`] with
-///   the report's commit, or [`Event::Unreported`] with why none was committed;
-///   the slot stays held either way.
+///   [`Summary`] admits, commits its whole standard output to the seat's
+///   evidence store and a report on the dispatch naming it by its manifest,
+///   with that line. Tells [`Event::Reported`] with the report's commit, or
+///   [`Event::Unreported`] with why none was committed; the slot stays held
+///   either way.
 /// - panics: none.
 async fn act(
     seat: Arc<Seat>,
@@ -432,8 +473,8 @@ impl Seat
         Ok((tree, attempt.clone()))
     }
 
-    /// Run `program` on `attempt`'s brief and commit its output as the
-    /// report.
+    /// Run `program` on `attempt`'s brief, keep its output as evidence and
+    /// commit the report naming it.
     ///
     /// # Specification
     /// - ensures: as [`act`] states for one run: on success the report is
@@ -442,6 +483,7 @@ impl Seat
     ///   [`ActError::Spawn`] when the program cannot run, [`ActError::Exit`]
     ///   when it exits other than 0, [`ActError::Text`] and
     ///   [`ActError::Summary`] when its first line is no summary,
+    ///   [`ActError::Evidence`] when its output cannot be kept,
     ///   [`ActError::Random`] when no fence can be drawn, and
     ///   [`ActError::Commit`] when the report cannot be committed.
     /// - panics: none.
@@ -486,7 +528,11 @@ impl Seat
             .map_err(|_not_utf8| ActError::Text)?
             .parse::<Summary>()
             .map_err(ActError::Summary)?;
-        let content = ContentHash::of(&Content::from(output.stdout));
+        let output = Content::from(output.stdout);
+        let evidence = self.evidence.clone();
+        let content = tokio::task::spawn_blocking(move || evidence.commit(&output))
+            .await
+            .map_err(ActError::Join)??;
         let receipt = Receipt::report(tree, dispatch, content, summary)?;
         Ok(self.node.peer().commit(tree, receipt).await?)
     }
@@ -574,6 +620,9 @@ pub enum ActError
     /// The program's first line is no summary.
     #[error("the surface's first line is no summary")]
     Summary(#[source] ParseSummaryError),
+    /// The program's output cannot be kept as evidence.
+    #[error(transparent)]
+    Evidence(#[from] EvidenceError),
     /// No operation fence can be drawn for the report.
     #[error(transparent)]
     Random(#[from] RandomError),
@@ -608,6 +657,10 @@ mod tests
     use core::time::Duration;
     use std::path::PathBuf;
 
+    use domhringr_record_evidence::Evidence;
+    use domhringr_record_evidence::Served;
+    use domhringr_record_evidence::Staged;
+    use domhringr_record_evidence::fetch;
     use domhringr_record_tree::Anchor;
     use domhringr_record_tree::Answer;
     use domhringr_record_tree::Authority;
@@ -695,15 +748,22 @@ mod tests
             let seat = Arc::new(
                 Peer::open(&seat_state, identity)
                     .unwrap()
-                    .bind(BindPort::Fixed(port), &[PROTOCOL])
+                    .bind(BindPort::Fixed(port), &[
+                        PROTOCOL,
+                        domhringr_record_evidence::PROTOCOL,
+                    ])
                     .await
                     .unwrap(),
             );
-            let mut events = serve(Arc::clone(&seat), Surface::Program(PathBuf::from("echo")));
+            let mut events = serve(
+                Arc::clone(&seat),
+                Surface::Program(PathBuf::from("echo")),
+                Evidence::open(&seat_state),
+            );
             let reached = format!("{}@127.0.0.1:{port}", seat.endpoint_key())
                 .parse::<Endpoint>()
                 .unwrap();
-            let remote = RemotePeer::new(reached, seat_key);
+            let remote = RemotePeer::new(reached.clone(), seat_key);
 
             let anchor = Anchor::Path {
                 authority: Authority::Key(tree),
@@ -745,15 +805,37 @@ mod tests
             assert!(matches!(next(&mut events).await, Event::Accepted(_)));
             let view = operator.peer().view(tree).await.unwrap();
             let summary = format!("anchor {anchor}");
-            let output = format!("{summary}\n").into_bytes();
+            let output = Content::from(format!("{summary}\n").into_bytes());
+            let content = Staged::new(&output).unwrap().digest();
             assert!(
                 view.task().steps().contains(&(report, Step::Report {
                     dispatch,
                     author: seat_key,
-                    content: ContentHash::of(&Content::from(output)),
+                    content,
                     summary: summary.parse().unwrap(),
                 })),
-                "the report hashes the program's whole output and summarizes its first line"
+                "the report names the program's whole output by its manifest and \
+                 summarizes its first line"
+            );
+            let operator_evidence = Evidence::open(&operator_state);
+            assert_eq!(
+                fetch(&operator, &reached, content, &operator_evidence)
+                    .await
+                    .unwrap(),
+                output,
+                "the operator fetches the report's content from the seat by its name"
+            );
+            assert!(
+                matches!(
+                    next(&mut events).await,
+                    Event::Served(Served::Held { digest, .. }) if digest == content
+                ),
+                "the seat tells the fetch it answered"
+            );
+            assert_eq!(
+                operator_evidence.read(content).unwrap(),
+                output,
+                "the fetched content is kept on the operator's side"
             );
             assert!(
                 matches!(
@@ -812,7 +894,11 @@ mod tests
             let receipt = Receipt::dispatch(tree, me, brief).unwrap();
             let dispatch = seat.peer().commit(tree, receipt).await.unwrap();
 
-            let mut events = serve(Arc::clone(&seat), Surface::Program(PathBuf::from("echo")));
+            let mut events = serve(
+                Arc::clone(&seat),
+                Surface::Program(PathBuf::from("echo")),
+                Evidence::open(&state),
+            );
             let Event::Reported {
                 tree: reported_in,
                 report,

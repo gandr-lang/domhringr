@@ -37,14 +37,17 @@ const TREE_KEY_EXTENSION: &str = "key";
 /// Directory, beneath the state directory, holding the tree store.
 const STORE_DIR: &str = "store";
 
+/// Directory, beneath the state directory, holding the evidence store.
+const EVIDENCE_DIR: &str = "evidence";
+
 /// Key file holding the iroh endpoint seed.
 const ENDPOINT_KEY_FILE: &str = "endpoint.key";
 
 /// Key file holding the subduction signer seed.
 const SIGNER_KEY_FILE: &str = "signer.key";
 
-/// A peer's state directory: its identity, its tree keys and its tree store
-/// live beneath it.
+/// A peer's state directory: its identity, its tree keys, its tree store and
+/// its evidence store live beneath it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct StateDir(PathBuf);
@@ -89,6 +92,18 @@ impl StateDir
     pub(crate) fn store_dir(&self) -> PathBuf
     {
         self.0.join(STORE_DIR)
+    }
+
+    /// The directory holding the evidence store: the value plane's chunks and
+    /// manifests for the content receipts name.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub fn evidence_dir(&self) -> PathBuf
+    {
+        self.0.join(EVIDENCE_DIR)
     }
 }
 

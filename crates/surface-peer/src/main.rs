@@ -7,9 +7,10 @@
 //! who is reachable where, reads the tree's heads, syncs the tree with
 //! another peer over iroh, dispatches a seat to a tree read as a task and
 //! wakes it, reports on, hands off or retires from the dispatch it holds,
-//! replays the task, judges a transcript of the task into a verdict on its
-//! dispatch, reads playbooks and rubrics and runs them on the task, and
-//! checks a concepts tree's bindings against a public and a vault checkout.
+//! replays the task, fetches the evidence its receipts name, judges a
+//! transcript of the task into a verdict on its dispatch, reads playbooks and
+//! rubrics and runs them on the task, and checks a concepts tree's bindings
+//! against a public and a vault checkout.
 //!
 //! ```text
 //! domhringr-peer --state <dir> id
@@ -29,15 +30,17 @@
 //! domhringr-peer --state <dir> heads <tree>
 //! domhringr-peer --state <dir> sync <tree> [--peer <peer-id>] [--at <endpoint>]
 //! domhringr-peer --state <dir> dispatch <tree> <peer-id> <brief> [--at <endpoint>]
-//! domhringr-peer --state <dir> report <tree> <content-hash> <summary>
+//! domhringr-peer --state <dir> report <tree> <file> <summary>
 //! domhringr-peer --state <dir> handoff <tree> <peer-id>
 //! domhringr-peer --state <dir> retire <tree>
 //! domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]
+//! domhringr-peer --state <dir> evidence <tree> <digest> [--peer <peer-id>] [--at <endpoint>]
+//!                [--local]
 //! domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
 //! domhringr-peer --state <dir> judge ask --question <text> --option <text>...
-//!                (--transcript <content-hash> | --transcript-file <file>) [--static <file>]
+//!                (--transcript <digest> | --transcript-file <file>) [--static <file>]
 //! domhringr-peer --state <dir> judge verdict <tree> --rubric <content-hash>
-//!                (--transcript <content-hash> | --transcript-file <file>)
+//!                (--transcript <digest> | --transcript-file <file>)
 //!                (--question <text> --option <text>...)... [--static <file>]
 //! domhringr-peer --state <dir> playbook validate <file>
 //! domhringr-peer --state <dir> playbook run <file> <tree> [--task-state <dir>] [--static <file>]
@@ -98,32 +101,52 @@
 //! prints `woken <tree> <dispatch-id>`, and acts through `--surface`: it runs
 //! the program with `anchor <anchor>` or `content <hash>` as its arguments and
 //! the task's and the dispatch's anchors in `DOMHRINGR_TASK` and
-//! `DOMHRINGR_DISPATCH`, and when the program exits 0 commits a report — the
-//! BLAKE3 hash of its standard output and the output's first line as the
-//! summary — and prints `reported <tree> <commit-id>`; a program that fails
-//! prints `unreported <tree> <dispatch-id>` and the slot stays held. A seat
-//! serving without `--surface` holds its slots and never reports; on start it
-//! acts on every dispatch it holds unreported. `report`, `handoff` and
-//! `retire` commit their receipt on the task's current dispatch from the
-//! store alone, the summary taken verbatim. `replay` reaches the current
-//! attempt's seat, or `--peer`, as `sync` does — the task's owner when no
-//! dispatch is admitted — syncs the task, and prints the `source` line, one
-//! line per seat receipt the fold admitted and where the task stands:
-//! `undispatched`; the furthest of a verification, a grading, a decision and
-//! a landing on the current dispatch, `verified <dispatch-id>
-//! <verification-id>`, `graded <dispatch-id> <grading-id> <composed>`,
-//! `decided <dispatch-id> <decision-id> <decision>` or `landed <dispatch-id>
-//! <landing-id> <revision>`; otherwise `dispatched <dispatch-id> <holder>`,
-//! `reported <dispatch-id> <report-id>`, or `stalled <dispatch-id>
-//! <retirement-id>`; `--local` prints the local store's task alone.
+//! `DOMHRINGR_DISPATCH`, and when the program exits 0 keeps its standard
+//! output as evidence and commits a report — the output named by its value
+//! manifest, and its first line as the summary — and prints `reported <tree>
+//! <commit-id>`; a program that fails prints `unreported <tree>
+//! <dispatch-id>` and the slot stays held. A seat serving without `--surface`
+//! holds its slots and never reports; on start it acts on every dispatch it
+//! holds unreported. `serve` also answers fetches of the evidence its store
+//! holds, printing `served <digest>` for each one it sent and `unserved
+//! <digest>` with the cause on standard error for one it does not hold.
+//! `report` keeps the content of `<file>` as evidence and commits a
+//! report naming it; `report`, `handoff` and `retire` commit their receipt on
+//! the task's current dispatch from the store alone, the summary taken
+//! verbatim. `replay` reaches the current attempt's seat, or `--peer`, as
+//! `sync` does — the task's owner when no dispatch is admitted — syncs the
+//! task, fetches from that peer each evidence the admitted receipts name that
+//! the local store lacks, and prints the `source` line, one line per seat
+//! receipt the fold admitted and where the task stands: `undispatched`; the
+//! furthest of a verification, a grading, a decision and a landing on the
+//! current dispatch, `verified <dispatch-id> <verification-id>`, `graded
+//! <dispatch-id> <grading-id> <composed>`, `decided <dispatch-id>
+//! <decision-id> <decision>` or `landed <dispatch-id> <landing-id>
+//! <revision>`; otherwise `dispatched <dispatch-id> <holder>`, `reported
+//! <dispatch-id> <report-id>`, or `stalled <dispatch-id> <retirement-id>`;
+//! then `evidence <digest> held` or `evidence <digest> unheld` per evidence
+//! in the order first named, the cause of an unheld one on standard error.
+//! `--local` prints the local store's task and evidence alone.
+//!
+//! Evidence — a report's content, a verifier's output, a judge's transcript —
+//! lives in the evidence store as a value of the value plane, and a receipt
+//! names it by its manifest digest, 64 hex digits. `evidence` writes the
+//! content `<digest>` names to standard output, byte for byte, from the local
+//! store, or else fetched from the peer whose receipt in the task names it,
+//! or `--peer`, at `--at` or at its presence in the book, and kept. A fetched
+//! value is checked whole — its manifest's identity and profile, every chunk
+//! against its digest, the closure complete — before any byte is written: a
+//! value the holder cannot send whole is refused naming the first chunk
+//! neither side holds, and nothing reaches standard output.
 //!
 //! A judge rules on a task's current dispatch. `judge ask` asks one question
-//! about a transcript — the content at `--transcript-file`, or the content
-//! `--transcript` names by its hash — and prints `transcript <hash>` and
-//! `ruling <question-hash> <ruling>`; `judge verdict` asks each question in
-//! turn, prints the same lines, commits a verdict on the task's current
-//! dispatch naming this peer the judge, the `--rubric` the questions come
-//! from, the transcript and each question by their hashes with each ruling,
+//! about a transcript — the content at `--transcript-file`, or the evidence
+//! `--transcript` names by its digest, held in the local store — and prints
+//! `transcript <digest>` and `ruling <question-hash> <ruling>`; `judge
+//! verdict` asks each question in turn, prints the same lines, keeps the
+//! transcript as evidence, commits a verdict on the task's current dispatch
+//! naming this peer the judge, the `--rubric` the questions come from, the
+//! transcript by its digest and each question by its hash with each ruling,
 //! and prints the commit id. A question is a `--question` and the `--option`s
 //! after it, two to twenty-six, lettered `A`, `B`, … in order; its hash is
 //! the BLAKE3 of its canonical form. A ruling is `read <letter> A=<p> B=<p> …
@@ -137,7 +160,7 @@
 //! optionally `DOMHRINGR_JUDGE_KEY`, a bearer key, and
 //! `DOMHRINGR_JUDGE_CEILING`, the most outside mass it admits — or, with
 //! `--static`, answers from a table file of `<question-hash>
-//! <transcript-hash> <ruling>` lines. `replay` prints a verdict as `verdict
+//! <transcript-digest> <ruling>` lines. `replay` prints a verdict as `verdict
 //! <commit-id> <dispatch-id> <judge> <rubric> <transcript>` and one `ruling
 //! <commit-id> <question> <ruling>` line per question.
 //!
@@ -152,11 +175,12 @@
 //! missing field`. `playbook run` names the task's current dispatch, prints
 //! the `playbook` line, runs each verifier step in turn in `--task-state`
 //! (the working directory by default) with its output and error as one
-//! stream, commits a verification naming this peer the runner, and prints
-//! `verified <commit-id> <step> <output-hash> <status>`, the status `exit
-//! <code>` or `signal <number>`; then for each rubric its steps name it
-//! prints the `rubric` line, reads the rubric's state files into the
-//! transcript, asks the questions the steps name as `judge verdict` asks
+//! stream, keeps the output as evidence, commits a verification naming this
+//! peer the runner, and prints `verified <commit-id> <step> <output-digest>
+//! <status>`, the status `exit <code>` or `signal <number>`; then for each
+//! rubric its steps name it prints the `rubric` line, reads the rubric's
+//! state files into the transcript, keeps it as evidence, asks the questions
+//! the steps name as `judge verdict` asks
 //! them, commits the verdict, prints `verdict <commit-id>` and `grade
 //! <question-hash> <grade>` per question — `met`, `unmet`, `undecided` or
 //! `refused` against the rubric's band — commits the grading of the verdict
@@ -169,10 +193,10 @@
 //! <question> <grade>` line per question.
 //!
 //! The state directory holds the peer's two keys, the key of each tree it
-//! opened, and its tree store, all created on first use. A command holds the
-//! store exclusively while it runs, so every command but `id` fails while
-//! `serve` runs on the same directory; `id` reads only the keys and runs beside
-//! it.
+//! opened, its tree store and its evidence store, all created on first use.
+//! A command holds the tree store exclusively while it runs, so every command
+//! but `id` fails while `serve` runs on the same directory; `id` reads only
+//! the keys and runs beside it.
 //!
 //! `drift` folds a concepts tree, whose paths are bound to data
 //! `vault:<path>@<commit>`, and reads two git checkouts with the `git`
@@ -222,6 +246,12 @@ use domhringr_judge_oracle::ParseTableError;
 use domhringr_judge_oracle::Question;
 use domhringr_judge_oracle::QuestionError;
 use domhringr_judge_oracle::Transcript;
+use domhringr_record_evidence::Evidence;
+use domhringr_record_evidence::EvidenceError;
+use domhringr_record_evidence::FetchError;
+use domhringr_record_evidence::ParseDigestError;
+use domhringr_record_evidence::ParsedDigest;
+use domhringr_record_evidence::Served;
 use domhringr_record_tree::Aim;
 use domhringr_record_tree::Anchor;
 use domhringr_record_tree::At;
@@ -236,6 +266,7 @@ use domhringr_record_tree::ContentHash;
 use domhringr_record_tree::Current;
 use domhringr_record_tree::Dns;
 use domhringr_record_tree::Domain;
+use domhringr_record_tree::Endpoint;
 use domhringr_record_tree::HeadsError;
 use domhringr_record_tree::Identity;
 use domhringr_record_tree::IdentityError;
@@ -266,6 +297,7 @@ use domhringr_record_tree::Static;
 use domhringr_record_tree::Summary;
 use domhringr_record_tree::SyncError;
 use domhringr_record_tree::Target;
+use domhringr_record_tree::Task;
 use domhringr_record_tree::TreeId;
 use domhringr_record_tree::TreeKey;
 use domhringr_record_tree::UdpPort;
@@ -276,6 +308,7 @@ use domhringr_seat_slot::Event;
 use domhringr_seat_slot::Surface;
 use domhringr_seat_slot::Wake;
 use domhringr_seat_slot::WakeError;
+use gandr_storage_values::ManifestDigest;
 
 /// The synopsis written after a usage error.
 const USAGE: &str = "\
@@ -296,10 +329,12 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> heads <tree>
        domhringr-peer --state <dir> sync <tree> [--peer <peer-id>] [--at <endpoint>]
        domhringr-peer --state <dir> dispatch <tree> <peer-id> <brief> [--at <endpoint>]
-       domhringr-peer --state <dir> report <tree> <content-hash> <summary>
+       domhringr-peer --state <dir> report <tree> <file> <summary>
        domhringr-peer --state <dir> handoff <tree> <peer-id>
        domhringr-peer --state <dir> retire <tree>
        domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]
+       domhringr-peer --state <dir> evidence <tree> <digest> [--peer <peer-id>] [--at <endpoint>]
+                      [--local]
        domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
        domhringr-peer --state <dir> judge ask <question> <transcript> [--static <file>]
        domhringr-peer --state <dir> judge verdict <tree> --rubric <content-hash> <transcript>
@@ -320,16 +355,19 @@ where  <tree>   is domhringr://<tree-id>/
                 in place of <tree-id>: a name without a dot, resolved in the --in tree
        <target> is anchor <name> | endpoint <endpoint-id> | datum <text>
        <brief>  is anchor <anchor> | content <content-hash>, 64 hex digits of BLAKE3
+       <digest> is evidence's manifest digest, 64 hex digits
        <endpoint> is <endpoint-id>, then @<ip:port> or @<relay-url> for each address
                 it is reached at; sync and whence reach the tree's owner, or --peer,
-                dispatch the seat and replay the current dispatch's seat, at --at,
-                or else at its presence in the tree's book
+                dispatch the seat, replay the current dispatch's seat and evidence the
+                peer whose receipt names it, at --at, or else at its presence in the
+                tree's book
        <program> runs as <program> anchor <anchor> | content <hash>; exiting 0, its
-                standard output is the report: its hash, and its first line the summary
+                standard output is the report, kept as evidence, its first line the summary
        <checkout> is a directory in a git working tree, read as its whole repository
        <question> is --question <text> --option <text>..., two to twenty-six options
-       <transcript> is --transcript <content-hash> | --transcript-file <file>
-       <file>   for --static holds <question-hash> <transcript-hash> <ruling> lines; without
+       <transcript> is --transcript <digest> | --transcript-file <file>
+       <file>   for report holds the report's content; for --static it holds
+                <question-hash> <transcript-digest> <ruling> lines; without
                 it the judge asks the endpoint DOMHRINGR_JUDGE_ENDPOINT and
                 DOMHRINGR_JUDGE_MODEL name; for validate, run and grade it is a playbook
                 or a rubric in TOML
@@ -388,6 +426,9 @@ enum Verb
     Retire,
     /// Print a task's seat receipts and where it stands.
     Replay,
+    /// Print the content of an evidence a task names, fetching it when the
+    /// local store lacks it.
+    Evidence,
     /// Check a concepts tree against a public and a vault checkout.
     Drift,
     /// Ask a question about a transcript, or rule on a task: `judge` without
@@ -448,18 +489,21 @@ impl fmt::Display for Verb
             | Self::Dispatch => {
                 "dispatch <tree> <peer-id> anchor|content <brief> [--at <endpoint>]"
             },
-            | Self::Report => "report <tree> <content-hash> <summary>",
+            | Self::Report => "report <tree> <file> <summary>",
             | Self::Handoff => "handoff <tree> <peer-id>",
             | Self::Retire => "retire <tree>",
             | Self::Replay => "replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]",
+            | Self::Evidence => {
+                "evidence <tree> <digest> [--peer <peer-id>] [--at <endpoint>] [--local]"
+            },
             | Self::Drift => "drift --public <checkout> --vault <checkout> <tree>",
             | Self::Judge => "judge ask|verdict",
             | Self::Ask => {
-                "judge ask --question <text> --option <text>... --transcript <content-hash> | \
+                "judge ask --question <text> --option <text>... --transcript <digest> | \
                  --transcript-file <file> [--static <file>]"
             },
             | Self::Verdict => {
-                "judge verdict <tree> --rubric <content-hash> --transcript <content-hash> | \
+                "judge verdict <tree> --rubric <content-hash> --transcript <digest> | \
                  --transcript-file <file> (--question <text> --option <text>...)... [--static \
                  <file>]"
             },
@@ -482,8 +526,8 @@ impl fmt::Display for Verb
 enum Operand
 {
     /// The tree to grant on, write to, claim for, introduce in, present in,
-    /// withdraw from, read, sync, dispatch in, report on, rule on, or read a
-    /// label in, or the tree introduced.
+    /// withdraw from, read, sync, dispatch in, report on, rule on, fetch
+    /// evidence for, or read a label in, or the tree introduced.
     Tree,
     /// The anchor to bind or resolve.
     Anchor,
@@ -500,9 +544,11 @@ enum Operand
     Witness,
     /// A dispatch's brief anchor.
     Brief,
-    /// A content's hash: a brief's or a report's.
+    /// A brief's content hash.
     Content,
-    /// A judged transcript's hash.
+    /// The evidence `evidence` prints, by its manifest digest.
+    Evidence,
+    /// A judged transcript's manifest digest.
     Transcript,
     /// A verdict's rubric's hash.
     Rubric,
@@ -529,7 +575,8 @@ impl fmt::Display for Operand
             | Self::Witness => "witness's tree id",
             | Self::Brief => "brief anchor",
             | Self::Content => "content hash",
-            | Self::Transcript => "transcript hash",
+            | Self::Evidence => "evidence digest",
+            | Self::Transcript => "transcript digest",
             | Self::Rubric => "rubric hash",
         })
     }
@@ -673,14 +720,14 @@ enum Command
         /// The seat's endpoint: `--at`, or the book's.
         at: At,
     },
-    /// Commit a report on `tree`'s current dispatch, of the content hashed
-    /// `content` with `summary`, and print the commit id.
+    /// Keep the content of `file` as evidence, commit a report naming it on
+    /// `tree`'s current dispatch with `summary`, and print the commit id.
     Report
     {
         /// The task.
         tree: TreeId,
-        /// The content's hash.
-        content: ContentHash,
+        /// The file holding the report's content.
+        file: PathBuf,
         /// The report's summary.
         summary: Summary,
     },
@@ -700,14 +747,27 @@ enum Command
         /// The task.
         tree: TreeId,
     },
-    /// Reach the peer `replaying` says for `tree`, sync, and print where its
-    /// endpoint came from, the task's steps and where it stands.
+    /// Reach the peer `replaying` says for `tree`, sync, fetch the evidence
+    /// the task names that the local store lacks, and print where its
+    /// endpoint came from, the task's steps, where it stands and whether each
+    /// evidence is held.
     Replay
     {
         /// The task.
         tree: TreeId,
         /// Whether, and whom, the task is reached at.
         replaying: Replaying,
+    },
+    /// Print the content of the evidence `digest` names, read from the local
+    /// store or else fetched from the peer `reaching` says for `tree`.
+    Evidence
+    {
+        /// The task whose receipts name the evidence.
+        tree: TreeId,
+        /// The evidence.
+        digest: ManifestDigest,
+        /// Whether, and whom, the evidence is fetched from.
+        reaching: Replaying,
     },
     /// Check `tree`'s bindings against the checkouts at `public` and `vault`,
     /// and print one line per finding.
@@ -721,7 +781,7 @@ enum Command
         tree: TreeId,
     },
     /// Ask `question` about the transcript `transcript` names, as `judging`
-    /// says, and print the transcript's hash and the ruling.
+    /// says, and print the transcript's digest and the ruling.
     Ask
     {
         /// The question asked.
@@ -732,9 +792,9 @@ enum Command
         judging: Judging,
     },
     /// Ask each of `questions` about the transcript `transcript` names, as
-    /// `judging` says, print the transcript's hash and each ruling, commit a
-    /// verdict of them on `tree`'s current dispatch under `rubric`, and print
-    /// the commit id.
+    /// `judging` says, print the transcript's digest and each ruling, keep the
+    /// transcript as evidence, commit a verdict of them on `tree`'s current
+    /// dispatch under `rubric`, and print the commit id.
     Verdict
     {
         /// The task.
@@ -795,8 +855,9 @@ enum Command
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Asked
 {
-    /// `--transcript`: its hash alone; its content is not held.
-    Named(ContentHash),
+    /// `--transcript`: the evidence its digest names, held in the local
+    /// store.
+    Named(ManifestDigest),
     /// `--transcript-file`: the file holding its content.
     File(PathBuf),
 }
@@ -851,24 +912,27 @@ enum Reach
     Dial(Dial),
 }
 
-/// Whom `replay` reaches.
+/// Whom `replay` and `evidence` reach.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Toward
 {
-    /// The current attempt's seat — the slot's holder, or the seat that
-    /// retired from it — or the task's owner when no dispatch is admitted.
+    /// For `replay`, the current attempt's seat — the slot's holder, or the
+    /// seat that retired from it — or the task's owner when no dispatch is
+    /// admitted; for `evidence`, the peer whose receipt first names the
+    /// evidence.
     Seat,
     /// The peer `--peer` names.
     Peer(PeerKey),
 }
 
-/// Whether `replay` reaches the task before printing it.
+/// Whether `replay` reaches the task before printing it, and whether
+/// `evidence` fetches what the local store lacks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Replaying
 {
-    /// `--local`: print the local store's task alone.
+    /// `--local`: read the local store alone.
     Local,
-    /// Reach the peer `toward` names, at `at`, and sync first.
+    /// Reach the peer `toward` names, at `at`: to sync first, or to fetch.
     Dial
     {
         /// Whom.
@@ -910,6 +974,17 @@ impl fmt::Display for Reached
             },
         }
     }
+}
+
+/// The two stores a command commits to: the tree store its receipts go to,
+/// and the evidence store the values they name are kept in.
+#[derive(Clone, Copy)]
+struct Stores<'store>
+{
+    /// The tree store.
+    peer: &'store Peer,
+    /// The evidence store.
+    evidence: &'store Evidence,
 }
 
 /// A command line, read.
@@ -974,6 +1049,16 @@ enum UsageError
         #[source]
         source: ParseAnchorError,
     },
+    /// An operand is not a manifest digest.
+    #[error("cannot read the {operand}")]
+    Digest
+    {
+        /// The operand.
+        operand: Operand,
+        /// Why it is not a digest.
+        #[source]
+        source: ParseDigestError,
+    },
     /// A tree operand is an anchor naming a path or a commit.
     #[error("the tree anchor names a path or a commit: expected domhringr://<tree-id>/")]
     NotTree,
@@ -1013,7 +1098,7 @@ enum UsageError
     #[error("--local reaches no peer: it takes no --peer or --at")]
     Local,
     /// A judge command names no transcript.
-    #[error("no transcript given: --transcript <content-hash> or --transcript-file <file>")]
+    #[error("no transcript given: --transcript <digest> or --transcript-file <file>")]
     NoTranscript,
     /// `judge verdict` names no rubric.
     #[error("no rubric given: --rubric <content-hash>")]
@@ -1088,6 +1173,19 @@ enum RunError
     /// The transcript file cannot be read.
     #[error("cannot read the transcript file")]
     Transcript(#[source] std::io::Error),
+    /// The report's file cannot be read.
+    #[error("cannot read the report's file")]
+    Report(#[source] std::io::Error),
+    /// Evidence cannot be kept, or is not held whole.
+    #[error(transparent)]
+    Evidence(#[from] EvidenceError),
+    /// Evidence cannot be fetched whole.
+    #[error(transparent)]
+    Fetch(#[from] FetchError),
+    /// No admitted receipt of the task names the evidence, and no `--peer`
+    /// names whom to fetch it from.
+    #[error("the task names no evidence {0}: name its holder with --peer")]
+    Unnamed(ManifestDigest),
     /// The table file cannot be read.
     #[error("cannot read the table file")]
     Table(#[source] std::io::Error),
@@ -1115,9 +1213,9 @@ enum RunError
     /// A verifier's thread failed.
     #[error("the verifier's thread failed")]
     Join(#[source] tokio::task::JoinError),
-    /// A rubric's state file cannot be read into its transcript.
+    /// A rubric's transcript cannot be read from its state files, or kept.
     #[error(transparent)]
-    State(#[from] domhringr_strategy_document::StateError),
+    State(#[from] domhringr_strategy_document::TranscriptError),
 }
 
 /// Read the command line that follows the program name.
@@ -1125,8 +1223,8 @@ enum RunError
 /// # Specification
 /// - ensures: accepts `--state <dir>` (or `--state=<dir>`; the last one given
 ///   wins) followed by a verb and exactly the operands that verb takes, or, for
-///   `serve`, `present`, `sync`, `whence`, `dispatch`, `replay`, `drift`,
-///   `judge`, `playbook` and `rubric`, what [`serve_command`],
+///   `serve`, `present`, `sync`, `whence`, `dispatch`, `replay`, `evidence`,
+///   `drift`, `judge`, `playbook` and `rubric`, what [`serve_command`],
 ///   [`present_command`], [`sync_command`], [`whence_command`],
 ///   [`dispatch_command`], [`replay_command`], [`drift_command`],
 ///   [`judge_command`] and [`strategy_command`] read. Other verbs' operands are
@@ -1135,9 +1233,9 @@ enum RunError
 ///   `bind`'s anchor names a path in the key form, `claim`'s DNS name and
 ///   `introduce`'s label are read as [`read_name`] reads them, `bind`'s target
 ///   is read as [`read_target`] reads it, `withdraw` withdraws this peer's own
-///   presence unless a peer id follows the tree, `report`'s content hash is 64
-///   hex digits and its summary one line [`Summary`] admits, and `handoff`'s
-///   recipient is a peer id.
+///   presence unless a peer id follows the tree, `report`'s file is a path and
+///   its summary one line [`Summary`] admits, and `handoff`'s recipient is a
+///   peer id.
 /// - fails: [`UsageError::Arguments`] for any option but `--state` or for
 ///   `--state` without a value, [`UsageError::NoCommand`] when no verb follows
 ///   the options, [`UsageError::Command`] for an unknown verb,
@@ -1166,6 +1264,7 @@ enum RunError
 /// - [`UsageError::NoCheckout`]: `drift`'s `--public` or `--vault` is absent.
 /// - [`UsageError::Operands`]: the verb's operand count is wrong.
 /// - [`UsageError::Operand`]: an operand is not an id.
+/// - [`UsageError::Digest`]: as [`replay_command`] and [`judge_command`].
 /// - [`UsageError::Anchor`]: an operand is not an anchor.
 /// - [`UsageError::NotTree`]: a tree operand names a path or a commit.
 /// - [`UsageError::NotKey`]: a tree operand or the anchor to bind is not in the
@@ -1180,8 +1279,8 @@ enum RunError
 ///   summary is not UTF-8.
 /// - [`UsageError::Summary`]: the summary is empty, too long or not one line.
 /// - [`UsageError::Port`]: `serve`'s or `present`'s port is not a UDP port.
-/// - [`UsageError::Local`]: `whence`'s or `replay`'s `--local` stands beside
-///   `--peer` or `--at`.
+/// - [`UsageError::Local`]: `whence`'s, `replay`'s or `evidence`'s `--local`
+///   stands beside `--peer` or `--at`.
 /// - [`UsageError::NoTranscript`], [`UsageError::NoRubric`],
 ///   [`UsageError::NoQuestion`], [`UsageError::Unasked`] and
 ///   [`UsageError::Question`]: as [`judge_command`] refuses a judge command.
@@ -1224,8 +1323,8 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
         let command = dispatch_command(&mut arguments)?;
         return Ok(Invocation { state, command });
     }
-    if verb == Verb::Replay {
-        let command = replay_command(&mut arguments)?;
+    if matches!(verb, Verb::Replay | Verb::Evidence) {
+        let command = replay_command(&mut arguments, verb)?;
         return Ok(Invocation { state, command });
     }
     if verb == Verb::Sync {
@@ -1313,14 +1412,10 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
         | (Verb::Heads, (Some(tree), None, None, None)) => Command::Heads {
             tree: read_tree(&tree)?,
         },
-        | (Verb::Report, (Some(tree), Some(content), Some(summary), None)) => {
-            let tree = read_tree(&tree)?;
-            let content = read_id(&content, Operand::Content)?;
-            Command::Report {
-                tree,
-                content,
-                summary: read_name(summary, UsageError::Summary)?,
-            }
+        | (Verb::Report, (Some(tree), Some(file), Some(summary), None)) => Command::Report {
+            tree: read_tree(&tree)?,
+            file: PathBuf::from(file),
+            summary: read_name(summary, UsageError::Summary)?,
         },
         | (Verb::Handoff, (Some(tree), Some(to), None, None)) => {
             let tree = read_tree(&tree)?;
@@ -1774,38 +1869,48 @@ fn dispatch_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageErro
     })
 }
 
-/// Read `replay`'s operand and options from what follows the verb.
+/// Read `replay`'s or `evidence`'s operands and options from what follows the
+/// verb `verb`.
 ///
 /// # Specification
-/// - ensures: accepts one tree anchor in the key form, with `--peer <peer-id>`,
-///   `--at <endpoint>` (or `--peer=<peer-id>` and `--at=<endpoint>`; the last
-///   one given of each wins) and `--local` anywhere around it. Without
-///   `--local` the task is reached at the peer `--peer` names, or else at the
-///   current attempt's seat, at the endpoint `--at` names, or else at the
-///   book's; with it, the local store alone is read.
+/// - requires: `verb` is [`Verb::Replay`] or [`Verb::Evidence`].
+/// - ensures: accepts one tree anchor in the key form, and for `evidence` a
+///   manifest digest after it, with `--peer <peer-id>`, `--at <endpoint>` (or
+///   `--peer=<peer-id>` and `--at=<endpoint>`; the last one given of each wins)
+///   and `--local` anywhere around them. Without `--local` the peer reached is
+///   the one `--peer` names, or else the current attempt's seat for `replay`
+///   and the peer whose receipt names the evidence for `evidence`, at the
+///   endpoint `--at` names, or else at the book's; with it, the local store
+///   alone is read.
 /// - fails: [`UsageError::Arguments`] for any other option or for an option
 ///   without a value, [`UsageError::Operand`] for a peer id or an endpoint that
 ///   does not parse, [`UsageError::Local`] for `--local` beside `--peer` or
-///   `--at`, [`UsageError::Operands`] for other than one operand, checked
-///   before the operand is read, and as [`read_tree`] for an operand that is no
-///   key-form tree anchor.
+///   `--at`, [`UsageError::Operands`] for other than the verb's operands,
+///   checked before any operand is read, as [`read_tree`] for a first operand
+///   that is no key-form tree anchor, and [`UsageError::Digest`] for a digest
+///   that does not parse.
 /// - panics: none.
 ///
 /// # Errors
 /// - [`UsageError::Arguments`]: an unknown option, or an option lacks a value.
 /// - [`UsageError::Operand`]: the peer id or the endpoint does not parse.
 /// - [`UsageError::Local`]: `--local` stands beside `--peer` or `--at`.
-/// - [`UsageError::Operands`]: there is not one operand.
+/// - [`UsageError::Operands`]: the operands are not the verb's.
 /// - [`UsageError::Anchor`], [`UsageError::NotTree`], [`UsageError::NotKey`]:
 ///   as [`read_tree`] for the tree.
+/// - [`UsageError::Digest`]: the evidence's digest does not parse.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — no option, `--peer` with `--at`, and `--local` are read
-///   to their command, and `--local` beside `--peer` and a surplus operand each
-///   meet their own refusal.
+///   to their command for both verbs, and `--local` beside `--peer`, a surplus
+///   operand, a missing digest and a digest that is no hex each meet their own
+///   refusal.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
-fn replay_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
+fn replay_command(
+    arguments: &mut lexopt::Parser,
+    verb: Verb,
+) -> Result<Command, UsageError>
 {
     let (mut toward, mut at) = (Toward::Seat, At::Book);
     let (mut named, mut local) = (false, false);
@@ -1835,12 +1940,21 @@ fn replay_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
         | (true, true) => return Err(UsageError::Local),
     };
     let mut operands = operands.into_iter();
-    match (operands.next(), operands.next()) {
-        | (Some(tree), None) => Ok(Command::Replay {
+    match (verb, operands.next(), operands.next(), operands.next()) {
+        | (Verb::Replay, Some(tree), None, None) => Ok(Command::Replay {
             tree: read_tree(&tree)?,
             replaying,
         }),
-        | _ => Err(UsageError::Operands(Verb::Replay)),
+        | (Verb::Evidence, Some(tree), Some(digest), None) => {
+            let tree = read_tree(&tree)?;
+            let digest = read_digest(&digest, Operand::Evidence)?;
+            Ok(Command::Evidence {
+                tree,
+                digest,
+                reaching: replaying,
+            })
+        },
+        | _ => Err(UsageError::Operands(verb)),
     }
 }
 
@@ -1851,21 +1965,21 @@ fn replay_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 /// - ensures: accepts `ask` or `verdict`, then options anywhere around the
 ///   operands, each also in the `=` spelling: `--question <text>` opening a
 ///   question and each `--option <text>` adding an option to the question
-///   opened last; `--transcript <content-hash>` or `--transcript-file <file>`
-///   naming the transcript, the last one given of the two winning; `--static
-///   <file>`, answering from a table rather than the endpoint, the last one
-///   given winning; and for `verdict` `--rubric <content-hash>`, the last one
-///   given winning. `ask` takes no operand and one question; `verdict` takes
-///   one tree anchor in the key form and one or more questions, kept in the
-///   order given. Each question is read as [`Question::new`] reads it.
+///   opened last; `--transcript <digest>` or `--transcript-file <file>` naming
+///   the transcript, the last one given of the two winning; `--static <file>`,
+///   answering from a table rather than the endpoint, the last one given
+///   winning; and for `verdict` `--rubric <content-hash>`, the last one given
+///   winning. `ask` takes no operand and one question; `verdict` takes one tree
+///   anchor in the key form and one or more questions, kept in the order given.
+///   Each question is read as [`Question::new`] reads it.
 /// - fails: [`UsageError::Operands`] naming `judge` when nothing follows it,
 ///   [`UsageError::Command`] for a word there other than `ask` or `verdict`,
 ///   [`UsageError::Arguments`] for any other option, among them `--rubric` to
 ///   `ask`, or for an option without a value, [`UsageError::Text`] for a
 ///   question or an option that is not UTF-8, [`UsageError::Unasked`] for an
-///   `--option` before any `--question`, and [`UsageError::Operand`] for a
-///   transcript or rubric hash that does not parse; then
-///   [`UsageError::NoQuestion`] when no question is asked,
+///   `--option` before any `--question`, [`UsageError::Digest`] for a
+///   transcript digest and [`UsageError::Operand`] for a rubric hash that does
+///   not parse; then [`UsageError::NoQuestion`] when no question is asked,
 ///   [`UsageError::Operands`] for operands other than the command takes or for
 ///   `ask` with more than one question, [`UsageError::NoTranscript`] when no
 ///   transcript is named, [`UsageError::NoRubric`] for `verdict` without a
@@ -1882,7 +1996,7 @@ fn replay_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 ///   tree, are read to their commands; nothing after `judge`, an unknown word
 ///   after it, `--rubric` to `ask`, an `--option` before its `--question`, no
 ///   question, two questions to `ask`, an operand to `ask`, no transcript, no
-///   rubric, a short transcript hash and a question of one option each meet
+///   rubric, a short transcript digest and a question of one option each meet
 ///   their own refusal.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
@@ -1915,7 +2029,7 @@ fn judge_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
             },
             | lexopt::Arg::Long("transcript") => {
                 let value = arguments.value()?;
-                transcript = Some(Asked::Named(read_id(&value, Operand::Transcript)?));
+                transcript = Some(Asked::Named(read_digest(&value, Operand::Transcript)?));
             },
             | lexopt::Arg::Long("transcript-file") => {
                 let value = arguments.value()?;
@@ -2102,6 +2216,7 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
         | Some("handoff") => Ok(Verb::Handoff),
         | Some("retire") => Ok(Verb::Retire),
         | Some("replay") => Ok(Verb::Replay),
+        | Some("evidence") => Ok(Verb::Evidence),
         | Some("drift") => Ok(Verb::Drift),
         | Some("judge") => Ok(Verb::Judge),
         | Some("playbook") => Ok(Verb::Playbook),
@@ -2136,6 +2251,34 @@ where
     text.to_string_lossy()
         .parse::<T>()
         .map_err(|source| UsageError::Operand { operand, source })
+}
+
+/// Read the manifest digest `text` spells, for the operand `operand`.
+///
+/// # Specification
+/// - ensures: yields the digest of 64 lowercase hex digits `text` spells; text
+///   that is not UTF-8 is read with replacement characters, which no digest
+///   holds.
+/// - fails: [`UsageError::Digest`] naming `operand` and carrying the parser's
+///   reason.
+/// - panics: none.
+///
+/// # Errors
+/// - [`UsageError::Digest`]: the text is not a digest.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a short transcript digest and an evidence digest that is
+///   no hex are refused under their own operand names.
+/// - witness: `tests::a_malformed_command_line_is_refused`
+fn read_digest(
+    text: &OsStr,
+    operand: Operand,
+) -> Result<ManifestDigest, UsageError>
+{
+    text.to_string_lossy()
+        .parse::<ParsedDigest>()
+        .map(ManifestDigest::from)
+        .map_err(|source| UsageError::Digest { operand, source })
 }
 
 /// Read the anchor or the reference `text` spells, for the operand `operand`.
@@ -2361,17 +2504,19 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///   the dial ([`Peer::route`]), dials the remote at the route's endpoint, and
 ///   writes the route's `source` line, the heads after the sync the same way,
 ///   then `path <peer-id> <path>` for the path the connection took, having
-///   closed its endpoint. `dispatch` runs as [`dispatch`] specifies, and
-///   `replay` as [`replay`]. `report`, `handoff` and `retire` commit their
-///   receipt on the task's current dispatch, under a fresh operation fence, and
-///   write the new commit's id line. `serve` runs as [`serve`] specifies.
-///   `drift` folds the concepts tree in the local store, closes the store, and
-///   writes [`drift::check`]'s report of it against the two checkouts, one line
-///   per finding. `judge ask` writes `transcript <hash>` for the transcript
-///   [`transcript_of`] names, then rules on its question as [`rulings`] rules.
-///   `judge verdict` runs as [`verdict`] specifies, this peer the judge.
-///   `playbook validate`, `rubric validate`, `playbook run` and `rubric grade`
-///   run as [`strategy::validate_playbook`], [`strategy::validate_rubric`],
+///   closed its endpoint. `dispatch` runs as [`dispatch`] specifies, `replay`
+///   as [`replay`] and `evidence` as [`evidence`]. `report` keeps its file's
+///   content as evidence ([`Evidence::commit`]) before any receipt; `report`,
+///   `handoff` and `retire` commit their receipt on the task's current
+///   dispatch, under a fresh operation fence, and write the new commit's id
+///   line. `serve` runs as [`serve`] specifies. `drift` folds the concepts tree
+///   in the local store, closes the store, and writes [`drift::check`]'s report
+///   of it against the two checkouts, one line per finding. `judge ask` writes
+///   `transcript <digest>` for the transcript [`transcript_of`] names, then
+///   rules on its question as [`rulings`] rules. `judge verdict` runs as
+///   [`verdict`] specifies, this peer the judge. `playbook validate`, `rubric
+///   validate`, `playbook run` and `rubric grade` run as
+///   [`strategy::validate_playbook`], [`strategy::validate_rubric`],
 ///   [`strategy::run_playbook`] and [`strategy::grade_rubric`] specify, this
 ///   peer the runner and the judge. Every command ends in
 ///   [`Completion::Success`] but a `drift` whose report holds a finding, which
@@ -2385,12 +2530,16 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///   `judge verdict`, `playbook run` or `rubric grade` on a task with no
 ///   dispatch, [`RunError::Wake`] as [`dispatch`] reports it,
 ///   [`RunError::Drift`] as [`drift::check`] reports it,
-///   [`RunError::Transcript`] as [`transcript_of`] and [`RunError::Config`],
-///   [`RunError::Client`], [`RunError::Table`] and [`RunError::Rulings`] as
-///   [`rulings`] report them, [`RunError::Load`], [`RunError::Verify`],
-///   [`RunError::Join`] and [`RunError::State`] as the [`strategy`] commands
-///   report them, and [`RunError::Output`] when standard output cannot be
-///   written. A failed sync, presence or wake still closes the endpoint.
+///   [`RunError::Transcript`] and [`RunError::Evidence`] as [`transcript_of`],
+///   [`RunError::Report`] when `report`'s file cannot be read and
+///   [`RunError::Evidence`] when its content cannot be kept,
+///   [`RunError::Fetch`] and [`RunError::Unnamed`] as [`evidence`] reports
+///   them, [`RunError::Config`], [`RunError::Client`], [`RunError::Table`] and
+///   [`RunError::Rulings`] as [`rulings`] report them, [`RunError::Load`],
+///   [`RunError::Verify`], [`RunError::Join`] and [`RunError::State`] as the
+///   [`strategy`] commands report them, and [`RunError::Output`] when standard
+///   output cannot be written. A failed sync, presence, wake or fetch still
+///   closes the endpoint.
 /// - panics: none.
 ///
 /// # Errors
@@ -2413,6 +2562,9 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - [`RunError::Sync`]: the sync failed.
 /// - [`RunError::Drift`]: a checkout cannot be read.
 /// - [`RunError::Transcript`]: the transcript file cannot be read.
+/// - [`RunError::Report`]: the report's file cannot be read.
+/// - [`RunError::Evidence`]: evidence cannot be kept, or is not held whole.
+/// - [`RunError::Fetch`], [`RunError::Unnamed`]: as [`evidence`].
 /// - [`RunError::Config`]: the judge has no endpoint configured.
 /// - [`RunError::Client`]: the judge's client cannot be built.
 /// - [`RunError::Table`], [`RunError::Rulings`]: the table file cannot be read
@@ -2421,7 +2573,8 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - [`RunError::Load`]: a playbook or a rubric does not load.
 /// - [`RunError::Verify`], [`RunError::Join`]: a verifier does not run to its
 ///   end.
-/// - [`RunError::State`]: a rubric's state file cannot be read.
+/// - [`RunError::State`]: a rubric's state file cannot be read, or its
+///   transcript kept.
 /// - [`RunError::Closed`], [`RunError::Diagnostics`]: as [`serve`].
 ///
 /// # Adequacy
@@ -2438,9 +2591,12 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///   withdraws; `drift` over a fixture pair prints its four findings exactly
 ///   and exits 3, then nothing and exits 0; an operator dispatches a seat that
 ///   is down, then up, and replays the task through the seat's presence as the
-///   seat reports across a restart of each; a judge asks a question about a
-///   transcript, from a table and from no endpoint, and rules on the task's
-///   current dispatch, read and unread, and the replay shows the verdict; a
+///   seat reports across a restart of each, the replay fetching the report's
+///   content; a reader prints a seat's report fetched by its digest byte for
+///   byte, and a report missing a chunk on the seat is refused naming it with
+///   nothing printed; a judge asks a question about a transcript, from a table
+///   and from no endpoint, and rules on the task's current dispatch, read and
+///   unread, and the replay shows the verdict and its transcript held; a
 ///   playbook and a rubric validate or are refused by file and field, a
 ///   playbook runs its verifiers and grades its questions on the task's current
 ///   dispatch, and the replay shows each verification and grading.
@@ -2451,6 +2607,7 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - witness: `sync::tests::a_commit_resolves_to_its_verdict_on_both_peers`
 /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
 /// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
+/// - witness: `evidence::tests::a_reader_fetches_a_seats_report_and_refuses_a_missing_chunk`
 /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
 /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
 /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
@@ -2458,6 +2615,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
 {
     let Invocation { state, command } = invocation;
     let identity = Identity::load_or_create(&state)?;
+    let evidence = Evidence::open(&state);
     let emitted = match command {
         | Command::Id => emit(&format_args!(
             "{}\n{}\n",
@@ -2465,7 +2623,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             identity.peer_key()
         )),
         | Command::Serve { port, surface } => {
-            serve(Peer::open(&state, identity)?, port, surface).await
+            serve(Peer::open(&state, identity)?, evidence, port, surface).await
         },
         | Command::Open => {
             let owner = identity.peer_key();
@@ -2580,9 +2738,11 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
         },
         | Command::Report {
             tree,
-            content,
+            file,
             summary,
         } => {
+            let bytes = std::fs::read(file).map_err(RunError::Report)?;
+            let content = evidence.commit(&Content::from(bytes))?;
             let peer = Peer::open(&state, identity)?;
             on_current(peer, tree, |dispatch| {
                 Receipt::report(tree, dispatch, content, summary)
@@ -2598,7 +2758,15 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             on_current(peer, tree, |dispatch| Receipt::retire(tree, dispatch)).await
         },
         | Command::Replay { tree, replaying } => {
-            replay(Peer::open(&state, identity)?, tree, replaying).await
+            replay(Peer::open(&state, identity)?, &evidence, tree, replaying).await
+        },
+        | Command::Evidence {
+            tree,
+            digest,
+            reaching,
+        } => {
+            let peer = Peer::open(&state, identity)?;
+            self::evidence(peer, &evidence, tree, digest, reaching).await
         },
         | Command::Drift {
             public,
@@ -2620,8 +2788,8 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             transcript,
             judging,
         } => {
-            let transcript = transcript_of(transcript)?;
-            emit(&format_args!("transcript {}\n", transcript.hash()))?;
+            let transcript = transcript_of(transcript, &evidence)?;
+            emit(&format_args!("transcript {}\n", transcript.digest()))?;
             rulings(judging, slice::from_ref(&question), &transcript)
                 .await
                 .map(drop)
@@ -2635,7 +2803,11 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
         } => {
             let judge = identity.peer_key();
             let peer = Peer::open(&state, identity)?;
-            verdict(peer, judge, tree, rubric, transcript, questions, judging).await
+            let on = Stores {
+                peer: &peer,
+                evidence: &evidence,
+            };
+            verdict(on, judge, tree, rubric, transcript, questions, judging).await
         },
         | Command::ValidatePlaybook { file } => strategy::validate_playbook(&file),
         | Command::ValidateRubric { file } => strategy::validate_rubric(&file),
@@ -2647,7 +2819,11 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
         } => {
             let runner = identity.peer_key();
             let peer = Peer::open(&state, identity)?;
-            strategy::run_playbook(&peer, runner, tree, &file, &directory, judging).await
+            let on = Stores {
+                peer: &peer,
+                evidence: &evidence,
+            };
+            strategy::run_playbook(on, runner, tree, &file, &directory, judging).await
         },
         | Command::GradeRubric {
             file,
@@ -2657,7 +2833,11 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
         } => {
             let judge = identity.peer_key();
             let peer = Peer::open(&state, identity)?;
-            strategy::grade_rubric(&peer, judge, tree, &file, &directory, judging).await
+            let on = Stores {
+                peer: &peer,
+                evidence: &evidence,
+            };
+            strategy::grade_rubric(on, judge, tree, &file, &directory, judging).await
         },
     };
     emitted.map(|()| Completion::Success)
@@ -2878,18 +3058,21 @@ async fn on_current(
 ///
 /// # Specification
 /// - ensures: names the current dispatch ([`current`]) before any question is
-///   asked; then writes `transcript <hash>` for the transcript
+///   asked; then writes `transcript <digest>` for the transcript
 ///   [`transcript_of`] names, rules on each of `questions` as [`rulings`]
-///   rules, and commits the verdict of `judge` on that dispatch — `rubric`, the
-///   transcript's hash, and each question's hash with its ruling, in the order
-///   asked — under a fresh operation fence, as [`record`] commits it.
+///   rules, keeps the transcript in `on`'s evidence store, and commits the
+///   verdict of `judge` on that dispatch — `rubric`, the transcript's digest,
+///   and each question's hash with its ruling, in the order asked — under a
+///   fresh operation fence, as [`record`] commits it.
 /// - fails: as [`current`], [`transcript_of`], [`rulings`] and [`record`] fail,
-///   and [`RunError::Random`] when no operation fence can be drawn.
+///   [`RunError::Evidence`] when the transcript cannot be kept, and
+///   [`RunError::Random`] when no operation fence can be drawn.
 /// - panics: none.
 ///
 /// # Errors
 /// - [`RunError::View`], [`RunError::Undispatched`]: as [`current`].
-/// - [`RunError::Transcript`]: as [`transcript_of`].
+/// - [`RunError::Transcript`], [`RunError::Evidence`]: as [`transcript_of`], or
+///   the transcript cannot be kept.
 /// - [`RunError::Config`], [`RunError::Client`], [`RunError::Table`],
 ///   [`RunError::Rulings`], [`RunError::Diagnostics`]: as [`rulings`].
 /// - [`RunError::Random`]: no operation fence can be drawn.
@@ -2897,11 +3080,12 @@ async fn on_current(
 ///
 /// # Adequacy
 /// - hypothesis: L3 — the process test refuses a verdict on a task with no
-///   dispatch, then rules on the current dispatch, read and unread, and replays
-///   the verdict with each ruling in the order asked.
+///   dispatch, then rules on the current dispatch, read and unread, replays the
+///   verdict with each ruling in the order asked and its transcript held, and
+///   asks again by the transcript's digest alone.
 /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
 async fn verdict(
-    peer: Peer,
+    on: Stores<'_>,
     judge: PeerKey,
     tree: TreeId,
     rubric: ContentHash,
@@ -2910,39 +3094,50 @@ async fn verdict(
     judging: Judging,
 ) -> Result<(), RunError>
 {
-    let dispatch = current(&peer, tree).await?;
-    let transcript = transcript_of(asked)?;
-    emit(&format_args!("transcript {}\n", transcript.hash()))?;
+    let dispatch = current(on.peer, tree).await?;
+    let transcript = transcript_of(asked, on.evidence)?;
+    emit(&format_args!("transcript {}\n", transcript.digest()))?;
     let answers = rulings(judging, &questions, &transcript).await?;
-    let receipt = Receipt::verdict(tree, dispatch, judge, rubric, transcript.hash(), answers)?;
-    record(&peer, tree, receipt).await
+    on.evidence.keep(transcript.staged())?;
+    let receipt = Receipt::verdict(tree, dispatch, judge, rubric, transcript.digest(), answers)?;
+    record(on.peer, tree, receipt).await
 }
 
 /// The transcript `asked` names.
 ///
 /// # Specification
-/// - ensures: [`Asked::File`] reads the whole file and holds its content
-///   ([`Transcript::held`]); [`Asked::Named`] names the hash alone
-///   ([`Transcript::named`]).
-/// - fails: [`RunError::Transcript`] when the file cannot be read.
+/// - ensures: [`Asked::File`] reads the whole file and stages its content
+///   ([`Transcript::held`]); [`Asked::Named`] reads the content `evidence`
+///   holds under the digest ([`Evidence::read`]) and stages it again, under the
+///   same name.
+/// - fails: [`RunError::Transcript`] when the file cannot be read, and
+///   [`RunError::Evidence`] when the store does not hold the digest whole or
+///   the content cannot be staged.
 /// - panics: none.
 ///
 /// # Errors
 /// - [`RunError::Transcript`]: the file cannot be read.
+/// - [`RunError::Evidence`]: the evidence is not held whole, or not staged.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — the process test judges one transcript from its file and
-///   by its hash, and reads the same hash printed both ways.
+///   by its digest once a verdict kept it, reading the same digest printed both
+///   ways, and refuses a digest the store does not hold.
 /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
-fn transcript_of(asked: Asked) -> Result<Transcript, RunError>
+fn transcript_of(
+    asked: Asked,
+    evidence: &Evidence,
+) -> Result<Transcript, RunError>
 {
-    match asked {
-        | Asked::Named(hash) => Ok(Transcript::named(hash)),
+    let content = match asked {
+        | Asked::Named(digest) => evidence.read(digest)?,
         | Asked::File(path) => {
             let bytes = std::fs::read(path).map_err(RunError::Transcript)?;
-            Ok(Transcript::held(Content::from(bytes)))
+            Content::from(bytes)
         },
-    }
+    };
+    let transcript = Transcript::held(content)?;
+    Ok(transcript)
 }
 
 /// Ask each of `questions` about `transcript` of what `judging` names,
@@ -3106,23 +3301,29 @@ async fn dispatch(
     emit(&format_args!("{}woken\n", Reached { tree, route }))
 }
 
-/// Print `tree` read as a task, reached first as `replaying` says.
+/// Print `tree` read as a task, reached first as `replaying` says, and
+/// whether each evidence it names is held.
 ///
 /// # Specification
-/// - ensures: for [`Replaying::Local`], writes the local store's task. For
+/// - ensures: for [`Replaying::Local`], writes the local store's task, then the
+///   evidence lines as [`gather`] reads them from `evidence` alone. For
 ///   [`Replaying::Dial`], aims at the peer `--peer` named, or else at the local
 ///   task's current attempt's seat, or at the task's owner when no dispatch is
 ///   admitted; routes ([`Peer::route`]), and unless the route is this peer
-///   itself, binds an ephemeral endpoint, syncs the task ([`Node::sync`]) and
-///   closes the endpoint; then writes the route's `source` line and the task:
-///   one line per admitted seat receipt in canonical order and the line saying
-///   where it stands ([`domhringr_record_tree::Task`]'s display).
+///   itself, binds an ephemeral endpoint, syncs the task ([`Node::sync`]),
+///   fetches from the peer reached each evidence the synced task names that
+///   `evidence` lacks ([`gather`]) and closes the endpoint; then writes the
+///   route's `source` line, the task — one line per admitted seat receipt in
+///   canonical order and the line saying where it stands
+///   ([`domhringr_record_tree::Task`]'s display) — and the evidence lines
+///   ([`attest`]).
 /// - fails: [`RunError::View`] when the task cannot be folded, as when the
 ///   local store holds none of it and no `--peer` names whom to reach,
 ///   [`RunError::Route`] when no endpoint names the peer aimed at,
 ///   [`RunError::Bind`] when the endpoint cannot bind, [`RunError::Sync`] when
-///   the sync fails, and [`RunError::Output`] when standard output cannot be
-///   written.
+///   the sync fails, [`RunError::Output`] when standard output cannot be
+///   written and [`RunError::Diagnostics`] when standard error cannot be. An
+///   evidence that is not held whole is a line, never a failure.
 /// - panics: none.
 ///
 /// # Errors
@@ -3131,10 +3332,15 @@ async fn dispatch(
 /// # Adequacy
 /// - hypothesis: L3 — the process test replays the task from the local store
 ///   while the seat is down, then through the seat's presence in the book
-///   before and after the seat reports, reading each line.
+///   before and after the seat reports, reading each line, the report's content
+///   fetched from the seat and held; the judge's and the playbook's tests
+///   replay from the local store and read each transcript and output held.
 /// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
+/// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
+/// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
 async fn replay(
     peer: Peer,
+    evidence: &Evidence,
     tree: TreeId,
     replaying: Replaying,
 ) -> Result<(), RunError>
@@ -3142,7 +3348,9 @@ async fn replay(
     let Replaying::Dial { toward, at } = replaying
     else {
         let view = peer.view(tree).await?;
-        return emit(view.task());
+        let gathered = gather(evidence, view.task(), Source::Local).await;
+        emit(view.task())?;
+        return attest(gathered);
     };
     let aim = match toward {
         | Toward::Peer(named) => Aim::Peer(named),
@@ -3152,35 +3360,216 @@ async fn replay(
         },
     };
     let route = peer.route(tree, aim, at).await?;
-    let view = match route {
-        | Route::Itself => peer.view(tree).await?,
+    let (view, gathered) = match route {
+        | Route::Itself => {
+            let view = peer.view(tree).await?;
+            let gathered = gather(evidence, view.task(), Source::Local).await;
+            (view, gathered)
+        },
         | Route::Book { ref remote, .. } | Route::Given { ref remote } => {
             let node = peer.bind(BindPort::Ephemeral, &[]).await?;
             let synced = node.sync(remote, tree).await;
             let view = node.peer().view(tree).await;
+            let gathered = match (&synced, &view) {
+                | (&Ok(_), &Ok(ref view)) => {
+                    let source = Source::Remote {
+                        node: &node,
+                        holder: remote.endpoint(),
+                    };
+                    gather(evidence, view.task(), source).await
+                },
+                | _ => Vec::new(),
+            };
             node.close().await;
             drop(node);
             let _synced = synced?;
-            view?
+            (view?, gathered)
         },
     };
-    emit(&format_args!("{}{}", Reached { tree, route }, view.task()))
+    emit(&format_args!("{}{}", Reached { tree, route }, view.task()))?;
+    attest(gathered)
+}
+
+/// Where evidence the local store lacks is fetched from.
+#[derive(Clone, Copy)]
+enum Source<'reach>
+{
+    /// Nowhere: the local store alone is read.
+    Local,
+    /// The holder at this endpoint, dialed from this node.
+    Remote
+    {
+        /// The node dialing.
+        node: &'reach Node,
+        /// The holder's endpoint.
+        holder: &'reach Endpoint,
+    },
+}
+
+/// Each evidence `task` names, once and in the order first named, with
+/// whether it is held whole: read from `evidence`, or else fetched from
+/// `source` into it.
+///
+/// # Specification
+/// - ensures: per distinct digest of [`Task::evidence`] in order, `Ok` when
+///   [`Evidence::read`] reads it whole, or when it does not and
+///   [`domhringr_record_evidence::fetch`] from a [`Source::Remote`] brings it
+///   whole; otherwise the refusal: [`RunError::Evidence`] as the local read
+///   refused it under [`Source::Local`], [`RunError::Fetch`] as the fetch
+///   refused it under [`Source::Remote`].
+/// - panics: none.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the seat's process test replays a report fetched from the
+///   seat; the judge's and the playbook's replay their own evidence from the
+///   local store.
+/// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
+/// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
+async fn gather(
+    evidence: &Evidence,
+    task: &Task,
+    source: Source<'_>,
+) -> Vec<(ManifestDigest, Result<(), RunError>)>
+{
+    let mut seen = BTreeSet::new();
+    let mut gathered = Vec::new();
+    for (_author, digest) in task.evidence() {
+        if !seen.insert(digest) {
+            continue;
+        }
+        let outcome = match (evidence.read(digest), source) {
+            | (Ok(_content), _) => Ok(()),
+            | (Err(refused), Source::Local) => Err(RunError::Evidence(refused)),
+            | (Err(_lacking), Source::Remote { node, holder }) => {
+                domhringr_record_evidence::fetch(node, holder, digest, evidence)
+                    .await
+                    .map(drop)
+                    .map_err(RunError::Fetch)
+            },
+        };
+        gathered.push((digest, outcome));
+    }
+    gathered
+}
+
+/// Write one line per evidence of `gathered`: `evidence <digest> held`, or
+/// `evidence <digest> unheld` with its cause on standard error.
+///
+/// # Specification
+/// - ensures: the lines in order; each cause is written as [`report`] writes
+///   it, after its line.
+/// - fails: [`RunError::Output`] when standard output cannot be written, and
+///   [`RunError::Diagnostics`] when standard error cannot be.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError::Output`], [`RunError::Diagnostics`]: as listed above.
+fn attest(gathered: Vec<(ManifestDigest, Result<(), RunError>)>) -> Result<(), RunError>
+{
+    for (digest, outcome) in gathered {
+        match outcome {
+            | Ok(()) => emit(&format_args!("evidence {digest} held\n"))?,
+            | Err(failure) => {
+                emit(&format_args!("evidence {digest} unheld\n"))?;
+                report(&failure).map_err(RunError::Diagnostics)?;
+            },
+        }
+    }
+    Ok(())
+}
+
+/// Write the content of the evidence `digest` names, read from `evidence`, or
+/// else fetched as `reaching` says.
+///
+/// # Specification
+/// - ensures: when `evidence` holds `digest` whole, its content. Otherwise, for
+///   [`Replaying::Dial`], aims at the peer `--peer` named, or else at the
+///   author of the first admitted receipt of the local task naming `digest`
+///   ([`Task::evidence`]); routes ([`Peer::route`]), binds an ephemeral
+///   endpoint, fetches ([`domhringr_record_evidence::fetch`]) — the value
+///   checked whole and kept before any byte is returned — closes the endpoint,
+///   and writes the content. The content is written byte for byte and nothing
+///   else; on any failure nothing is written to standard output.
+/// - fails: [`RunError::Evidence`] with the local refusal for
+///   [`Replaying::Local`] or a route to this peer itself, [`RunError::View`]
+///   when the local task cannot be folded, [`RunError::Unnamed`] when no
+///   admitted receipt names `digest` and no `--peer` is named,
+///   [`RunError::Route`] when no endpoint names the holder, [`RunError::Bind`]
+///   when the endpoint cannot bind, [`RunError::Fetch`] as the fetch refuses —
+///   among them the value plane's refusal naming the first chunk neither side
+///   holds — and [`RunError::Output`] when standard output cannot be written.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — two processes: a reader prints a seat's report fetched
+///   through the book, compared byte for byte with the file reported, then,
+///   holding none of it and the seat missing one chunk, is refused naming that
+///   chunk with nothing printed.
+/// - witness: `evidence::tests::a_reader_fetches_a_seats_report_and_refuses_a_missing_chunk`
+async fn evidence(
+    peer: Peer,
+    evidence: &Evidence,
+    tree: TreeId,
+    digest: ManifestDigest,
+    reaching: Replaying,
+) -> Result<(), RunError>
+{
+    let content = match (evidence.read(digest), reaching) {
+        | (Ok(content), _) => content,
+        | (Err(refused), Replaying::Local) => return Err(RunError::Evidence(refused)),
+        | (Err(refused), Replaying::Dial { toward, at }) => {
+            let aim = match toward {
+                | Toward::Peer(named) => named,
+                | Toward::Seat => peer
+                    .view(tree)
+                    .await?
+                    .task()
+                    .evidence()
+                    .find(|&(_author, named)| named == digest)
+                    .map(|(author, _named)| author)
+                    .ok_or(RunError::Unnamed(digest))?,
+            };
+            let route = peer.route(tree, Aim::Peer(aim), at).await?;
+            let (Route::Book { ref remote, .. } | Route::Given { ref remote }) = route
+            else {
+                return Err(RunError::Evidence(refused));
+            };
+            let node = peer.bind(BindPort::Ephemeral, &[]).await?;
+            let fetched =
+                domhringr_record_evidence::fetch(&node, remote.endpoint(), digest, evidence).await;
+            node.close().await;
+            drop(node);
+            fetched?
+        },
+    };
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(content.as_ref())
+        .map_err(RunError::Output)?;
+    stdout.flush().map_err(RunError::Output)
 }
 
 /// Bind `peer` on `port`, announce it, and serve as a seat acting through
-/// `surface` until the process is killed.
+/// `surface` and keeping its reports in `evidence` until the process is
+/// killed.
 ///
 /// # Specification
-/// - ensures: once the endpoint is bound, accepting the seat protocol, writes
-///   the endpoint id line, the peer id line and `listening`; then writes the
-///   seat's events ([`domhringr_seat_slot::serve`]) as they come: for each peer
-///   admitted `accepted <peer-id>` and `path <peer-id> <path>` for the path its
+/// - ensures: once the endpoint is bound, accepting the seat protocol and the
+///   evidence protocol, writes the endpoint id line, the peer id line and
+///   `listening`; then writes the seat's events
+///   ([`domhringr_seat_slot::serve`]) as they come: for each peer admitted
+///   `accepted <peer-id>` and `path <peer-id> <path>` for the path its
 ///   connection took when admitted, `woken <tree> <dispatch-id>` for a wake
 ///   answered, `declined <reason>` for one declined, `reported <tree>
-///   <commit-id>` for a report committed, and `unreported <tree> <dispatch-id>`
-///   for an act that committed none. A connection that fails its handshake, a
-///   declined wake's, a failed act's and a failed resume's cause are reported
-///   on standard error and serving continues.
+///   <commit-id>` for a report committed, `unreported <tree> <dispatch-id>` for
+///   an act that committed none, `served <digest>` for a fetch answered with
+///   the evidence it held, and `unserved <digest>` for one answered unheld. A
+///   connection that fails its handshake, a declined wake's, a failed act's, an
+///   unheld fetch's, a failed fetch stream's and a failed resume's cause are
+///   reported on standard error and serving continues.
 /// - fails: [`RunError::Bind`] when the endpoint cannot bind,
 ///   [`RunError::Closed`] if the endpoint closes, [`RunError::Output`] and
 ///   [`RunError::Diagnostics`] when standard output or standard error cannot be
@@ -3198,18 +3587,26 @@ async fn replay(
 ///   announced ids and `listening`, sync against the server repeatedly, and
 ///   read an `accepted` line and a parseable `path` line per sync; a seat is
 ///   woken, fails to act through a failing program, and once restarted with
-///   another program resumes and reports, each read from its lines.
+///   another program resumes and reports, each read from its lines, and serves
+///   its report's content to the replaying operator; a seat missing a chunk of
+///   a report still serves what it holds.
 /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
 /// - witness: `sync::tests::two_peers_sync_one_tree_to_identical_heads`
 /// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
+/// - witness: `evidence::tests::a_reader_fetches_a_seats_report_and_refuses_a_missing_chunk`
 async fn serve(
     peer: Peer,
+    evidence: Evidence,
     port: BindPort,
     surface: Surface,
 ) -> Result<(), RunError>
 {
-    let node = Arc::new(peer.bind(port, &[domhringr_seat_slot::PROTOCOL]).await?);
-    let mut events = domhringr_seat_slot::serve(Arc::clone(&node), surface);
+    let protocols = [
+        domhringr_seat_slot::PROTOCOL,
+        domhringr_record_evidence::PROTOCOL,
+    ];
+    let node = Arc::new(peer.bind(port, &protocols).await?);
+    let mut events = domhringr_seat_slot::serve(Arc::clone(&node), surface, evidence);
     emit(&format_args!(
         "{}\n{}\nlistening\n",
         node.endpoint_key(),
@@ -3249,6 +3646,15 @@ async fn serve(
                 ))?;
                 report(&failure)
             },
+            | Event::Served(Served::Held { digest, .. }) => {
+                emit(&format_args!("served {digest}\n"))?;
+                Ok(())
+            },
+            | Event::Served(Served::Unheld { digest, reason }) => {
+                emit(&format_args!("unserved {digest}\n"))?;
+                report(&reason)
+            },
+            | Event::Unserved(failure) => report(&failure),
             | Event::Unaccepted(failure) => report(&failure),
             | Event::Unanswered(failure) => report(&failure),
             | Event::Unresumed(failure) => report(&failure),
@@ -3338,6 +3744,7 @@ mod tests
 
     use domhringr_judge_oracle::Question;
     use domhringr_judge_oracle::QuestionError;
+    use domhringr_record_evidence::ParsedDigest;
     use domhringr_record_tree::Aim;
     use domhringr_record_tree::Anchor;
     use domhringr_record_tree::At;
@@ -3366,6 +3773,7 @@ mod tests
     use domhringr_record_tree::TreeKey;
     use domhringr_record_tree::UdpPort;
     use domhringr_seat_slot::Surface;
+    use gandr_storage_values::ManifestDigest;
 
     use super::Asked;
     use super::Command;
@@ -3482,6 +3890,7 @@ mod tests
         };
         let port = |text: &str| BindPort::Fixed(text.parse::<UdpPort>().unwrap());
         let content = CONTENT.parse::<ContentHash>().unwrap();
+        let digest = ManifestDigest::from(CONTENT.parse::<ParsedDigest>().unwrap());
         let question = |text: &str, options: &[&str]| {
             Question::new(
                 text.to_owned(),
@@ -3554,12 +3963,12 @@ mod tests
                     "dir",
                     "report",
                     TREE,
-                    CONTENT,
+                    "report.txt",
                     "-done: all green",
                 ],
                 Command::Report {
                     tree,
-                    content,
+                    file: PathBuf::from("report.txt"),
                     summary: "-done: all green".parse().unwrap(),
                 },
             ),
@@ -3592,6 +4001,44 @@ mod tests
                 Command::Replay {
                     tree,
                     replaying: Replaying::Local,
+                },
+            ),
+            (
+                vec!["--state", "dir", "evidence", TREE, CONTENT],
+                Command::Evidence {
+                    tree,
+                    digest,
+                    reaching: Replaying::Dial {
+                        toward: Toward::Seat,
+                        at: At::Book,
+                    },
+                },
+            ),
+            (
+                vec![
+                    "--state",
+                    "dir",
+                    "evidence",
+                    &peer_option,
+                    TREE,
+                    CONTENT,
+                    &at_option,
+                ],
+                Command::Evidence {
+                    tree,
+                    digest,
+                    reaching: Replaying::Dial {
+                        toward: Toward::Peer(peer_key),
+                        at: named.at.clone(),
+                    },
+                },
+            ),
+            (
+                vec!["--state", "dir", "evidence", "--local", TREE, CONTENT],
+                Command::Evidence {
+                    tree,
+                    digest,
+                    reaching: Replaying::Local,
                 },
             ),
             (vec!["--state", "dir", "open"], Command::Open),
@@ -3830,7 +4277,7 @@ mod tests
                 ],
                 Command::Ask {
                     question: question("Did it land?", &["yes", "-no"]),
-                    transcript: Asked::Named(content),
+                    transcript: Asked::Named(digest),
                     judging: Judging::Endpoint,
                 },
             ),
@@ -4529,6 +4976,29 @@ mod tests
             UsageError::Operands(Verb::Replay)
         ));
         assert!(matches!(
+            refused(line(&["--state", "dir", "evidence", TREE])),
+            UsageError::Operands(Verb::Evidence)
+        ));
+        assert!(matches!(
+            refused(line(&[
+                "--state", "dir", "evidence", TREE, CONTENT, CONTENT
+            ])),
+            UsageError::Operands(Verb::Evidence)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "evidence", TREE, "nothex"])),
+            UsageError::Digest {
+                operand: Operand::Evidence,
+                ..
+            }
+        ));
+        assert!(matches!(
+            refused(line(&[
+                "--state", "dir", "evidence", "--local", "--at", &endpoint, TREE, CONTENT
+            ])),
+            UsageError::Local
+        ));
+        assert!(matches!(
             refused(line(&["--state", "dir", "serve", "--surface"])),
             UsageError::Arguments(_)
         ));
@@ -4655,7 +5125,7 @@ mod tests
         assert!(matches!(judged(&pathed), UsageError::NotTree));
         let mut short = ask(&asked);
         short.extend(["--transcript", "0e0e0e0e"]);
-        assert!(matches!(judged(&short), UsageError::Operand {
+        assert!(matches!(judged(&short), UsageError::Digest {
             operand: Operand::Transcript,
             ..
         }));

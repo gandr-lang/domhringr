@@ -1,6 +1,6 @@
 # domhringr
 
-The `domhringr` binary is the operator's: it lists a project's seats and tasks, dispatches a seat to a task, verifies and decides the change the seat reports, and lands it in a git repository, all from the record.
+The `domhringr` binary is the operator's: it lists a project's seats and tasks, dispatches a seat to a task, reads the report the seat keeps as evidence, verifies and decides the change the report names, and lands it in a git repository, all from the record.
 
 - [Synopsis](#synopsis)
 - [References](#references)
@@ -16,15 +16,16 @@ The `domhringr` binary is the operator's: it lists a project's seats and tasks, 
 
 ## Synopsis
 
-**What.** `domhringr` runs the task loop for one operator: `open` lists the project, `dispatch` puts a seat to work on a task, `verify` runs a playbook's verifiers on the change the seat reports, `decide` grades it by rubrics and decides to land or rework it, and `land` merges it. Every step is a receipt in the task's tree, and every command reads the task as the fold derives it.
+**What.** `domhringr` runs the task loop for one operator: `open` lists the project, `dispatch` puts a seat to work on a task, `verify` runs a playbook's verifiers on the change the seat reports, `decide` grades it by rubrics and decides to land or rework it, and `land` merges it. Every step is a receipt in the task's tree, and every command reads the task as the fold derives it; the report, each verifier's output and each transcript are evidence, read from and kept in the operator's evidence store.
 
 **Why.** The loop — dispatch, report, verify, judge, decide, land — has to run from the record alone, with no server holding its state: any synced member can pick it up where the journal says it stands, and each choice is the receipt of the key that made it.
 
-**How.** The driver composes the libraries: `domhringr-record-tree` for the store, the fold and sync, `domhringr-seat-slot` for the wake, `domhringr-strategy-document` for playbooks, rubrics and verifiers, and `domhringr-judge-oracle` for the judge. It runs `git` as a program for checkouts, diffs and merges. It binds an endpoint only to wake a seat or to sync a task from one, and closes it before it returns.
+**How.** The driver composes the libraries: `domhringr-record-tree` for the store, the fold and sync, `domhringr-record-evidence` for the evidence store and the fetch, `domhringr-seat-slot` for the wake, `domhringr-strategy-document` for playbooks, rubrics and verifiers, and `domhringr-judge-oracle` for the judge. It runs `git` as a program for checkouts, diffs and merges. It binds an endpoint only to wake a seat, to sync a task from one or to fetch a report from one, and closes it before it returns.
 
 ## References
 
 - `domhringr-record-tree`, [crate documentation](../record-tree/README.md): the store, the task view and its lifecycle, the `Decide` and `Landed` receipts.
+- `domhringr-record-evidence`, [crate documentation](../record-evidence/README.md): the evidence store a report is read from and outputs and transcripts are kept in, and the fetch from a seat.
 - `domhringr-seat-slot`, [crate documentation](../seat-slot/README.md): the wake and the seat that reports.
 - `domhringr-strategy-document`, [crate documentation](../strategy-document/README.md): playbooks, rubrics, verifiers, grades and their composition.
 - `domhringr-judge-oracle`, [crate documentation](../judge-oracle/README.md): the judge's backends and their configuration.
@@ -37,15 +38,16 @@ The `domhringr` binary is the operator's: it lists a project's seats and tasks, 
 
 - `open`: the project's seats with their presences, and its tasks with where each stands, synced from each seat a report is awaited from.
 - `dispatch`: a task minted and bound in the project on first use, a seat dispatched to it and woken, a current dispatch re-sent rather than repeated.
-- `verify`: the reported commit checked out into a temporary worktree, each verifier run there, a `Verified` receipt per step.
-- `decide`: the change written as rubric state, each rubric graded into a `Verdict` and a `Graded` receipt, the grades composed with the latest verifications, and a `Decide` receipt to land or rework.
+- `verify`, `decide`, `land`: the report read whole from the evidence store, fetched from the seat that reported it when the store lacks it, and named as `report <digest>`.
+- `verify`: the reported commit checked out into a temporary worktree, each verifier run there and its output kept as evidence, a `Verified` receipt per step.
+- `decide`: the change written as rubric state, each rubric graded into a `Verdict`, its transcript kept as evidence, and a `Graded` receipt, the grades composed with the latest verifications, and a `Decide` receipt to land or rework.
 - `land`: the change merged into the branch the repository has checked out, fast forward or by a merge commit, and a `Landed` receipt naming the revision; a refused merge leaves the repository as it was.
 
 ## Expected features
 
-- A writable state directory: `DOMHRINGR_STATE`, else `domhringr` under `XDG_STATE_HOME`, else `$HOME/.local/state/domhringr`. It holds the operator's keys and store, created on first use; a command holds the store exclusively while it runs.
+- A writable state directory: `DOMHRINGR_STATE`, else `domhringr` under `XDG_STATE_HOME`, else `$HOME/.local/state/domhringr`. It holds the operator's keys, store and evidence store, created on first use; a command holds the store exclusively while it runs.
 - A project the store holds: a tree whose owner is this peer or granted it, named by `--project` or `DOMHRINGR_PROJECT` as its bare anchor, `domhringr://<tree-id>/`, with each seat present in its book.
-- Seats serving with a surface, as [`domhringr-seat-slot`](../seat-slot/README.md#expected-features) expects, reachable at their presence; network access for iroh.
+- Seats serving with a surface, as [`domhringr-seat-slot`](../seat-slot/README.md#expected-features) expects, reachable at their presence and answering fetches of the reports they keep until the operator holds each; network access for iroh.
 - The `git` binary on `PATH`, and a repository at `--repo` holding the reported commit, its working tree clean for `land`.
 - For `decide` without `--static`, a judge endpoint configured as [`domhringr-judge-oracle`](../judge-oracle/README.md#configuration) reads it.
 - For `verify`, each verifier's command on `PATH`; it runs in a fresh checkout of the change, with nothing untracked beside it.
@@ -82,9 +84,9 @@ A `<task>` is its name in the project — ASCII letters, digits, `-`, `_` and `.
 | ------- | ------ | ------- |
 | `open` | `project <anchor>`; `seat <peer-id> <endpoint> <commit-id>` per presence but the operator's; `task <anchor> <standing>` per task, or `unheld` for a task tree the store lacks | nothing |
 | `dispatch` | `dispatch <commit-anchor>`, then `woken` | `Open` and `Bind` for a new task, then `Dispatch` |
-| `verify` | `change <branch> <commit>`, `playbook <hash> <name>`, `verified <commit-id> <step> <output-hash> <status>` per verifier | `Verified` per verifier |
-| `decide` | `change`; `step <id> <status>` per verified step; per rubric `rubric`, `transcript`, `ruling`, `verdict`, `grade` and `graded` lines; `composed <grade>`; `decide <commit-id> <decision>` | `Verdict` and `Graded` per rubric, then `Decide` unless undecided |
-| `land` | `change <branch> <commit>`, `landed <commit-id> <revision>` | `Landed` |
+| `verify` | `change <branch> <commit>`, `report <digest>`, `playbook <hash> <name>`, `verified <commit-id> <step> <output-digest> <status>` per verifier | `Verified` per verifier |
+| `decide` | `change`; `report`; `step <id> <status>` per verified step; per rubric `rubric`, `transcript`, `ruling`, `verdict`, `grade` and `graded` lines; `composed <grade>`; `decide <commit-id> <decision>` | `Verdict` and `Graded` per rubric, then `Decide` unless undecided |
+| `land` | `change <branch> <commit>`, `report <digest>`, `landed <commit-id> <revision>` | `Landed` |
 
 The exit status is 0 on success, 1 when a command fails, 2 for a command line that cannot be run, and 3 when `decide` decides nothing. Diagnostics go to standard error.
 
@@ -124,6 +126,13 @@ Reversal: tasks that move between projects, which needs a binding per project an
 - `--at` on every command: the endpoint the record already holds, typed again.
 
 Reversal: seats with no presence in any project, reached through a discovery service, which needs a route that reads it.
+
+**`verify`, `decide` and `land` read the report from the evidence store before they act.** The receipt names the report's content by digest; a store that lacks it fetches it from the seat that reported, reached as a sync reaches it, every chunk checked and the value kept before the command goes on, and each command then reads it whole and prints its digest. An operator on another machine than the seat's acts on what the seat produced, held in its own store, and a report no reader can open stops the command before anything is checked or committed.
+
+- acting on the summary alone: the change named by a report the operator never holds, and a verdict or a landing on bytes nobody here can read again.
+- fetching only when a check reads the content: `land` and a step-only `verify` would act on a report never read.
+
+Reversal: reports too large to fetch on every command, when the summary is read alone and the content fetched by the check that reads it.
 
 **git is run as a program.** Checkouts, diffs, logs and merges go through the `git` on `PATH`, with the variables that name another repository cleared, as `domhringr-peer`'s drift check does. The repository's own configuration applies — hooks, signing, merge drivers — as it does to the operator by hand.
 

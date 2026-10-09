@@ -3,7 +3,7 @@ name = "domhringr-seat-slot"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "The domhringr seat: answers an operator's wake over one iroh stream, acts on the dispatch it holds through a command surface, and reports its content by hash"
+description = "The domhringr seat: answers an operator's wake over one iroh stream, acts on the dispatch it holds through a command surface, keeps its report as evidence and answers fetches of it"
 readme = "README.md"
 repository.workspace = true
 license.workspace = true
@@ -12,6 +12,7 @@ categories = ["network-programming"]
 publish.workspace = true
 
 [dependencies]
+domhringr-record-evidence = { workspace = true }
 domhringr-record-tree = { workspace = true }
 iroh = { workspace = true }
 thiserror = { workspace = true }

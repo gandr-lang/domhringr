@@ -460,7 +460,8 @@ question = { rubric = "rubric.toml", question = "tested" }
     ///   task's state. With `tested` read as unmet, R grades `graded G₃ unmet`.
     ///   O's local replay prints the dispatch, each verdict with its rulings,
     ///   each grading with its grades, each verification with O as runner and p
-    ///   as playbook, and `dispatched D S`.
+    ///   as playbook, `graded D G₃ unmet`, and `evidence <digest> held` for t
+    ///   and each output in the order first named: each kept on O's side.
     /// - panics: on any contract violation.
     #[test]
     #[expect(
@@ -678,10 +679,10 @@ question = { rubric = "rubric.toml", question = "tested" }
         else {
             panic!("the failing verifier's code is recorded: {failing_line:?}");
         };
-        for hash in [note_commit, note_output, failing_commit, failing_output] {
-            assert!(hashed(hash), "named by its hash: {hash:?}");
+        for name in [note_commit, note_output, failing_commit, failing_output] {
+            assert!(hashed(name), "named by 64 hex digits: {name:?}");
         }
-        assert_ne!(note_output, failing_output, "each output by its own hash");
+        assert_ne!(note_output, failing_output, "each output by its own digest");
         assert_eq!(
             std::fs::read_to_string(task.join("runs.txt")).unwrap(),
             "ran\n",
@@ -787,6 +788,11 @@ question = { rubric = "rubric.toml", question = "tested" }
             }
         }
         replayed.push(format!("graded {dispatch} {third_grading} unmet"));
+        replayed.extend([
+            format!("evidence {transcript} held"),
+            format!("evidence {note_output} held"),
+            format!("evidence {failing_output} held"),
+        ]);
         assert_eq!(
             finish(peer(o).args(["replay", tree.as_str(), "--local"])),
             replayed,
@@ -813,7 +819,8 @@ question = { rubric = "rubric.toml", question = "tested" }
     ///   question's grade `unmet`, every other `met`, and `graded G unmet`. O's
     ///   local replay prints the dispatch D; per grading, the verdict naming D,
     ///   O, r and t with each question's ruling, and the grading naming D, V, r
-    ///   and the composition with each question's grade; then `dispatched D S`.
+    ///   and the composition with each question's grade; then `dispatched D S`
+    ///   and `evidence t held` per transcript in the order first named.
     /// - panics: on any contract violation.
     #[test]
     fn every_rubric_in_the_set_grades_its_fixture_pair()
@@ -830,6 +837,7 @@ question = { rubric = "rubric.toml", question = "tested" }
             task.dispatch, task.seat
         )];
         let mut standing = format!("dispatched {} {}", task.dispatch, task.seat);
+        let mut held = Vec::new();
         for file in rubric_files() {
             let Validated {
                 name,
@@ -848,7 +856,7 @@ question = { rubric = "rubric.toml", question = "tested" }
                     .document()
                     .transcript(&pair.join(member))
                     .unwrap_or_else(|error| panic!("{name}: its {member} state reads: {error}"))
-                    .hash()
+                    .digest()
                     .to_string()
             };
             let (met, unmet) = (transcript("met"), transcript("unmet"));
@@ -946,9 +954,14 @@ question = { rubric = "rubric.toml", question = "tested" }
                         .map(|&(hash, (_, grade))| format!("grade {grading} {hash} {grade}")),
                 );
                 standing = format!("graded {} {grading} {composed}", task.dispatch);
+                let line = format!("evidence {transcript} held");
+                if !held.contains(&line) {
+                    held.push(line);
+                }
             }
         }
         replayed.push(standing);
+        replayed.extend(held);
         assert_eq!(
             finish(peer(o).args(["replay", task.tree.as_str(), "--local"])),
             replayed,

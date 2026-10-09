@@ -1,0 +1,25 @@
+[package]
+name = "domhringr-record-evidence"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The domhringr evidence plane: reports, verifier outputs and transcripts committed as value-plane chunk DAGs under a pinned profile, read through their manifest, and fetched chunk by chunk over iroh"
+readme = "README.md"
+repository.workspace = true
+license.workspace = true
+keywords = ["content-addressing", "domhringr", "evidence", "iroh", "storage"]
+categories = ["network-programming"]
+publish.workspace = true
+
+[dependencies]
+data-encoding = { workspace = true }
+domhringr-record-tree = { workspace = true }
+gandr-storage-chunker = { workspace = true }
+gandr-storage-values = { workspace = true }
+iroh = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

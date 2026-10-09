@@ -45,21 +45,27 @@
 //! 64 hex digits. `verify`, `decide` and `land` act on the current attempt's
 //! report, synced from the seat first when the attempt awaits it, in the git
 //! repository `--repo` names, the working directory by default, which must
-//! hold the reported commit. Each prints `change <branch> <commit>` first.
+//! hold the reported commit. The report's content is evidence kept in the
+//! operator's state beside its store: one the store lacks is fetched from the
+//! seat that reported it, every chunk checked before it is kept, and each
+//! command reads it whole before it acts. Each prints `change <branch>
+//! <commit>` and `report <digest>` first.
 //!
 //! `verify` checks the commit out into a temporary worktree, runs each
-//! verifier step of the playbook there in turn, commits a verification naming
-//! this peer the runner, prints `playbook <hash> <name>` and `verified
-//! <commit-id> <step> <output-hash> <status>`, and removes the worktree. A
-//! playbook's question steps are left to `decide`. A failing verifier is
-//! recorded, and the command still succeeds.
+//! verifier step of the playbook there in turn, keeps its output as
+//! evidence, commits a verification naming this peer the runner, prints
+//! `playbook <hash> <name>` and `verified <commit-id> <step> <output-digest>
+//! <status>`, and removes the worktree. A playbook's question steps are left
+//! to `decide`. A failing verifier is recorded, and the command still
+//! succeeds.
 //!
 //! `decide` writes the change into a temporary state directory —
 //! `change.diff`, the diff from the repository's `HEAD` to the commit, and
 //! `commits.txt`, each commit's id and message oldest first — and grades
-//! each `--rubric` over it as the peer's `rubric grade` does, naming this
-//! peer the judge: `rubric`, `transcript`, `ruling`, `verdict`, `grade` and
-//! `graded` lines. It answers from the endpoint the environment configures,
+//! each `--rubric` over it as the peer's `rubric grade` does, keeping each
+//! transcript as evidence and naming this peer the judge: `rubric`,
+//! `transcript`, `ruling`, `verdict`, `grade` and `graded` lines. It answers
+//! from the endpoint the environment configures,
 //! as the peer's judge does, or from the `--static` table. It then composes
 //! the rubrics' grades with the latest verification of each step on the
 //! dispatch, met when it exited 0 and unmet otherwise, prints `step <id>
@@ -115,6 +121,9 @@ use std::process::ExitCode;
 use domhringr_judge_oracle::ConfigError;
 use domhringr_judge_oracle::EndpointError;
 use domhringr_judge_oracle::ParseTableError;
+use domhringr_record_evidence::Evidence;
+use domhringr_record_evidence::EvidenceError;
+use domhringr_record_evidence::FetchError;
 use domhringr_record_tree::Anchor;
 use domhringr_record_tree::At;
 use domhringr_record_tree::Authority;
@@ -140,7 +149,7 @@ use domhringr_record_tree::TreeId;
 use domhringr_record_tree::ViewError;
 use domhringr_seat_slot::WakeError;
 use domhringr_strategy_document::LoadError;
-use domhringr_strategy_document::StateError;
+use domhringr_strategy_document::TranscriptError;
 use domhringr_strategy_document::VerifyError;
 
 use crate::change::GitAction;
@@ -588,9 +597,17 @@ enum RunError
     /// A verifier's thread failed.
     #[error("the verifier's thread failed")]
     Join(#[source] tokio::task::JoinError),
-    /// A rubric's state file cannot be read into its transcript.
+    /// A rubric's state file cannot be read into its transcript, or the
+    /// transcript cannot be staged as evidence.
     #[error(transparent)]
-    State(#[from] StateError),
+    State(#[from] TranscriptError),
+    /// A report, an output or a transcript cannot be read from or kept in the
+    /// evidence store.
+    #[error(transparent)]
+    Evidence(#[from] EvidenceError),
+    /// A report's content cannot be fetched from the seat that reported it.
+    #[error(transparent)]
+    Fetch(#[from] FetchError),
     /// The table file cannot be read.
     #[error("cannot read the table file")]
     Table(#[source] std::io::Error),
@@ -952,12 +969,10 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// # Specification
 /// - requires: called within a Tokio runtime.
 /// - ensures: resolves the settings ([`settings`]), loads or creates the
-///   identity beneath the state directory, opens the store, and runs the
-///   command: `open` as [`project::open`], `dispatch` as [`project::dispatch`],
-///   `verify` as [`check::verify`], `decide` as [`check::decide`] and `land` as
-///   [`change::land`].
+///   identity beneath the state directory, opens the store and the evidence
+///   store beside it, and runs the command as [`act`] runs it.
 /// - fails: as [`settings`], [`RunError::Identity`] and [`RunError::Open`] when
-///   the identity or the store cannot be opened, and as each command fails.
+///   the identity or the store cannot be opened, and as [`act`].
 /// - panics: none.
 ///
 /// # Errors
@@ -973,7 +988,41 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
     let Settings { state, project } = settings(project)?;
     let identity = Identity::load_or_create(&state)?;
     let operator = identity.peer_key();
+    let evidence = Evidence::open(&state);
     let peer = Peer::open(&state, identity)?;
+    Box::pin(act(peer, &state, &evidence, operator, project, command)).await
+}
+
+/// Run `command` in `project` as `operator`, on the store `peer` opens in
+/// `state` and on `evidence`.
+///
+/// # Specification
+/// - requires: called within a Tokio runtime.
+/// - ensures: runs `open` as [`project::open`], `dispatch` as
+///   [`project::dispatch`], and `verify` as [`check::verify`], `decide` as
+///   [`check::decide`] and `land` as [`change::land`], each on the task and the
+///   store [`project::caught_up`] returns, its endpoint closed once the command
+///   ends.
+/// - fails: as each command fails.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process tests run each command against one state
+///   directory in turn and read its lines.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
+/// - witness: `operator::tests::open_lists_every_seat_and_task`
+async fn act(
+    peer: Peer,
+    state: &StateDir,
+    evidence: &Evidence,
+    operator: PeerKey,
+    project: TreeId,
+    command: Command,
+) -> Result<Completion, RunError>
+{
     match command {
         | Command::Open => project::open(peer, operator, project).await?,
         | Command::Dispatch {
@@ -983,7 +1032,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             at,
         } => {
             let on = project::Dispatching {
-                state: &state,
+                state,
                 operator,
                 project,
             };
@@ -994,10 +1043,16 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             playbook,
             repository,
         } => {
-            let tree = project::task(&peer, project, &task).await?;
-            let store = project::caught_up(peer, project, tree).await?;
-            let verified =
-                check::verify(store.peer(), operator, tree, &playbook, &repository).await;
+            let (tree, store) = project::caught_up(peer, project, &task, evidence).await?;
+            let verified = check::verify(
+                store.peer(),
+                evidence,
+                operator,
+                tree,
+                &playbook,
+                &repository,
+            )
+            .await;
             store.close().await;
             drop(store);
             verified?;
@@ -1008,11 +1063,11 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             repository,
             judging,
         } => {
-            let tree = project::task(&peer, project, &task).await?;
-            let store = project::caught_up(peer, project, tree).await?;
+            let (tree, store) = project::caught_up(peer, project, &task, evidence).await?;
             let decided = check::decide(
                 check::Deciding {
                     peer: store.peer(),
+                    evidence,
                     operator,
                     tree,
                 },
@@ -1026,9 +1081,10 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             return decided;
         },
         | Command::Land { task, repository } => {
-            let tree = project::task(&peer, project, &task).await?;
-            let landed = change::land(&peer, operator, tree, &repository).await;
-            drop(peer);
+            let (tree, store) = project::caught_up(peer, project, &task, evidence).await?;
+            let landed = change::land(store.peer(), evidence, operator, tree, &repository).await;
+            store.close().await;
+            drop(store);
             landed?;
         },
     }

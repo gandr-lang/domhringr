@@ -677,9 +677,11 @@ name = "domhringr"
 version = "0.0.0"
 dependencies = [
  "domhringr-judge-oracle",
+ "domhringr-record-evidence",
  "domhringr-record-tree",
  "domhringr-seat-slot",
  "domhringr-strategy-document",
+ "gandr-storage-values",
  "lexopt",
  "tempfile",
  "thiserror 2.0.21",
@@ -690,12 +692,27 @@ dependencies = [
 name = "domhringr-judge-oracle"
 version = "0.0.0"
 dependencies = [
+ "domhringr-record-evidence",
  "domhringr-record-tree",
  "gandr-storage-values",
  "iroh",
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "domhringr-record-evidence"
+version = "0.0.0"
+dependencies = [
+ "data-encoding",
+ "domhringr-record-tree",
+ "gandr-storage-chunker",
+ "gandr-storage-values",
+ "iroh",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -726,6 +743,7 @@ dependencies = [
 name = "domhringr-seat-slot"
 version = "0.0.0"
 dependencies = [
+ "domhringr-record-evidence",
  "domhringr-record-tree",
  "iroh",
  "tempfile",
@@ -738,6 +756,7 @@ name = "domhringr-strategy-document"
 version = "0.0.0"
 dependencies = [
  "domhringr-judge-oracle",
+ "domhringr-record-evidence",
  "domhringr-record-tree",
  "tempfile",
  "thiserror 2.0.21",
@@ -749,9 +768,11 @@ name = "domhringr-surface-peer"
 version = "0.0.0"
 dependencies = [
  "domhringr-judge-oracle",
+ "domhringr-record-evidence",
  "domhringr-record-tree",
  "domhringr-seat-slot",
  "domhringr-strategy-document",
+ "gandr-storage-values",
  "lexopt",
  "tempfile",
  "thiserror 2.0.21",

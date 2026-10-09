@@ -1495,6 +1495,7 @@ mod tests
     use core::net::Ipv4Addr;
     use core::net::SocketAddr;
 
+    use gandr_storage_values::ManifestDigest;
     use gandr_storage_values::TokenOffset;
     use gandr_storage_values::ValueError;
     use sedimentree_core::blob::Blob;
@@ -1684,13 +1685,25 @@ mod tests
         })
     }
 
-    /// The content the tests report: the hash of `text`.
+    /// The hash the tests name a rubric, a playbook or a question by: the
+    /// hash of `text`.
     ///
     /// # Specification
     /// trivial.
     fn content(text: String) -> ContentHash
     {
         ContentHash::of(&Content::from(text.into_bytes()))
+    }
+
+    /// The evidence the tests' reports, verdicts and verifications name: a
+    /// manifest digest spelled by the BLAKE3 of `text`, which the fold never
+    /// dereferences.
+    ///
+    /// # Specification
+    /// trivial.
+    fn evidence(text: String) -> ManifestDigest
+    {
+        ManifestDigest::from(*blake3::hash(&text.into_bytes()).as_bytes())
     }
 
     /// A fresh dispatch on the tree of `seat` to [`brief`].
@@ -1712,7 +1725,7 @@ mod tests
     ) -> Receipt
     {
         let summary = text.parse().unwrap();
-        Receipt::report(tree(), dispatch, content(text), summary).unwrap()
+        Receipt::report(tree(), dispatch, evidence(text), summary).unwrap()
     }
 
     /// The answers the tests' verdicts carry: a question read as `B`, and one
@@ -1744,7 +1757,7 @@ mod tests
     ) -> Receipt
     {
         let rubric = content("rubric".into());
-        let transcript = content("transcript".into());
+        let transcript = evidence("transcript".into());
         Receipt::verdict(tree(), dispatch, judge, rubric, transcript, answers()).unwrap()
     }
 
@@ -1759,7 +1772,7 @@ mod tests
         code: Code,
     ) -> Receipt
     {
-        let (playbook, output) = (content("playbook".into()), content("output".into()));
+        let (playbook, output) = (content("playbook".into()), evidence("output".into()));
         let step = "test".parse().unwrap();
         let status = Status::Exited(code);
         Receipt::verified(tree(), dispatch, runner, playbook, step, output, status).unwrap()
@@ -2716,7 +2729,7 @@ mod tests
                     (id(&reported), Step::Report {
                         dispatch: id(&dispatched),
                         author: key(&s),
-                        content: content("done".into()),
+                        content: evidence("done".into()),
                         summary: "done".parse().unwrap(),
                     }),
                 ],
@@ -2865,7 +2878,7 @@ mod tests
                     .contains(&(id(&concurrent), Step::Report {
                         dispatch: id(&first),
                         author: key(&s),
-                        content: content("concurrent".into()),
+                        content: evidence("concurrent".into()),
                         summary: "concurrent".parse().unwrap(),
                     })),
                 "a report concurrent with the later dispatch is admitted as a step"
@@ -2921,7 +2934,7 @@ mod tests
                 dispatch: d,
                 judge,
                 rubric: content("rubric".into()),
-                transcript: content("transcript".into()),
+                transcript: evidence("transcript".into()),
                 answers: answers(),
             };
             assert_eq!(
@@ -3048,7 +3061,7 @@ mod tests
                 runner: key(&r),
                 playbook: content("playbook".into()),
                 step: "test".parse().unwrap(),
-                output: content("output".into()),
+                output: evidence("output".into()),
                 status: Status::Exited(code),
             };
             assert_eq!(
@@ -3394,6 +3407,18 @@ mod tests
                 assert!(view.refused().is_empty(), "{case} is admitted");
                 assert_eq!(attempt(&view).progress(), &progress, "after {case}");
             }
+            let view = fold(tree(), held).unwrap();
+            assert_eq!(
+                view.task().evidence().collect::<Vec<_>>(),
+                [
+                    (key(&s), evidence("done".into())),
+                    (key(&j), evidence("output".into())),
+                    (key(&j), evidence("transcript".into())),
+                    (key(&j), evidence("output".into())),
+                ],
+                "the report's, each verification's and the verdict's evidence, in order, \
+                 each with its author"
+            );
         });
     }
 
@@ -3420,6 +3445,7 @@ mod tests
             .parse::<Revision>()
             .unwrap();
         let hash = content("brief".into());
+        let named = evidence("evidence".into());
         let anchored = Brief::Anchor(Anchor::Path {
             authority: Authority::Key(tree()),
             path: "a\\b".parse().unwrap(),
@@ -3444,7 +3470,7 @@ mod tests
         task.answer(reported, Step::Report {
             dispatch: first,
             author: t,
-            content: hash,
+            content: named,
             summary: "done \\ ok".parse().unwrap(),
         });
         task.answer(retired, Step::Retire {
@@ -3461,7 +3487,7 @@ mod tests
             dispatch: first,
             judge: s,
             rubric: hash,
-            transcript: hash,
+            transcript: named,
             answers: vec![
                 (hash, Ruling::Read(readout)),
                 (hash, Ruling::Unread(Unread::Tied)),
@@ -3469,8 +3495,8 @@ mod tests
         });
         let answered = format!(
             "{dispatch_line}handoff {handed} {first} {s} {t}\nreport {reported} {first} {t} \
-             {hash} done \\\\ ok\nretire {retired} {first} {t}\nverdict {judged} {first} {s} \
-             {hash} {hash}\nruling {judged} {hash} read B A=0.25 B=0.75 outside=0\nruling \
+             {named} done \\\\ ok\nretire {retired} {first} {t}\nverdict {judged} {first} {s} \
+             {hash} {named}\nruling {judged} {hash} read B A=0.25 B=0.75 outside=0\nruling \
              {judged} {hash} unread tied\n"
         );
         assert_eq!(
@@ -3483,11 +3509,11 @@ mod tests
             runner: t,
             playbook: hash,
             step: "lint".parse().unwrap(),
-            output: hash,
+            output: named,
             status: Status::Signalled(Signal::from(9_i32)),
         });
         let answered =
-            format!("{answered}verified {verifying} {first} {t} {hash} lint {hash} signal 9\n");
+            format!("{answered}verified {verifying} {first} {t} {hash} lint {named} signal 9\n");
         assert_eq!(
             task.to_string(),
             format!("{answered}verified {first} {verifying}\n"),

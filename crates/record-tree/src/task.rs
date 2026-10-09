@@ -7,24 +7,25 @@
 //! A dispatch names the seat it puts in the task's slot and the brief
 //! ([`Brief`]): an anchor, or the hash of the brief's content
 //! ([`ContentHash`]), never the brief's text. The seat holding the slot
-//! reports its content by hash with a one-line [`Summary`], passes the slot
-//! to another key, or retires from it; each of those names the dispatch it
+//! reports its content by the identity of its value manifest
+//! ([`ManifestDigest`]) with a one-line [`Summary`], passes the slot to
+//! another key, or retires from it; each of those names the dispatch it
 //! answers. Dispatches are attempts: the one last in canonical order is the
 //! current attempt ([`Current`]), and what the task's view says of it — held,
 //! reported, or stalled because its slot was retired without a report — is
 //! read from the receipts alone, never from a clock. A judge's verdict names
-//! the current dispatch, the rubric and the transcript by hash, and rules on
-//! each question asked ([`Ruling`]); a runner's verification names the
-//! current dispatch, the playbook by hash, the step by its identifier
-//! ([`StepId`]), the verifier's output by hash and how its process ended
-//! ([`Status`]); a grading names a verdict and grades each of its answers
-//! ([`Grade`]); the operator's decision names the current dispatch and what
-//! is decided of it ([`Decision`]), and a landing the decision to land it
-//! carries out and the revision the change landed at ([`Revision`]). Each is
-//! a step of the task. A verdict moves the attempt no further; a
-//! verification, a grading, a decision and a landing each advance its
-//! [`Progress`], which ranks them in that order and never falls back: which
-//! judge or runner a task trusts, and what its checks decide, is the
+//! the current dispatch, the rubric by hash and the transcript by its
+//! manifest, and rules on each question asked ([`Ruling`]); a runner's
+//! verification names the current dispatch, the playbook by hash, the step
+//! by its identifier ([`StepId`]), the verifier's output by its manifest and
+//! how its process ended ([`Status`]); a grading names a verdict and grades
+//! each of its answers ([`Grade`]); the operator's decision names the current
+//! dispatch and what is decided of it ([`Decision`]), and a landing the
+//! decision to land it carries out and the revision the change landed at
+//! ([`Revision`]). Each is a step of the task. A verdict moves the attempt no
+//! further; a verification, a grading, a decision and a landing each advance
+//! its [`Progress`], which ranks them in that order and never falls back:
+//! which judge or runner a task trusts, and what its checks decide, is the
 //! playbook's, the rubric's and the operator's.
 //!
 //! [`ContentHash`]: crate::id::ContentHash
@@ -35,6 +36,7 @@ use core::fmt;
 use core::fmt::Write as _;
 use core::str::FromStr;
 
+use gandr_storage_values::ManifestDigest;
 use sedimentree_core::loose_commit::id::CommitId;
 
 use crate::anchor::Anchor;
@@ -200,8 +202,8 @@ pub enum Step
         dispatch: CommitId,
         /// The holder who reported.
         author: PeerKey,
-        /// The hash of the report's content.
-        content: ContentHash,
+        /// The report's content, by its value manifest.
+        content: ManifestDigest,
         /// The report's summary.
         summary: Summary,
     },
@@ -233,8 +235,9 @@ pub enum Step
         judge: PeerKey,
         /// The hash of the rubric the questions come from.
         rubric: ContentHash,
-        /// The hash of the transcript the questions were asked about.
-        transcript: ContentHash,
+        /// The transcript the questions were asked about, by its value
+        /// manifest.
+        transcript: ManifestDigest,
         /// Each question's hash and its ruling, in the order asked.
         answers: Vec<(ContentHash, Ruling)>,
     },
@@ -250,8 +253,8 @@ pub enum Step
         playbook: ContentHash,
         /// The step whose verifier ran.
         step: StepId,
-        /// The hash of the process's output.
-        output: ContentHash,
+        /// The process's output, by its value manifest.
+        output: ManifestDigest,
         /// How the process ended.
         status: Status,
     },
@@ -614,6 +617,42 @@ impl Task
     pub fn steps(&self) -> &[(CommitId, Step)]
     {
         &self.steps
+    }
+
+    /// The evidence the admitted steps name, each with the peer whose receipt
+    /// names it, in canonical order: where a reader fetches it first.
+    ///
+    /// # Specification
+    /// - ensures: per step in order, a report's content with its author, a
+    ///   verdict's transcript with its judge, and a verification's output with
+    ///   its runner; every other step names none.
+    /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a task holding a report, two verifications and a
+    ///   verdict among steps that name no evidence lists the four in order,
+    ///   each with its author.
+    /// - witness: `fold::tests::an_attempt_advances_through_its_lifecycle`
+    #[inline]
+    pub fn evidence(&self) -> impl Iterator<Item = (PeerKey, ManifestDigest)>
+    {
+        self.steps
+            .iter()
+            .filter_map(|&(_commit, ref step)| match *step {
+                | Step::Report {
+                    author, content, ..
+                } => Some((author, content)),
+                | Step::Verdict {
+                    judge, transcript, ..
+                } => Some((judge, transcript)),
+                | Step::Verified { runner, output, .. } => Some((runner, output)),
+                | Step::Dispatch { .. }
+                | Step::Handoff { .. }
+                | Step::Retire { .. }
+                | Step::Graded { .. }
+                | Step::Decide { .. }
+                | Step::Landed { .. } => None,
+            })
     }
 
     /// The current attempt, or that no dispatch was admitted.

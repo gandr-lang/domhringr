@@ -2,15 +2,17 @@
 //! checks on a task's current dispatch, and grading a rubric's questions.
 //!
 //! A run names the task's current dispatch before it checks anything. Each
-//! verifier step runs in turn in the task's state directory and commits a
-//! verification naming this peer the runner; then each rubric the steps name
-//! is graded once, over the questions its steps name: the transcript is read
-//! from the state files, each question is asked as `judge verdict` asks it,
-//! the rulings are committed as a verdict naming this peer the judge, each
-//! ruling is graded against the rubric's band, and the grades and their
-//! composition are committed as a grading of that verdict. A failing
-//! verifier, an unmet grade and a refused one are recorded, and the command
-//! still succeeds: what they decide is the operator's.
+//! verifier step runs in turn in the task's state directory, its output is
+//! kept as evidence, and a verification naming this peer the runner and the
+//! output by its digest is committed; then each rubric the steps name is
+//! graded once, over the questions its steps name: the transcript is read
+//! from the state files and kept as evidence, each question is asked as
+//! `judge verdict` asks it, the rulings are committed as a verdict naming
+//! this peer the judge, each ruling is graded against the rubric's band, and
+//! the grades and their composition are committed as a grading of that
+//! verdict. A failing verifier, an unmet grade and a refused one are
+//! recorded, and the command still succeeds: what they decide is the
+//! operator's.
 
 use alloc::vec::Vec;
 use std::path::Path;
@@ -18,7 +20,6 @@ use std::path::Path;
 use domhringr_judge_oracle::Question;
 use domhringr_record_tree::CommitId;
 use domhringr_record_tree::Grade;
-use domhringr_record_tree::Peer;
 use domhringr_record_tree::PeerKey;
 use domhringr_record_tree::Receipt;
 use domhringr_record_tree::TreeId;
@@ -31,6 +32,7 @@ use domhringr_strategy_document::compose;
 
 use crate::Judging;
 use crate::RunError;
+use crate::Stores;
 use crate::current;
 use crate::emit;
 use crate::rulings;
@@ -130,23 +132,26 @@ pub fn validate_rubric(file: &Path) -> Result<(), RunError>
 }
 
 /// Run the playbook at `file` on `tree`'s current dispatch as `runner`, in
-/// the task's state `directory`, its questions answered as `judging` says.
+/// the task's state `directory`, its questions answered as `judging` says,
+/// its receipts committed and its evidence kept in `on`.
 ///
 /// # Specification
 /// - ensures: reads the playbook and its rubrics, then names the current
 ///   dispatch ([`current`]) before running anything; writes `playbook <hash>
 ///   <name>`; runs each verifier step in order in `directory` on a blocking
-///   thread and commits its verification — `runner`, the playbook's hash, the
-///   step, the output's hash and the status — writing `verified <commit> <step>
-///   <output-hash> <status>`; then grades each rubric the steps name, in the
-///   order first named, over the questions they name, as [`grade`] grades,
-///   `runner` its judge.
+///   thread, keeps its output in the evidence store and commits its
+///   verification — `runner`, the playbook's hash, the step, the output's
+///   digest and the status — writing `verified <commit> <step> <output-digest>
+///   <status>`; then grades each rubric the steps name, in the order first
+///   named, over the questions they name, as [`grade`] grades, `runner` its
+///   judge.
 /// - fails: [`RunError::Load`] as [`Plan::read`] refuses, as [`current`] fails,
 ///   [`RunError::Join`] when a verifier's thread fails, [`RunError::Verify`]
 ///   when a verifier does not run to its end — the verifications before it stay
-///   committed — [`RunError::Random`] and [`RunError::Commit`] when a receipt
-///   cannot be committed, as [`grade`] fails, and [`RunError::Output`] when
-///   standard output cannot be written.
+///   committed — [`RunError::Evidence`] when its output cannot be kept,
+///   [`RunError::Random`] and [`RunError::Commit`] when a receipt cannot be
+///   committed, as [`grade`] fails, and [`RunError::Output`] when standard
+///   output cannot be written.
 /// - panics: none.
 ///
 /// # Errors
@@ -157,10 +162,10 @@ pub fn validate_rubric(file: &Path) -> Result<(), RunError>
 ///   before any verifier runs; then runs a passing and a failing verifier and
 ///   three questions on the current dispatch, reads each line, and replays the
 ///   verifications, the verdict and the grading under the same commits and
-///   hashes.
+///   digests, each output and transcript held.
 /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
 pub async fn run_playbook(
-    peer: &Peer,
+    on: Stores<'_>,
     runner: PeerKey,
     tree: TreeId,
     file: &Path,
@@ -169,7 +174,7 @@ pub async fn run_playbook(
 ) -> Result<(), RunError>
 {
     let plan = Plan::read(file)?;
-    let dispatch = current(peer, tree).await?;
+    let dispatch = current(on.peer, tree).await?;
     let playbook = plan.playbook();
     emit(&format_args!(
         "playbook {} {}\n",
@@ -181,31 +186,38 @@ pub async fn run_playbook(
         else {
             continue;
         };
-        let (verifier, state) = (verifier.clone(), directory.to_path_buf());
-        let run = tokio::task::spawn_blocking(move || verifier.run(&state))
-            .await
-            .map_err(RunError::Join)??;
+        let (verifier, state, evidence) = (
+            verifier.clone(),
+            directory.to_path_buf(),
+            on.evidence.clone(),
+        );
+        let kept = tokio::task::spawn_blocking(move || -> Result<_, RunError> {
+            let run = verifier.run(&state)?;
+            let output = evidence.commit(run.output())?;
+            Ok((output, run.status()))
+        })
+        .await
+        .map_err(RunError::Join)?;
+        let (output, status) = kept?;
         let receipt = Receipt::verified(
             tree,
             dispatch,
             runner,
             playbook.hash(),
             step.id().clone(),
-            run.output(),
-            run.status(),
+            output,
+            status,
         )?;
-        let commit = peer.commit(tree, receipt).await?;
+        let commit = on.peer.commit(tree, receipt).await?;
         emit(&format_args!(
-            "verified {commit} {} {} {}\n",
-            step.id(),
-            run.output(),
-            run.status()
+            "verified {commit} {} {output} {status}\n",
+            step.id()
         ))?;
     }
     for grading in plan.gradings() {
         grade(
             Grader {
-                peer,
+                stores: on,
                 judge: runner,
                 tree,
                 dispatch,
@@ -222,7 +234,8 @@ pub async fn run_playbook(
 
 /// Grade every question of the rubric at `file` on `tree`'s current
 /// dispatch as `judge`, in the task's state `directory`, the questions
-/// answered as `judging` says.
+/// answered as `judging` says, its receipts committed and its evidence kept
+/// in `on`.
 ///
 /// # Specification
 /// - ensures: reads the rubric, names the current dispatch ([`current`]) before
@@ -241,7 +254,7 @@ pub async fn run_playbook(
 ///   one question met, one undecided and one unmet, the rubric unmet.
 /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
 pub async fn grade_rubric(
-    peer: &Peer,
+    on: Stores<'_>,
     judge: PeerKey,
     tree: TreeId,
     file: &Path,
@@ -250,24 +263,24 @@ pub async fn grade_rubric(
 ) -> Result<(), RunError>
 {
     let rubric = Loaded::<Rubric>::read(file)?;
-    let dispatch = current(peer, tree).await?;
+    let dispatch = current(on.peer, tree).await?;
     let asked = rubric.document().questions().iter().collect::<Vec<_>>();
-    let on = Grader {
-        peer,
+    let grader = Grader {
+        stores: on,
         judge,
         tree,
         dispatch,
     };
-    grade(on, &rubric, &asked, directory, judging).await
+    grade(grader, &rubric, &asked, directory, judging).await
 }
 
-/// Where a grading is committed: the store, the judge, the task and its
+/// Where a grading is committed: the stores, the judge, the task and its
 /// dispatch.
 #[derive(Clone, Copy)]
 struct Grader<'store>
 {
-    /// The store the receipts are committed to.
-    peer: &'store Peer,
+    /// The stores the receipts are committed to and the transcript kept in.
+    stores: Stores<'store>,
     /// This peer: the judge of the verdict and the author of the grading.
     judge: PeerKey,
     /// The task.
@@ -280,18 +293,20 @@ struct Grader<'store>
 /// rulings as a verdict, grade them, and commit the grading, as `on` names.
 ///
 /// # Specification
-/// - ensures: writes `rubric <hash> <name>` and `transcript <hash>`; asks each
-///   question in order as [`rulings`] asks, writing each ruling's line; commits
-///   the verdict of `on`'s judge on its dispatch — the rubric's hash, the
-///   transcript's and each question's with its ruling — and writes `verdict
-///   <commit>`; grades each ruling against the rubric's band, writing `grade
+/// - ensures: writes `rubric <hash> <name>` and `transcript <digest>`; asks
+///   each question in order as [`rulings`] asks, writing each ruling's line;
+///   keeps the transcript in the evidence store and commits the verdict of
+///   `on`'s judge on its dispatch — the rubric's hash, the transcript's digest
+///   and each question's hash with its ruling — and writes `verdict <commit>`;
+///   grades each ruling against the rubric's band, writing `grade
 ///   <question-hash> <grade>` per question, and composes the grades; then
 ///   commits the grading of that verdict and writes `graded <commit>
 ///   <composed>`.
-/// - fails: [`RunError::State`] when a state file cannot be read, as
-///   [`rulings`] fails, [`RunError::Random`] and [`RunError::Commit`] when a
-///   receipt cannot be committed, and [`RunError::Output`] when standard output
-///   cannot be written.
+/// - fails: [`RunError::State`] when a state file cannot be read or the
+///   transcript cannot be staged, [`RunError::Evidence`] when it cannot be
+///   kept, as [`rulings`] fails, [`RunError::Random`] and [`RunError::Commit`]
+///   when a receipt cannot be committed, and [`RunError::Output`] when standard
+///   output cannot be written.
 /// - panics: none.
 ///
 /// # Errors
@@ -317,7 +332,7 @@ async fn grade(
         rubric.document().name()
     ))?;
     let transcript = rubric.document().transcript(directory)?;
-    emit(&format_args!("transcript {}\n", transcript.hash()))?;
+    emit(&format_args!("transcript {}\n", transcript.digest()))?;
     let questions = asked
         .iter()
         .map(|&(_name, question)| question.clone())
@@ -333,20 +348,21 @@ async fn grade(
         .map(|&(_question, grade)| grade)
         .collect::<Vec<Grade>>();
     let composed = compose(&grades);
+    on.stores.evidence.keep(transcript.staged())?;
     let verdict = Receipt::verdict(
         on.tree,
         on.dispatch,
         on.judge,
         rubric.hash(),
-        transcript.hash(),
+        transcript.digest(),
         answers,
     )?;
-    let verdict = on.peer.commit(on.tree, verdict).await?;
+    let verdict = on.stores.peer.commit(on.tree, verdict).await?;
     emit(&format_args!("verdict {verdict}\n"))?;
     for &(question, grade) in &graded {
         emit(&format_args!("grade {question} {grade}\n"))?;
     }
     let grading = Receipt::graded(on.tree, verdict, grades, composed)?;
-    let grading = on.peer.commit(on.tree, grading).await?;
+    let grading = on.stores.peer.commit(on.tree, grading).await?;
     emit(&format_args!("graded {grading} {composed}\n"))
 }

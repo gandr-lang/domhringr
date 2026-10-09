@@ -1,0 +1,30 @@
+<state name="change.diff">
+diff --git a/crates/judge-oracle/README.md b/crates/judge-oracle/README.md
+--- a/crates/judge-oracle/README.md
++++ b/crates/judge-oracle/README.md
+@@ -75,6 +75,15 @@
+ mise exec -- cargo nextest run -p domhringr-judge-oracle
+ ```
+ 
++One test is ignored: it asks a real endpoint a question whose transcript states the answer. Start an OpenAI-compatible server that reports log-probabilities, then run the test from the workspace root, naming the server and the model it serves:
++
++```sh
++cd /home/ada/src/domhringr && DOMHRINGR_JUDGE_ENDPOINT=http://127.0.0.1:8000/v1 DOMHRINGR_JUDGE_MODEL=<model> \
++  mise exec -- cargo nextest run -p domhringr-judge-oracle --run-ignored only
++```
++
++A server that needs a key reads it from `DOMHRINGR_JUDGE_KEY`; the key is never written to the tree.
++
+ ## The laws
+ 
+ A judge classifies evidence and never adds to it.
+</state>
+<state name="commits.txt">
+commit 9b1e4f7a2c6d0e8b3a5f1c9d7e2b4a6c8f0d1e35
+
+docs(judge): show how the ignored test reaches a real endpoint
+
+The README names the variables the test reads and the server it needs,
+so the test runs by hand against any endpoint without a setting in the
+tree.
+</state>

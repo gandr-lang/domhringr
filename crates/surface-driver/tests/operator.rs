@@ -1,7 +1,8 @@
 //! The operator's loop, exercised as processes: two seats serve in-process
 //! through a script that commits a change to a throwaway git repository and
 //! reports it, and the driver binary dispatches them, verifies, decides and
-//! lands their changes, and lists the project, from its own state directory.
+//! lands their changes — fetching each report from its seat as evidence — and
+//! lists the project, from its own state directory.
 
 extern crate alloc;
 
@@ -20,6 +21,8 @@ mod tests
     use std::process::Command;
     use std::process::Stdio;
 
+    use domhringr_record_evidence::Evidence;
+    use domhringr_record_evidence::ParsedDigest;
     use domhringr_record_tree::AcceptError;
     use domhringr_record_tree::Anchor;
     use domhringr_record_tree::BindPort;
@@ -444,11 +447,18 @@ rm -rf "$work"
                 let node = Arc::new(
                     Peer::open(&state, identity)
                         .unwrap()
-                        .bind(BindPort::Fixed(port), &[PROTOCOL])
+                        .bind(BindPort::Fixed(port), &[
+                            PROTOCOL,
+                            domhringr_record_evidence::PROTOCOL,
+                        ])
                         .await
                         .unwrap(),
                 );
-                let events = serve(Arc::clone(&node), Surface::Program(script));
+                let events = serve(
+                    Arc::clone(&node),
+                    Surface::Program(script),
+                    Evidence::open(&state),
+                );
                 let _held = node.sync(&reached, project).await.unwrap();
                 let presence = node.present(project).await.unwrap();
                 let seat = RemotePeer::new(direct(&node, address), key);
@@ -696,9 +706,12 @@ rm -rf "$work"
         let noted = world.main();
         standings.push(world.standing(first));
         let verified = world.verify(first);
-        let [ref change, ref named, ref ran] = *verified.as_slice()
+        let [ref change, ref report_line, ref named, ref ran] = *verified.as_slice()
         else {
-            panic!("verify prints the change, the playbook and one verification: {verified:?}");
+            panic!(
+                "verify prints the change, the report, the playbook and one verification: \
+                 {verified:?}"
+            );
         };
         let (branch, commit) = change
             .strip_prefix("change ")
@@ -721,6 +734,27 @@ rm -rf "$work"
                 "0"
             ]),
             "the verifier passes in the change's checkout: {ran}"
+        );
+        let held = |line: &str, prefix: &str| {
+            let digest = line
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.split(' ').next())
+                .unwrap_or_else(|| panic!("a digest after {prefix:?}: {line:?}"))
+                .parse::<ParsedDigest>()
+                .unwrap();
+            Evidence::open(&StateDir::from(world.root.path().join("operator")))
+                .read(digest.into())
+                .unwrap_or_else(|refused| panic!("the operator holds {line:?}: {refused}"))
+        };
+        assert_eq!(
+            held(report_line, "report ").as_ref(),
+            format!("{branch} {commit}\n").as_bytes(),
+            "the operator holds the seat's report, fetched from the seat"
+        );
+        let output = words.get(3).copied().unwrap_or_default();
+        assert!(
+            held(output, "").as_ref().is_empty(),
+            "the operator holds the verifier's output, which is empty"
         );
         assert_eq!(
             read(world.git().args(["worktree", "list", "--porcelain"]))
@@ -750,11 +784,15 @@ rm -rf "$work"
             .to_owned();
         standings.push(world.standing(first));
         let landed = ended(&mut world.land(first), Exit::Success);
-        let [ref landing_change, ref landing] = *landed.as_slice()
+        let [ref landing_change, ref landing_report, ref landing] = *landed.as_slice()
         else {
-            panic!("land prints the change and the landing: {landed:?}");
+            panic!("land prints the change, the report and the landing: {landed:?}");
         };
-        assert_eq!(landing_change, change, "land names the change it merges");
+        assert_eq!(
+            [landing_change, landing_report],
+            [change, report_line],
+            "land names the change it merges and the report it read"
+        );
         let (landing, merge) = landing
             .strip_prefix("landed ")
             .and_then(|rest| rest.split_once(' '))
@@ -895,10 +933,11 @@ rm -rf "$work"
         assert!(refusal.contains("uncommitted changes"), "{refusal}");
         let _restored = read(world.git().args(["checkout", "--", "README.md"]));
         let landed = ended(&mut world.land(left), Exit::Success);
-        let [ref change, ref landing] = *landed.as_slice()
+        let [ref change, ref report, ref landing] = *landed.as_slice()
         else {
-            panic!("land prints the change and the landing: {landed:?}");
+            panic!("land prints the change, the report and the landing: {landed:?}");
         };
+        assert!(report.starts_with("report "), "{landed:?}");
         let main = world.main();
         assert!(
             change.ends_with(&format!(" {main}")) && landing.ends_with(&format!(" {main}")),

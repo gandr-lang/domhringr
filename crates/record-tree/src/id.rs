@@ -280,8 +280,8 @@ impl fmt::Display for EndpointKey
     }
 }
 
-/// The BLAKE3 hash of a content's bytes: the name a report gives its content
-/// by, and the name iroh-blobs serves the same bytes by.
+/// The BLAKE3 hash of a content's bytes: the name a dispatch gives its brief
+/// by, and a playbook, a rubric and a question theirs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ContentHash(blake3::Hash);
@@ -377,7 +377,7 @@ impl fmt::Display for ContentHash
     }
 }
 
-/// A content's bytes: what a report names by its hash ([`ContentHash`]).
+/// A content's bytes: a brief, a report, a verifier's output, a transcript.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Content(Vec<u8>);
@@ -405,6 +405,19 @@ impl From<Content> for Vec<u8>
     fn from(content: Content) -> Self
     {
         content.0
+    }
+}
+
+impl AsRef<[u8]> for Content
+{
+    /// The content's bytes, borrowed.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn as_ref(&self) -> &[u8]
+    {
+        &self.0
     }
 }
 

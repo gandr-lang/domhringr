@@ -40,6 +40,7 @@ use std::path::Path;
 
 use domhringr_judge_oracle::Question;
 use domhringr_judge_oracle::Transcript;
+use domhringr_record_evidence::EvidenceError;
 use domhringr_record_tree::Content;
 use domhringr_record_tree::Grade;
 use domhringr_record_tree::Probability;
@@ -114,34 +115,38 @@ impl Rubric
     }
 
     /// The transcript the questions are asked about: each state file of the
-    /// task's state `directory`, in the rubric's order.
+    /// task's state `directory`, in the rubric's order, staged as evidence.
     ///
     /// # Specification
     /// - ensures: the transcript holds, per state file in order, the line
     ///   `<state name="<file>">`, the file's bytes, a newline when they do not
     ///   end in one, and the line `</state>`.
-    /// - fails: [`StateError`] naming the first state file that cannot be read.
+    /// - fails: [`TranscriptError::State`] naming the first state file that
+    ///   cannot be read, and [`TranscriptError::Evidence`] when the value plane
+    ///   refuses the transcript.
     /// - panics: none.
     ///
     /// # Errors
-    /// - [`StateError`]: a state file cannot be read.
+    /// - [`TranscriptError`]: as listed above.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a transcript of two state files, one without a final
-    ///   newline, is compared byte for byte with the text written by hand, and
-    ///   a missing state file is refused by name.
+    ///   newline, is compared with the text written by hand by the manifest
+    ///   both stage to, and a missing state file is refused by name.
     /// - witness: `rubric::tests::a_transcript_holds_each_state_file_in_order`
     #[inline]
     pub fn transcript(
         &self,
         directory: &Path,
-    ) -> Result<Transcript, StateError>
+    ) -> Result<Transcript, TranscriptError>
     {
         let mut held = Vec::new();
         for file in &self.state {
-            let bytes = std::fs::read(directory.join(&file.0)).map_err(|source| StateError {
-                file: file.clone(),
-                source,
+            let bytes = std::fs::read(directory.join(&file.0)).map_err(|source| {
+                TranscriptError::State {
+                    file: file.clone(),
+                    source,
+                }
             })?;
             held.extend_from_slice(br#"<state name=""#);
             held.extend_from_slice(file.0.as_bytes());
@@ -152,7 +157,8 @@ impl Rubric
             }
             held.extend_from_slice(b"</state>\n");
         }
-        Ok(Transcript::held(Content::from(held)))
+        let transcript = Transcript::held(Content::from(held))?;
+        Ok(transcript)
     }
 }
 
@@ -449,16 +455,23 @@ pub enum ParseStateFileError
     Character,
 }
 
-/// A state file that cannot be read into a transcript.
+/// Why a rubric's transcript cannot be made.
 #[derive(Debug, thiserror::Error)]
-#[error("cannot read the state file {file}")]
-pub struct StateError
+pub enum TranscriptError
 {
-    /// The state file.
-    file: StateFile,
-    /// Why it cannot be read.
-    #[source]
-    source: std::io::Error,
+    /// A state file cannot be read.
+    #[error("cannot read the state file {file}")]
+    State
+    {
+        /// The state file.
+        file: StateFile,
+        /// Why it cannot be read.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The value plane refuses the transcript as evidence.
+    #[error(transparent)]
+    Evidence(#[from] EvidenceError),
 }
 
 #[cfg(test)]
@@ -735,9 +748,16 @@ criteria = { true = "The README is dense.", false = "The README is padded." }
         let written = "<state name=\"change.diff\">\n+ one\n- two\n</state>\n<state \
                        name=\"docs/README.md\">\n# Dense\n</state>\n";
         assert_eq!(
-            transcript.hash(),
-            Transcript::held(Content::from(written.as_bytes().to_vec())).hash(),
+            transcript.text().map(String::as_str),
+            Ok(written),
             "each state file in the rubric's order, a final newline added where missing"
+        );
+        assert_eq!(
+            transcript.digest(),
+            Transcript::held(Content::from(written.as_bytes().to_vec()))
+                .unwrap()
+                .digest(),
+            "the transcript is named by the manifest its text stages to"
         );
         std::fs::remove_file(state.path().join("change.diff")).unwrap();
         assert_eq!(

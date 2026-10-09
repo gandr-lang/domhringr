@@ -421,7 +421,7 @@ impl Backend for ChatCompletions
 /// - panics: none.
 ///
 /// # Errors
-/// - [`TextError`]: the transcript's text is not held.
+/// - [`TextError`]: the transcript is not UTF-8 text.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — through the client, the user message a loopback server
@@ -560,7 +560,6 @@ mod tests
     use crate::backend::MalformedError;
     use crate::backend::Refusal;
     use crate::question::Question;
-    use crate::question::TextError;
     use crate::question::Transcript;
     use crate::readout::Ceiling;
 
@@ -673,7 +672,7 @@ mod tests
     /// trivial.
     fn transcript() -> Transcript
     {
-        Transcript::held(Content::from(b"The sky was blue all day.".to_vec()))
+        Transcript::held(Content::from(b"The sky was blue all day.".to_vec())).unwrap()
     }
 
     #[test]
@@ -814,13 +813,13 @@ mod tests
             ),
             "a refused connection leaves the request unanswered"
         );
-        let named = Transcript::named(transcript().hash());
+        let binary = Transcript::held(Content::from(vec![0x68, 0xff])).unwrap();
         assert!(
             matches!(
-                runtime.block_on(chat.ask(&question(), &named)),
-                Err(Refusal::Malformed(MalformedError::Text(TextError::Unheld)))
+                runtime.block_on(chat.ask(&question(), &binary)),
+                Err(Refusal::Malformed(MalformedError::Text(_)))
             ),
-            "a transcript named alone cannot be put to a model"
+            "a transcript that is no text cannot be put to a model"
         );
     }
 

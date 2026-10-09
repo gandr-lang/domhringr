@@ -1,0 +1,1820 @@
+<state name="change.diff">
+diff --git a/README.md b/README.md
+index 8b2433d..5165a19 100644
+--- a/README.md
++++ b/README.md
+@@ -4,7 +4,7 @@ A software factory: seats (agent sessions) that talk to each other over [iroh](h
+ 
+ ## Status
+ 
+-`0.0.0`. The `domhringr` crate claims the name and reports its version. The record plane has its first piece: `domhringr-record-tree` stores a [sedimentree](https://crates.io/crates/sedimentree_core) on disk and syncs it with a peer over iroh through [subduction](https://crates.io/crates/subduction_core), and the `domhringr-peer` binary (`crates/surface-peer`) drives it from the command line. The seat, the judge, and the playbooks and rubrics a task is checked by stand on it; [`crates/README.md`](crates/README.md) lists every crate.
++`0.0.0`. The `domhringr` crate claims the name and reports its version. The record plane has its first piece: `domhringr-record-tree` stores a [sedimentree](https://crates.io/crates/sedimentree_core) on disk and syncs it with a peer over iroh through [subduction](https://crates.io/crates/subduction_core), and the `domhringr-peer` binary (`crates/surface-peer`) drives it from the command line. The seat, the judge, and the playbooks and rubrics a task is checked by stand on it; [`crates/README.md`](crates/README.md) lists every crate, and [`rubrics/README.md`](rubrics/README.md) the rubric set a change is graded by.
+ 
+ ## Build
+ 
+diff --git a/crates/strategy-document/README.md b/crates/strategy-document/README.md
+index af2f004..a08067b 100644
+--- a/crates/strategy-document/README.md
++++ b/crates/strategy-document/README.md
+@@ -173,7 +173,7 @@ Reversal: rubrics whose questions are not a conjunction, such as alternatives of
+ 
+ ## The rubric set
+ 
+-The example rubric grades two questions about a checkout of this repository. The rubric set that grades a repository's conformance adds seven rubrics: `stable-refs`, `public-private-stance`, `issues`, `pull-requests`, `ci-shape`, `docs` and `code`. Each is graded on a fixture pair, one tree that meets it and one that does not, so a rubric that cannot tell the two apart is caught before it grades real work.
++The example rubric grades two questions about a checkout of this repository. The [rubric set](../../rubrics/README.md) grades a change to a repository of this workspace's shape with seven rubrics: `stable-refs`, `public-private-stance`, `issues`, `pull-requests`, `ci-shape`, `docs` and `code`. Each reads the artifacts a task's record supplies, such as a diff, its commit messages, an issue, a review, a workflow or a README, and each has a fixture pair: one state that meets it and one that fails exactly one of its questions. The peer binary's process tests grade every pair from a table, and one pair by a real judge when the environment configures one.
+ 
+ ## Dependencies
+ 
+diff --git a/crates/surface-peer/README.md b/crates/surface-peer/README.md
+index 13745ee..4841472 100644
+--- a/crates/surface-peer/README.md
++++ b/crates/surface-peer/README.md
+@@ -59,6 +59,7 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a
+ - For `drift`, the `git` binary on `PATH`, both checkouts local, each a directory in a git working tree, and the concepts tree in the local store; a `sync` brings it there, since `drift` dials no one.
+ - For `judge` without `--static`, an OpenAI-compatible endpoint reporting log-probabilities, configured as [`domhringr-judge-oracle`](../judge-oracle/README.md#configuration) reads it from the environment; for `judge verdict`, the task in the local store with a dispatch.
+ - For `playbook run` and `rubric grade`, the task in the local store with a dispatch, the task's state directory holding each state file its rubrics read, each verifier's command on `PATH` or named by path, and the judge as `judge` expects it.
++- For the ignored test `strategy::tests::a_configured_judge_grades_a_fixture_pair_of_the_set`, a judge endpoint configured as `judge` expects it; the test fails naming the missing variable when none is, and CI does not run it.
+ 
+ ## Examples
+ 
+@@ -122,7 +123,7 @@ domhringr-peer --state <dir> rubric validate <file>                # the rubric'
+ domhringr-peer --state <dir> rubric grade <file> <tree> [--task-state <dir>] [--static <file>]  # the rubric's rulings, verdict, grades and grading
+ ```
+ 
+-Run the crate's tests, including two-process synchronization, reaching a peer through its presence, a seat dispatched, woken and reporting across restarts of both sides, a judge ruling on a task from a table file, a playbook running its verifiers and grading its questions on a task, and a drift check over throwaway git repositories:
++Run the crate's tests, including two-process synchronization, reaching a peer through its presence, a seat dispatched, woken and reporting across restarts of both sides, a judge ruling on a task from a table file, a playbook running its verifiers and grading its questions on a task, every rubric of the [rubric set](../../rubrics/README.md#tests) grading its fixture pair, and a drift check over throwaway git repositories:
+ 
+ ```sh
+ mise exec -- cargo nextest run -p domhringr-surface-peer
+diff --git a/crates/surface-peer/tests/strategy.rs b/crates/surface-peer/tests/strategy.rs
+index 3eb1963..e94564e 100644
+--- a/crates/surface-peer/tests/strategy.rs
++++ b/crates/surface-peer/tests/strategy.rs
+@@ -2,7 +2,8 @@
+ //! the documents validate or are refused by file and field, a playbook's
+ //! verifiers run in the task's state directory and its questions are graded
+ //! against the rubric's band, every receipt lands on the task's current
+-//! dispatch, and the replay shows them.
++//! dispatch, and the replay shows them. The rubric set under `rubrics/` is
++//! graded the same way: every rubric validates and grades its fixture pair.
+ 
+ #[cfg(test)]
+ mod tests
+@@ -10,6 +11,7 @@ mod tests
+     use core::time::Duration;
+     use std::io::BufRead as _;
+     use std::path::Path;
++    use std::path::PathBuf;
+     use std::process::Child;
+     use std::process::Command;
+     use std::process::Output;
+@@ -17,6 +19,9 @@ mod tests
+     use std::sync::mpsc;
+     use std::time::Instant;
+ 
++    use domhringr_strategy_document::Loaded;
++    use domhringr_strategy_document::Rubric;
++
+     /// How long one command may run, or a running process may take to print a
+     /// line.
+     const DEADLINE: Duration = Duration::from_secs(30);
+@@ -27,6 +32,17 @@ mod tests
+     /// The brief the task's dispatch names, by content hash.
+     const BRIEF: &str = "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e";
+ 
++    /// The rubric set: the workspace's `rubrics/` directory.
++    const SET: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rubrics");
++
++    /// The ruling a table records for a criterion holding: above the rubric
++    /// set's band.
++    const HOLDS: &str = "read A A=0.9 B=0.1 outside=0";
++
++    /// The ruling a table records for a criterion failing: below the rubric
++    /// set's band.
++    const FAILS: &str = "read B A=0.1 B=0.9 outside=0";
++
+     /// A rubric of three questions over one state file.
+     const RUBRIC: &str = r#"name = "landing"
+ state = ["note.txt"]
+@@ -192,6 +208,167 @@ question = { rubric = "rubric.toml", question = "tested" }
+         socket.local_addr().unwrap().port().to_string()
+     }
+ 
++    /// The rubric files of the set: every `*.toml` directly in [`SET`], in
++    /// name order.
++    ///
++    /// # Specification
++    /// - ensures: at least one file, sorted by path.
++    /// - panics: when the set's directory cannot be read or holds no rubric.
++    fn rubric_files() -> Vec<PathBuf>
++    {
++        let mut files = std::fs::read_dir(SET)
++            .unwrap()
++            .map(|entry| entry.unwrap().path())
++            .filter(|path| {
++                path.extension()
++                    .is_some_and(|extension| extension == "toml")
++            })
++            .collect::<Vec<_>>();
++        files.sort();
++        assert!(!files.is_empty(), "{SET} holds the rubric set");
++        files
++    }
++
++    /// A question of a rubric, as `rubric validate` prints it.
++    struct Asked
++    {
++        /// The question's name in its rubric.
++        name: String,
++        /// The hash a table names the question by.
++        hash: String,
++    }
++
++    /// A rubric file of the set, as `rubric validate` prints it.
++    struct Validated
++    {
++        /// The rubric's name, its file's stem.
++        name: String,
++        /// The hash of the rubric file's bytes.
++        hash: String,
++        /// Its questions, in the order printed.
++        questions: Vec<Asked>,
++    }
++
++    /// Validate the rubric `file` with the peer of state `state`.
++    ///
++    /// # Specification
++    /// - ensures: `rubric validate` exited 0 and printed `rubric <hash>
++    ///   <name>`, `<name>` the file's stem, then one `question <question>
++    ///   <hash>` line per question, at least one.
++    /// - provides: the rubric's name, its hash, and each question in the order
++    ///   printed.
++    /// - panics: when the command fails or prints other lines, or the rubric is
++    ///   not named for its file.
++    fn validate(
++        state: &Path,
++        file: &Path,
++    ) -> Validated
++    {
++        let name = file
++            .file_stem()
++            .and_then(|stem| stem.to_str())
++            .unwrap_or_else(|| panic!("a rubric file is named in UTF-8: {file:?}"))
++            .to_owned();
++        let lines = finish(peer(state).args(["rubric", "validate"]).arg(file));
++        let (first, listed) = lines
++            .split_first()
++            .unwrap_or_else(|| panic!("{name}: a rubric prints itself"));
++        let hash = first
++            .strip_prefix("rubric ")
++            .and_then(|rest| rest.strip_suffix(name.as_str()))
++            .and_then(|rest| rest.strip_suffix(' '))
++            .unwrap_or_else(|| panic!("{name}: the rubric is named for its file: {first:?}"))
++            .to_owned();
++        let questions = listed
++            .iter()
++            .map(|line| {
++                let fields = line.split(' ').collect::<Vec<_>>();
++                let ["question", question, hash] = *fields.as_slice()
++                else {
++                    panic!("{name}: a question line: {line:?}");
++                };
++                Asked {
++                    name: question.to_owned(),
++                    hash: hash.to_owned(),
++                }
++            })
++            .collect::<Vec<_>>();
++        assert!(!questions.is_empty(), "{name} holds questions");
++        Validated {
++            name,
++            hash,
++            questions,
++        }
++    }
++
++    /// The question a fixture pair isolates: the name its `isolates` file
++    /// holds.
++    ///
++    /// # Specification
++    /// - ensures: the file's text without its final line break.
++    /// - panics: when the file cannot be read.
++    fn isolated(pair: &Path) -> String
++    {
++        std::fs::read_to_string(pair.join("isolates"))
++            .unwrap_or_else(|error| panic!("{pair:?} names the question it isolates: {error}"))
++            .trim_end()
++            .to_owned()
++    }
++
++    /// A task opened by one peer and dispatched to another, for gradings to
++    /// land on.
++    struct Dispatched
++    {
++        /// The opening peer's id: the judge of every grading it commits.
++        judge: String,
++        /// The dispatched seat's peer id.
++        seat: String,
++        /// The task's tree.
++        tree: String,
++        /// The dispatch's commit id.
++        dispatch: String,
++    }
++
++    impl Dispatched
++    {
++        /// Open a task with the peer of state `o` and dispatch it to the peer
++        /// of state `s`.
++        ///
++        /// # Specification
++        /// - ensures: O owns a fresh tree whose current dispatch names S and
++        ///   the brief [`BRIEF`]; the dispatching process is gone once the
++        ///   dispatch is committed.
++        /// - panics: when a command fails or prints other than its contract.
++        fn open(
++            o: &Path,
++            s: &Path,
++        ) -> Self
++        {
++            let judge = finish(peer(o).arg("id"))[1].clone();
++            let s_id = finish(peer(s).arg("id"));
++            let (endpoint, seat) = (s_id[0].clone(), s_id[1].clone());
++            let tree = finish(peer(o).arg("open"))[0].clone();
++            let contact = format!("{endpoint}@127.0.0.1:{}", free_port());
++            let dialing = Running::spawn(peer(o).args([
++                "dispatch",
++                tree.as_str(),
++                seat.as_str(),
++                "content",
++                BRIEF,
++                "--at",
++                contact.as_str(),
++            ]));
++            let dispatch = dialing.line();
++            drop(dialing);
++            Self {
++                judge,
++                seat,
++                tree,
++                dispatch,
++            }
++        }
++    }
++
+     /// A running process and its standard output, read as it arrives.
+     ///
+     /// The process is killed when the value drops, so a failing test leaves
+@@ -616,4 +793,226 @@ question = { rubric = "rubric.toml", question = "tested" }
+             "the replay shows every verification and grading on the dispatch"
+         );
+     }
++
++    /// Every rubric of the set validates and grades its fixture pair: met
++    /// over its `met` state, and unmet over its `unmet` state with the
++    /// question the pair isolates unmet; the replay holds each grading naming
++    /// the rubric and every question.
++    ///
++    /// # Specification
++    /// - ensures: for each `<name>.toml` in [`SET`], in name order, `rubric
++    ///   validate` prints `rubric r <name>` and its questions; the transcripts
++    ///   of the state directories `fixtures/<name>/met` and
++    ///   `fixtures/<name>/unmet` differ, and `fixtures/<name>/isolates` names
++    ///   one of the questions. From a table reading every question [`HOLDS`]
++    ///   about the `met` transcript, and about the `unmet` one the isolated
++    ///   question [`FAILS`] and every other [`HOLDS`], O's grading over `met`
++    ///   prints the rubric, the transcript t, each ruling, the verdict V, every
++    ///   grade `met` and `graded G met`; over `unmet` it prints the isolated
++    ///   question's grade `unmet`, every other `met`, and `graded G unmet`. O's
++    ///   local replay prints the dispatch D; per grading, the verdict naming D,
++    ///   O, r and t with each question's ruling, and the grading naming D, V, r
++    ///   and the composition with each question's grade; then `dispatched D S`.
++    /// - panics: on any contract violation.
++    #[test]
++    fn every_rubric_in_the_set_grades_its_fixture_pair()
++    {
++        let (o, s, files) = (
++            tempfile::tempdir().unwrap(),
++            tempfile::tempdir().unwrap(),
++            tempfile::tempdir().unwrap(),
++        );
++        let (o, s, files) = (o.path(), s.path(), files.path());
++        let task = Dispatched::open(o, s);
++        let mut replayed = vec![format!(
++            "dispatch {} {} content {BRIEF}",
++            task.dispatch, task.seat
++        )];
++        for file in rubric_files() {
++            let Validated {
++                name,
++                hash: rubric,
++                questions,
++            } = validate(o, &file);
++            let pair = Path::new(SET).join("fixtures").join(&name);
++            let isolated = isolated(&pair);
++            assert!(
++                questions.iter().any(|asked| asked.name == isolated),
++                "{name}: its pair isolates a question it holds, not {isolated:?}"
++            );
++            let loaded = Loaded::<Rubric>::read(&file).unwrap();
++            let transcript = |member: &str| {
++                loaded
++                    .document()
++                    .transcript(&pair.join(member))
++                    .unwrap_or_else(|error| panic!("{name}: its {member} state reads: {error}"))
++                    .hash()
++                    .to_string()
++            };
++            let (met, unmet) = (transcript("met"), transcript("unmet"));
++            assert_ne!(met, unmet, "{name}: the members of its pair differ");
++            let members = [("met", met, "met"), ("unmet", unmet, "unmet")];
++            // Each question's ruling and grade over a member: every criterion
++            // holds over `met`, and over `unmet` all but the isolated one.
++            let answer = |member: &str, question: &str| {
++                if member == "unmet" && question == isolated {
++                    (FAILS, "unmet")
++                }
++                else {
++                    (HOLDS, "met")
++                }
++            };
++            let table = members
++                .iter()
++                .flat_map(|&(member, ref transcript, _)| {
++                    questions.iter().map(move |asked| {
++                        let (ruling, _) = answer(member, &asked.name);
++                        format!("{} {transcript} {ruling}\n", asked.hash)
++                    })
++                })
++                .collect::<String>();
++            let answers = files.join(&name);
++            std::fs::write(&answers, table).unwrap();
++
++            for &(member, ref transcript, composed) in &members {
++                let answered = questions
++                    .iter()
++                    .map(|asked| (asked.hash.as_str(), answer(member, &asked.name)))
++                    .collect::<Vec<_>>();
++                let graded = finish(
++                    peer(o)
++                        .args(["rubric", "grade"])
++                        .arg(&file)
++                        .arg(&task.tree)
++                        .arg("--task-state")
++                        .arg(pair.join(member))
++                        .arg("--static")
++                        .arg(&answers),
++                );
++                let verdict = graded
++                    .get(questions.len().saturating_add(2))
++                    .and_then(|line| line.strip_prefix("verdict "))
++                    .unwrap_or_else(|| {
++                        panic!("{name} over its {member} state commits a verdict: {graded:?}")
++                    })
++                    .to_owned();
++                let grading = graded
++                    .last()
++                    .and_then(|line| line.strip_prefix("graded "))
++                    .and_then(|rest| rest.split(' ').next())
++                    .unwrap_or_else(|| {
++                        panic!("{name} is graded over its {member} state: {graded:?}")
++                    })
++                    .to_owned();
++                let mut expected = vec![
++                    format!("rubric {rubric} {name}"),
++                    format!("transcript {transcript}"),
++                ];
++                expected.extend(
++                    answered
++                        .iter()
++                        .map(|&(hash, (ruling, _))| format!("ruling {hash} {ruling}")),
++                );
++                expected.push(format!("verdict {verdict}"));
++                expected.extend(
++                    answered
++                        .iter()
++                        .map(|&(hash, (_, grade))| format!("grade {hash} {grade}")),
++                );
++                expected.push(format!("graded {grading} {composed}"));
++                assert_eq!(
++                    graded, expected,
++                    "{name} grades {composed} over its {member} state"
++                );
++
++                replayed.push(format!(
++                    "verdict {verdict} {} {} {rubric} {transcript}",
++                    task.dispatch, task.judge
++                ));
++                replayed.extend(
++                    answered
++                        .iter()
++                        .map(|&(hash, (ruling, _))| format!("ruling {verdict} {hash} {ruling}")),
++                );
++                replayed.push(format!(
++                    "graded {grading} {} {verdict} {rubric} {composed}",
++                    task.dispatch
++                ));
++                replayed.extend(
++                    answered
++                        .iter()
++                        .map(|&(hash, (_, grade))| format!("grade {grading} {hash} {grade}")),
++                );
++            }
++        }
++        replayed.push(format!("dispatched {} {}", task.dispatch, task.seat));
++        assert_eq!(
++            finish(peer(o).args(["replay", task.tree.as_str(), "--local"])),
++            replayed,
++            "the replay holds every grading, naming its rubric and every question"
++        );
++    }
++
++    /// A fixture pair of the set graded by the judge the environment
++    /// configures: `stable-refs` is met over its `met` state, and unmet over
++    /// its `unmet` state on the question the pair isolates.
++    ///
++    /// # Specification
++    /// - ensures: O, having dispatched S, grades `stable-refs` over its `met`
++    ///   state to `graded G met`, and over its `unmet` state to `graded G
++    ///   unmet` with the isolated question's grade `unmet`.
++    /// - panics: on any contract violation, a judge the environment does not
++    ///   configure among them.
++    #[test]
++    #[ignore = "asks the judge the environment configures: run with --ignored where \
++                DOMHRINGR_JUDGE_ENDPOINT and DOMHRINGR_JUDGE_MODEL name one"]
++    fn a_configured_judge_grades_a_fixture_pair_of_the_set()
++    {
++        let (o, s) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
++        let (o, s) = (o.path(), s.path());
++        let task = Dispatched::open(o, s);
++        let (file, pair) = (
++            Path::new(SET).join("stable-refs.toml"),
++            Path::new(SET).join("fixtures").join("stable-refs"),
++        );
++        let Validated { questions, .. } = validate(o, &file);
++        let isolated = isolated(&pair);
++        let hash = questions
++            .iter()
++            .find(|asked| asked.name == isolated)
++            .map_or_else(
++                || panic!("the pair isolates a question the rubric holds"),
++                |asked| asked.hash.clone(),
++            );
++        for (member, composed) in [("met", "met"), ("unmet", "unmet")] {
++            // A model may take longer than the deadline to answer, so the
++            // command runs to its end.
++            let output = peer(o)
++                .args(["rubric", "grade"])
++                .arg(&file)
++                .arg(&task.tree)
++                .arg("--task-state")
++                .arg(pair.join(member))
++                .stdin(Stdio::null())
++                .output()
++                .unwrap();
++            assert!(
++                output.status.success(),
++                "the grading runs: {}",
++                String::from_utf8_lossy(&output.stderr)
++            );
++            let graded = printed(&output);
++            assert!(
++                graded
++                    .last()
++                    .is_some_and(|line| line.starts_with("graded ")
++                        && line.ends_with(&format!(" {composed}"))),
++                "the judge grades stable-refs {composed} over its {member} state: {graded:?}"
++            );
++            assert!(
++                member == "met" || graded.contains(&format!("grade {hash} unmet")),
++                "the judge fails the question the pair isolates: {graded:?}"
++            );
++        }
++    }
+ }
+diff --git a/rubrics/README.md b/rubrics/README.md
+new file mode 100644
+index 0000000..38e5a9e
+--- /dev/null
++++ b/rubrics/README.md
+@@ -0,0 +1,114 @@
++# rubrics
++
++The rubric set: seven rubrics that grade a change to a repository of this workspace's shape, each with a fixture pair that one state meets and the other does not.
++
++- [The set](#the-set)
++- [State files](#state-files)
++- [Questions](#questions)
++- [The band](#the-band)
++- [Fixture pairs](#fixture-pairs)
++- [Tests](#tests)
++- [Deferred](#deferred)
++
++## The set
++
++A rubric is an Opponent strategy: the state files it reads into a transcript, a band, and named questions a judge answers about the transcript. Each answer is graded against the band, and the grades compose as the conjunction of the rubric's criteria; [`domhringr-strategy-document`](../crates/strategy-document/README.md#rubrics) states the document's shape and the grading. The `domhringr-peer` binary grades a rubric on a task and commits the verdict and the grading: `rubric grade <file> <tree> --task-state <dir>` ([`domhringr-surface-peer`](../crates/surface-peer/README.md#playbooks-and-rubrics)).
++
++| Rubric | The question it answers | Reads | Questions |
++| ------ | ----------------------- | ----- | --------- |
++| `stable-refs` | Does every reference the change adds resolve for a reader who holds only the text and the public sources it names? | `change.diff`, `commits.txt` | 4 |
++| `public-private-stance` | Does the change carry only what any clone needs, with no secret, no fact about one machine or installation, no private source and no contributor's own concerns? | `change.diff`, `commits.txt` | 5 |
++| `issues` | Does the issue ask one question, with evidence a reader can reproduce and a test that closes it? | `issue.md` | 4 |
++| `pull-requests` | Does the review hold the change to the record's own words, line by line, and decide by its findings? | `change.diff`, `review.md` | 5 |
++| `ci-shape` | Does CI run every gate over the whole workspace from pinned actions, and does the committed workflow run on a workstation? | `ci.yml`, `tasks.toml` | 7 |
++| `docs` | Does the README state what its package is, why and how, its decisions and its needs, as present fact? | `README.md` | 6 |
++| `code` | Does the code carry its specifications, keep every diagnostic, say why a value is absent, convert numbers totally, name its tests for what they witness, and declare its dependencies once? | `change.diff` | 6 |
++
++## State files
++
++A rubric reads its state files from the task's state directory, by these names. The grader writes there what the task's record supplies.
++
++| File | Holds |
++| ---- | ----- |
++| `change.diff` | the change, as a unified diff against its base |
++| `commits.txt` | the change's commits, oldest first, each as a `commit <hash>` line and its message |
++| `issue.md` | an issue: its title as a heading, then its body |
++| `review.md` | a review of the change: its findings, then its verdict |
++| `ci.yml` | the CI workflow |
++| `tasks.toml` | the task definitions the repository's gates run |
++| `README.md` | a README as the change leaves it |
++
++**A state file is named for what it holds, not for where a repository keeps it.** A task's record supplies a diff, commit messages, an issue or a review body, a workflow and a README; a checkout holds only some of them, and each repository lays them out in its own way. Naming the content lets one rubric grade any task that supplies it.
++
++- the repository's own paths, such as `.github/workflows/ci.yml`: a rubric that reads only a checkout of one layout, and never a diff, an issue or a review, which no checkout holds.
++
++Reversal: a rubric that grades a whole checkout rather than a task's artifacts, whose state directory is then the checkout itself.
++
++## Questions
++
++Each question is one criterion. Its `instructions` say what to read and what counts; its `criteria.true` and `criteria.false` are one line each, offered to the judge as `A` and `B`.
++
++**A state with nothing to judge meets the criterion.** A change that cites no paper meets `citations`, and a review with no findings meets `cites-line`; each such question says so in its instructions and its true criterion, so a judge never fails a small change on a question the change gives no occasion for.
++
++- a question that fails on absence: a rubric whose grade measures the size of a change rather than its conformance.
++
++Reversal: a criterion whose subject must be present, such as a README section every package carries, which states the presence as its own question.
++
++**Each criterion is written as public judgement, in the words of this workspace's own documents.** A rubric names no tool, host, person or private source, and cites nothing: the criterion is the text, and the fixtures are its witnesses.
++
++## The band
++
++Every rubric in the set grades against `low = 0.2` and `high = 0.8`, the band of [`examples/rubric.toml`](../examples/rubric.toml). A ruling whose probability on the criterion holding is 0.8 or more is met, one of 0.2 or less unmet, and one between undecided.
++
++**The set shares one band until calibration measures a judge per rubric.**
++
++- a band per rubric, set by hand: numbers no measurement backs.
++- a wider undecided range, such as 0.15 to 0.85: fewer rulings met or unmet, with no measurement saying the extra undecided ones belong there.
++
++Reversal: calibration that measures, per rubric, where a judge's rulings on met and unmet states fall.
++
++## Fixture pairs
++
++`fixtures/<rubric>/` holds the rubric's pair: `met/` and `unmet/`, each a task's state directory holding every state file the rubric reads, and `isolates`, the name of one of the rubric's questions. The `unmet` member is the `met` member changed in one place, so that it fails the question `isolates` names and meets every other: the pair isolates that question.
++
++A pair is authored in four steps:
++
++1. Write `met/`: the smallest state that meets every question of the rubric, public and written for the pair.
++2. Copy it to `unmet/` and change one place so that exactly one question fails.
++3. Write that question's name in `isolates`.
++4. Run the tests below.
++
++**A pair isolates one question.** A pair whose `unmet` member failed several questions would show the rubric grading `unmet` without showing which criterion tells the members apart.
++
++- a pair per question: thirty-seven pairs, most of whose members differ by a line, as evidence that no test reads before calibration.
++
++Reversal: calibration, which needs a pair, or more, for every question.
++
++## Tests
++
++The peer binary's process test `strategy::tests::every_rubric_in_the_set_grades_its_fixture_pair`, in [`crates/surface-peer/tests/strategy.rs`](../crates/surface-peer/tests/strategy.rs), walks this directory. Every `<name>.toml` validates through `rubric validate` and is named `<name>`; its pair's `met` and `unmet` states read and differ, and `isolates` names one of its questions. From a table reading every question at 0.9 on the criterion holding over `met`, and the isolated question at 0.1 over `unmet`, `rubric grade` grades the rubric `met` over `met` and `unmet` over `unmet`, the isolated question alone unmet, and the replay holds each grading naming the rubric and every question. A rubric added here, with its pair, is tested with no change to the test:
++
++```sh
++mise exec -- cargo nextest run -p domhringr-surface-peer -E 'test(every_rubric_in_the_set_grades_its_fixture_pair)'
++```
++
++**The set is tested through the peer binary.** The grade is `domhringr-strategy-document`'s, and the verdict and the grading that record it are committed by `domhringr-peer`, the one program that commits them, so the test reads the receipts a real grading leaves.
++
++- a test in `domhringr-strategy-document`: it would build the verdict and the grading itself and test its own construction, and the layering keeps the strategy crate below the binary, so it cannot run it.
++- a test crate of its own: a member with no library, which still cannot run another package's binary.
++
++Reversal: an operator command that grades a task, whose tests then walk the set.
++
++**A table grades what it is told.** The test shows that each rubric reads, that each pair's states read and differ, and that the band grades a judge 90 percent sure as met or unmet; it does not show that a model tells a pair apart. An ignored test asks that of a real judge, grading the `stable-refs` pair through the endpoint the environment configures, as [`domhringr-judge-oracle`](../crates/judge-oracle/README.md#configuration) states:
++
++```sh
++DOMHRINGR_JUDGE_ENDPOINT=http://127.0.0.1:8000/v1 DOMHRINGR_JUDGE_MODEL=<model> \
++  mise exec -- cargo nextest run -p domhringr-surface-peer --run-ignored only \
++  -E 'test(a_configured_judge_grades_a_fixture_pair_of_the_set)'
++```
++
++## Deferred
++
++- Calibration: measuring where a judge's rulings fall on each rubric's met and unmet states, which sets each band and says which questions a model answers reliably.
++- Dialogue reuse: a ruling recorded for one question about one transcript, answered again from the record when the same pair is asked.
++- The loader as a type checker: a rubric whose state files, questions and band are checked against the task it grades before any question is asked.
+diff --git a/rubrics/ci-shape.toml b/rubrics/ci-shape.toml
+new file mode 100644
+index 0000000..e9515be
+--- /dev/null
++++ b/rubrics/ci-shape.toml
+@@ -0,0 +1,61 @@
++#:tombi toml-version = "v1.0.0"
++
++# CI runs every gate over the whole workspace, from actions pinned by hash,
++# and the same workflow runs on a workstation as committed.
++name = "ci-shape"
++state = ["ci.yml", "tasks.toml"]
++
++[band]
++low = 0.2
++high = 0.8
++
++[questions.every-target]
++instructions = """
++Read the workflow and the tasks. Does a job build and test every target of \
++the workspace, the libraries, binaries, examples and tests of every member, \
++rather than a chosen subset?"""
++criteria.true = "A job builds and tests every target of every workspace member."
++criteria.false = "The tests run on some members or targets and skip others."
++
++[questions.format]
++instructions = """
++Read the workflow and the tasks. Does a job run the formatters in check mode \
++over the whole tree, failing when a file is not formatted?"""
++criteria.true = "A job checks every file's formatting and fails on any difference."
++criteria.false = "No job checks formatting, or one rewrites files without failing."
++
++[questions.lint-wall]
++instructions = """
++Read the workflow and the tasks. Does a job lint every target with warnings \
++denied, through clippy and, where the tasks define one, the compiler plugin's \
++policy, so that any warning fails the run?"""
++criteria.true = "A job lints every target with every warning denied."
++criteria.false = "No job lints, one lints part of the workspace, or a warning passes."
++
++[questions.local-run]
++instructions = """
++Read the tasks. Does a task run the committed workflow itself on a \
++workstation, so that a local gate runs the jobs CI runs rather than a list \
++of commands kept beside them?"""
++criteria.true = "A task runs the committed workflow locally."
++criteria.false = "Local gates are a separate list of commands that can drift from the workflow."
++
++[questions.pinned-actions]
++instructions = """
++Read the workflow. Is every action it uses pinned to a full commit hash?"""
++criteria.true = "Every action is named by a full commit hash."
++criteria.false = "An action is named by a tag or a branch."
++
++[questions.private-rustdoc]
++instructions = """
++Read the workflow and the tasks. Does a job build the documentation with \
++private items included and every rustdoc warning denied?"""
++criteria.true = "A job builds rustdoc over private items with every warning denied."
++criteria.false = "Rustdoc is not built, covers public items alone, or lets a warning pass."
++
++[questions.spelling]
++instructions = """
++Read the workflow and the tasks. Does a job check the spelling of the tree, \
++directly or through a task it runs?"""
++criteria.true = "A job checks spelling."
++criteria.false = "No job checks spelling."
+diff --git a/rubrics/code.toml b/rubrics/code.toml
+new file mode 100644
+index 0000000..9e8a04a
+--- /dev/null
++++ b/rubrics/code.toml
+@@ -0,0 +1,67 @@
++#:tombi toml-version = "v1.0.0"
++
++# Rust a change adds carries its specifications, keeps every diagnostic
++# standing, says why a value is absent, converts numbers totally, names its
++# tests for what they witness, and declares its dependencies once.
++name = "code"
++state = ["change.diff"]
++
++[band]
++low = 0.2
++high = 0.8
++
++[questions.absence]
++instructions = """
++Read the signatures the change adds or rewrites. Where a value may be \
++absent, does the type say why, through an error that names the failure or an \
++absence that carries its reason, rather than an Option whose None says \
++nothing? A change that adds no such signature meets this."""
++criteria.true = "Every absence in a new signature carries its reason, or there is none."
++criteria.false = "A new signature returns or takes an Option where the absence has a reason."
++
++[questions.conversions]
++instructions = """
++Read the code the change adds. Does it convert and compute numbers only \
++through total or checked operations, such as from, try_from, and checked or \
++saturating arithmetic, and never through an as cast or arithmetic that can \
++overflow or wrap unchecked? A change that adds no such code meets this."""
++criteria.true = "Every conversion and arithmetic step is total or checked, or there is none."
++criteria.false = "An as cast or unchecked arithmetic can truncate, overflow or wrap."
++
++[questions.dependencies]
++instructions = """
++Read the manifests the change edits. Is every dependency it adds declared \
++once, in the root manifest's [workspace.dependencies], with default features \
++off, a comment saying what it is, a features list naming the use that needs \
++each feature it enables, and a consumers list naming every crate that uses \
++it, each member taking it with workspace = true? A change that adds no \
++dependency meets this."""
++criteria.true = "Each added dependency is declared once at the root, defaults off, its features and consumers listed, or none is added."
++criteria.false = "A dependency is declared in a member, keeps its default features, or lacks its features or consumers list."
++
++[questions.specifications]
++instructions = """
++Read the code the change adds or rewrites. Does every function and method \
++carry a one-line summary and a Specification section, either trivial. or its \
++clauses in the order requires, ensures, provides, fails, panics, with an \
++Errors section when it can fail? Test functions are exempt."""
++criteria.true = "Every added or rewritten function carries its summary and its specification."
++criteria.false = "An added or rewritten function lacks its summary, its specification or its errors."
++
++[questions.suppressions]
++instructions = """
++Read the code the change adds. Does it leave every diagnostic standing, with \
++no allow attribute and no crate-wide or file-wide suppression, and any \
++expect attribute placed on one item and naming its reason? A change that \
++adds no such attribute meets this."""
++criteria.true = "No diagnostic is silenced, and any expect names its lint and its reason on one item."
++criteria.false = "The change silences a diagnostic with allow, a blanket suppression, or an expect without a reason."
++
++[questions.test-names]
++instructions = """
++Read the tests the change adds. Is each named for the behaviour it \
++witnesses, as a sentence such as a_missing_state_file_is_refused_by_name, \
++rather than for the function it calls, a ticket or a number? A change that \
++adds no test meets this."""
++criteria.true = "Each added test is named for the behaviour it witnesses, or none is added."
++criteria.false = "A test is named for the function it calls, a ticket or a number, such as test_grade_2."
+diff --git a/rubrics/docs.toml b/rubrics/docs.toml
+new file mode 100644
+index 0000000..0ad1f65
+--- /dev/null
++++ b/rubrics/docs.toml
+@@ -0,0 +1,56 @@
++#:tombi toml-version = "v1.0.0"
++
++# A README states what its package is, why and how, the decisions it rests
++# on and what it needs, as present fact.
++name = "docs"
++state = ["README.md"]
++
++[band]
++low = 0.2
++high = 0.8
++
++[questions.decisions]
++instructions = """
++Read the README's sections on its decisions. Does each decision state the \
++choice and its reason, the alternatives it was chosen over with why each \
++lost, and the condition that would reverse it?"""
++criteria.true = "Each decision states its choice and reason, its alternatives and why they lost, and its reversal."
++criteria.false = "A decision lacks its reason, its alternatives or the condition that would reverse it."
++
++[questions.examples]
++instructions = """
++Read the README's examples. Do they give runnable usage and the command \
++that runs the package's tests?"""
++criteria.true = "The README gives runnable usage and the test command."
++criteria.false = "The README gives no runnable usage, or no test command."
++
++[questions.expected-features]
++instructions = """
++Read the README's expected features. Do they name only what a consumer or \
++the environment must supply for the package to be useful, such as a \
++runtime, a store, a target or a variable, and nothing the package lacks or \
++plans?"""
++criteria.true = "Expected features name only what a consumer or the environment supplies."
++criteria.false = "Expected features list work the package lacks or plans."
++
++[questions.present-tense]
++instructions = """
++Read the whole README. Is it written as present fact, stating what is, with \
++no history: no earlier designs, no account of what changed, no dates of \
++decisions, and no notes that revise earlier text?"""
++criteria.true = "The README states the current design as present fact."
++criteria.false = "The README narrates history, revisions or earlier designs."
++
++[questions.purpose]
++instructions = """
++Read the README's opening. Does its title name the package, and does one \
++sentence after the title state what the package is?"""
++criteria.true = "The title names the package and one sentence states what it is."
++criteria.false = "The title does not name the package, or no sentence states what it is."
++
++[questions.synopsis]
++instructions = """
++Read the README's synopsis. Does it state what the package is, the need it \
++answers and the mechanism it answers it by, each concretely?"""
++criteria.true = "The synopsis states what, why and how, each concretely."
++criteria.false = "The synopsis misses what, why or how, or states one only in general terms."
+diff --git a/rubrics/fixtures/ci-shape/isolates b/rubrics/fixtures/ci-shape/isolates
+new file mode 100644
+index 0000000..e057d52
+--- /dev/null
++++ b/rubrics/fixtures/ci-shape/isolates
+@@ -0,0 +1 @@
++spelling
+diff --git a/rubrics/fixtures/ci-shape/met/ci.yml b/rubrics/fixtures/ci-shape/met/ci.yml
+new file mode 100644
+index 0000000..6b40a9d
+--- /dev/null
++++ b/rubrics/fixtures/ci-shape/met/ci.yml
+@@ -0,0 +1,50 @@
++name: CI
++
++on:
++  pull_request: {}
++  workflow_dispatch: {}
++
++permissions:
++  contents: read
++
++jobs:
++  test:
++    name: test the workspace
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
++      - name: build every workspace target
++        run: cargo build --locked --workspace --all-targets
++      - name: test every workspace target
++        run: mise run check:tests
++      - name: check private-item rustdoc
++        run: mise run check:doc
++
++  lint:
++    name: check the lint wall
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
++      - name: lint every target
++        run: mise run check:clippy
++      - name: check the compiler-plugin policy
++        run: mise run check:dylint
++
++  gates:
++    name: check formatting and spelling
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
++      - name: check formatting
++        run: mise run check:format
++      - name: check spelling
++        run: mise run check:typos
+diff --git a/rubrics/fixtures/ci-shape/met/tasks.toml b/rubrics/fixtures/ci-shape/met/tasks.toml
+new file mode 100644
+index 0000000..b05ab62
+--- /dev/null
++++ b/rubrics/fixtures/ci-shape/met/tasks.toml
+@@ -0,0 +1,35 @@
++# The wall. Every `check:*` task is one gate; `check` fans out to all of them.
++[check]
++description = "Every gate"
++depends = ["check:*"]
++
++["check:format"]
++description = "Every formatter in check mode: fails on any file it would change"
++run = "treefmt --ci"
++
++["check:clippy"]
++description = "The clippy half of the lint wall, every target, warnings denied"
++run = "cargo clippy --workspace --all-targets --locked -- --deny warnings"
++
++["check:dylint"]
++description = "The compiler plugin's policy over every target, warnings denied"
++env.DYLINT_RUSTFLAGS = "--deny warnings"
++run = "cargo dylint --lib quenchant_dylints --no-deps -- --workspace --all-targets"
++
++["check:doc"]
++description = "Private-item rustdoc with every rustdoc warning denied"
++env.RUSTDOCFLAGS = "-D warnings"
++run = "cargo doc --workspace --locked --no-deps --document-private-items"
++
++["check:tests"]
++description = "Unit and integration tests over every target"
++run = "cargo nextest run --workspace --locked"
++
++["check:typos"]
++description = "Spelling"
++run = "typos"
++
++# The committed workflow, run on a workstation: the same jobs CI runs.
++["ci:act"]
++description = "Run the committed CI workflow locally"
++run = "act workflow_dispatch --workflows .github/workflows/ci.yml"
+diff --git a/rubrics/fixtures/ci-shape/unmet/ci.yml b/rubrics/fixtures/ci-shape/unmet/ci.yml
+new file mode 100644
+index 0000000..feb5ab3
+--- /dev/null
++++ b/rubrics/fixtures/ci-shape/unmet/ci.yml
+@@ -0,0 +1,48 @@
++name: CI
++
++on:
++  pull_request: {}
++  workflow_dispatch: {}
++
++permissions:
++  contents: read
++
++jobs:
++  test:
++    name: test the workspace
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
++      - name: build every workspace target
++        run: cargo build --locked --workspace --all-targets
++      - name: test every workspace target
++        run: mise run check:tests
++      - name: check private-item rustdoc
++        run: mise run check:doc
++
++  lint:
++    name: check the lint wall
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
++      - name: lint every target
++        run: mise run check:clippy
++      - name: check the compiler-plugin policy
++        run: mise run check:dylint
++
++  gates:
++    name: check formatting
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
++      - name: check formatting
++        run: mise run check:format
+diff --git a/rubrics/fixtures/ci-shape/unmet/tasks.toml b/rubrics/fixtures/ci-shape/unmet/tasks.toml
+new file mode 100644
+index 0000000..b05ab62
+--- /dev/null
++++ b/rubrics/fixtures/ci-shape/unmet/tasks.toml
+@@ -0,0 +1,35 @@
++# The wall. Every `check:*` task is one gate; `check` fans out to all of them.
++[check]
++description = "Every gate"
++depends = ["check:*"]
++
++["check:format"]
++description = "Every formatter in check mode: fails on any file it would change"
++run = "treefmt --ci"
++
++["check:clippy"]
++description = "The clippy half of the lint wall, every target, warnings denied"
++run = "cargo clippy --workspace --all-targets --locked -- --deny warnings"
++
++["check:dylint"]
++description = "The compiler plugin's policy over every target, warnings denied"
++env.DYLINT_RUSTFLAGS = "--deny warnings"
++run = "cargo dylint --lib quenchant_dylints --no-deps -- --workspace --all-targets"
++
++["check:doc"]
++description = "Private-item rustdoc with every rustdoc warning denied"
++env.RUSTDOCFLAGS = "-D warnings"
++run = "cargo doc --workspace --locked --no-deps --document-private-items"
++
++["check:tests"]
++description = "Unit and integration tests over every target"
++run = "cargo nextest run --workspace --locked"
++
++["check:typos"]
++description = "Spelling"
++run = "typos"
++
++# The committed workflow, run on a workstation: the same jobs CI runs.
++["ci:act"]
++description = "Run the committed CI workflow locally"
++run = "act workflow_dispatch --workflows .github/workflows/ci.yml"
+diff --git a/rubrics/fixtures/code/isolates b/rubrics/fixtures/code/isolates
+new file mode 100644
+index 0000000..a66ca9e
+--- /dev/null
++++ b/rubrics/fixtures/code/isolates
+@@ -0,0 +1 @@
++test-names
+diff --git a/rubrics/fixtures/code/met/change.diff b/rubrics/fixtures/code/met/change.diff
+new file mode 100644
+index 0000000..80e3f88
+--- /dev/null
++++ b/rubrics/fixtures/code/met/change.diff
+@@ -0,0 +1,46 @@
++diff --git a/crates/strategy-document/src/rubric.rs b/crates/strategy-document/src/rubric.rs
++--- a/crates/strategy-document/src/rubric.rs
+++++ b/crates/strategy-document/src/rubric.rs
++@@ -372,6 +372,24 @@ pub fn compose(grades: &[Grade]) -> Grade
++     }
++ }
++ 
+++/// Whether `grade` settles a rubric's composition whatever the other grades
+++/// are.
+++///
+++/// # Specification
+++/// - ensures: true for [`Grade::Unmet`] alone: the one grade a conjunction
+++///   cannot outweigh.
+++/// - panics: none.
+++///
+++/// # Adequacy
+++/// - hypothesis: L3 — each of the four grades is asked once.
+++/// - witness: `rubric::tests::an_unmet_grade_alone_settles_the_composition`
+++#[inline]
+++#[must_use]
+++pub const fn settles(grade: Grade) -> bool
+++{
+++    matches!(grade, Grade::Unmet)
+++}
+++
++ /// A file a rubric reads from the task's state directory: a relative path of
++ /// segments joined by `/`, each of ASCII letters, digits, `.`, `_` and `-`,
++ /// none empty, `.` or `..`.
++@@ -722,4 +740,17 @@ mod tests
++             assert_eq!(compose(grades), composed, "{grades:?}");
++         }
++     }
+++
+++    #[test]
+++    fn an_unmet_grade_alone_settles_the_composition()
+++    {
+++        for (grade, settled) in [
+++            (Grade::Met, false),
+++            (Grade::Undecided, false),
+++            (Grade::Refused, false),
+++            (Grade::Unmet, true),
+++        ] {
+++            assert_eq!(settles(grade), settled, "{grade}");
+++        }
+++    }
++ }
+diff --git a/rubrics/fixtures/code/unmet/change.diff b/rubrics/fixtures/code/unmet/change.diff
+new file mode 100644
+index 0000000..81efd64
+--- /dev/null
++++ b/rubrics/fixtures/code/unmet/change.diff
+@@ -0,0 +1,46 @@
++diff --git a/crates/strategy-document/src/rubric.rs b/crates/strategy-document/src/rubric.rs
++--- a/crates/strategy-document/src/rubric.rs
+++++ b/crates/strategy-document/src/rubric.rs
++@@ -372,6 +372,24 @@ pub fn compose(grades: &[Grade]) -> Grade
++     }
++ }
++ 
+++/// Whether `grade` settles a rubric's composition whatever the other grades
+++/// are.
+++///
+++/// # Specification
+++/// - ensures: true for [`Grade::Unmet`] alone: the one grade a conjunction
+++///   cannot outweigh.
+++/// - panics: none.
+++///
+++/// # Adequacy
+++/// - hypothesis: L3 — each of the four grades is asked once.
+++/// - witness: `rubric::tests::test_settles_1`
+++#[inline]
+++#[must_use]
+++pub const fn settles(grade: Grade) -> bool
+++{
+++    matches!(grade, Grade::Unmet)
+++}
+++
++ /// A file a rubric reads from the task's state directory: a relative path of
++ /// segments joined by `/`, each of ASCII letters, digits, `.`, `_` and `-`,
++ /// none empty, `.` or `..`.
++@@ -722,4 +740,17 @@ mod tests
++             assert_eq!(compose(grades), composed, "{grades:?}");
++         }
++     }
+++
+++    #[test]
+++    fn test_settles_1()
+++    {
+++        for (grade, settled) in [
+++            (Grade::Met, false),
+++            (Grade::Undecided, false),
+++            (Grade::Refused, false),
+++            (Grade::Unmet, true),
+++        ] {
+++            assert_eq!(settles(grade), settled, "{grade}");
+++        }
+++    }
++ }
+diff --git a/rubrics/fixtures/docs/isolates b/rubrics/fixtures/docs/isolates
+new file mode 100644
+index 0000000..370650f
+--- /dev/null
++++ b/rubrics/fixtures/docs/isolates
+@@ -0,0 +1 @@
++present-tense
+diff --git a/rubrics/fixtures/docs/met/README.md b/rubrics/fixtures/docs/met/README.md
+new file mode 100644
+index 0000000..c2e3dd5
+--- /dev/null
++++ b/rubrics/fixtures/docs/met/README.md
+@@ -0,0 +1,58 @@
++# line-budget
++
++`line-budget` counts a text's lines against a budget and names the first line past it.
++
++- [Synopsis](#synopsis)
++- [Provided features](#provided-features)
++- [Expected features](#expected-features)
++- [Examples](#examples)
++- [Counting lines](#counting-lines)
++- [License](#license)
++
++## Synopsis
++
++**What.** `line-budget` is a library that reads a text, counts its lines, and compares the count with a budget: a page within its budget is accepted, and a page over it is refused with the number of the first line past the budget.
++
++**Why.** A page that grows without bound stops being read. A budget a check enforces names the page that must be split at the change that pushes it over, while the change is still small.
++
++**How.** `Budget::check` walks the text's bytes once, counting each line feed and a final line without one, and returns `Within` with the count, or `Over` with the count and the first line past the budget.
++
++## Provided features
++
++- `Budget`, a positive line count, read from text with `FromStr`.
++- `Budget::check`: a text counted against the budget, `Within` or `Over`.
++
++## Expected features
++
++- The text as UTF-8 bytes in memory; the crate reads no file.
++
++## Examples
++
++```rust
++use line_budget::{Budget, Checked};
++
++fn main() -> Result<(), Box<dyn std::error::Error>> {
++    let budget = "3".parse::<Budget>()?;
++    assert!(matches!(budget.check("one\ntwo\nthree\nfour\n"), Checked::Over { first: 4, .. }));
++    Ok(())
++}
++```
++
++Run the crate's tests:
++
++```sh
++cargo test -p line-budget
++```
++
++## Counting lines
++
++**A line is what ends in a line feed, and a final line without one counts as a line.** A text of `a\nb` holds two lines, as an editor shows it.
++
++- counting line feeds alone: a text whose last line has no line feed would hold one line fewer than an editor shows.
++- counting by the platform's line ending: the same text would hold a different count on different platforms.
++
++Reversal: a consumer whose texts end lines with a carriage return alone, which needs the line ending as a parameter.
++
++## License
++
++Apache-2.0 WITH LLVM-exception.
+diff --git a/rubrics/fixtures/docs/unmet/README.md b/rubrics/fixtures/docs/unmet/README.md
+new file mode 100644
+index 0000000..aa43f65
+--- /dev/null
++++ b/rubrics/fixtures/docs/unmet/README.md
+@@ -0,0 +1,58 @@
++# line-budget
++
++`line-budget` counts a text's lines against a budget and names the first line past it.
++
++- [Synopsis](#synopsis)
++- [Provided features](#provided-features)
++- [Expected features](#expected-features)
++- [Examples](#examples)
++- [Counting lines](#counting-lines)
++- [License](#license)
++
++## Synopsis
++
++**What.** `line-budget` is a library that reads a text, counts its lines, and compares the count with a budget: a page within its budget is accepted, and a page over it is refused with the number of the first line past the budget.
++
++**Why.** A page that grows without bound stops being read. A budget a check enforces names the page that must be split at the change that pushes it over, while the change is still small.
++
++**How.** `Budget::check` walks the text's bytes once, counting each line feed and a final line without one, and returns `Within` with the count, or `Over` with the count and the first line past the budget.
++
++## Provided features
++
++- `Budget`, a positive line count, read from text with `FromStr`.
++- `Budget::check`: a text counted against the budget, `Within` or `Over`.
++
++## Expected features
++
++- The text as UTF-8 bytes in memory; the crate reads no file.
++
++## Examples
++
++```rust
++use line_budget::{Budget, Checked};
++
++fn main() -> Result<(), Box<dyn std::error::Error>> {
++    let budget = "3".parse::<Budget>()?;
++    assert!(matches!(budget.check("one\ntwo\nthree\nfour\n"), Checked::Over { first: 4, .. }));
++    Ok(())
++}
++```
++
++Run the crate's tests:
++
++```sh
++cargo test -p line-budget
++```
++
++## Counting lines
++
++**A line is what ends in a line feed, and a final line without one counts as a line.** A text of `a\nb` holds two lines, as an editor shows it. The first release counted line feeds alone; after a report that the last line went missing, the count was changed to this rule in the second release.
++
++- counting line feeds alone: a text whose last line has no line feed would hold one line fewer than an editor shows.
++- counting by the platform's line ending: the same text would hold a different count on different platforms.
++
++Reversal: a consumer whose texts end lines with a carriage return alone, which needs the line ending as a parameter.
++
++## License
++
++Apache-2.0 WITH LLVM-exception.
+diff --git a/rubrics/fixtures/issues/isolates b/rubrics/fixtures/issues/isolates
+new file mode 100644
+index 0000000..f519986
+--- /dev/null
++++ b/rubrics/fixtures/issues/isolates
+@@ -0,0 +1 @@
++acceptance-test
+diff --git a/rubrics/fixtures/issues/met/issue.md b/rubrics/fixtures/issues/met/issue.md
+new file mode 100644
+index 0000000..8f0dbc3
+--- /dev/null
++++ b/rubrics/fixtures/issues/met/issue.md
+@@ -0,0 +1,28 @@
++# `rubric validate` does not print the band a rubric grades against
++
++`domhringr-peer rubric validate` prints a rubric's hash and name and each question's hash, but not its band, so a reader of a `rubric grade` run cannot tell from the output where `met` and `unmet` begin. The documented output is in [`crates/surface-peer/README.md#playbooks-and-rubrics`](https://github.com/gandr-lang/domhringr/blob/712b1aacbd1342b61f48362ce64b00785de1db1d/crates/surface-peer/README.md#playbooks-and-rubrics).
++
++## Current behaviour
++
++From the workspace root at commit `712b1aacbd1342b61f48362ce64b00785de1db1d`:
++
++```sh
++cargo build -p domhringr-surface-peer
++target/debug/domhringr-peer --state "$(mktemp -d)" rubric validate examples/rubric.toml
++```
++
++prints three lines, and none of them holds `low = 0.2` or `high = 0.8` from the file:
++
++```text
++rubric <hash> change-review
++question crate-rows <hash>
++question synopsis <hash>
++```
++
++## Proposed change
++
++Print `band <low> <high>` after the `rubric` line, each bound as the file writes it.
++
++## Acceptance
++
++The process test `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts` in `crates/surface-peer/tests/strategy.rs` reads the line `band 0.25 0.75` directly after `rubric <hash> landing` when it validates its rubric, and the test passes.
+diff --git a/rubrics/fixtures/issues/unmet/issue.md b/rubrics/fixtures/issues/unmet/issue.md
+new file mode 100644
+index 0000000..c9b9a2a
+--- /dev/null
++++ b/rubrics/fixtures/issues/unmet/issue.md
+@@ -0,0 +1,28 @@
++# `rubric validate` does not print the band a rubric grades against
++
++`domhringr-peer rubric validate` prints a rubric's hash and name and each question's hash, but not its band, so a reader of a `rubric grade` run cannot tell from the output where `met` and `unmet` begin. The documented output is in [`crates/surface-peer/README.md#playbooks-and-rubrics`](https://github.com/gandr-lang/domhringr/blob/712b1aacbd1342b61f48362ce64b00785de1db1d/crates/surface-peer/README.md#playbooks-and-rubrics).
++
++## Current behaviour
++
++From the workspace root at commit `712b1aacbd1342b61f48362ce64b00785de1db1d`:
++
++```sh
++cargo build -p domhringr-surface-peer
++target/debug/domhringr-peer --state "$(mktemp -d)" rubric validate examples/rubric.toml
++```
++
++prints three lines, and none of them holds `low = 0.2` or `high = 0.8` from the file:
++
++```text
++rubric <hash> change-review
++question crate-rows <hash>
++question synopsis <hash>
++```
++
++## Proposed change
++
++Print `band <low> <high>` after the `rubric` line, each bound as the file writes it.
++
++## Acceptance
++
++The output reads better and a reader can see the band.
+diff --git a/rubrics/fixtures/public-private-stance/isolates b/rubrics/fixtures/public-private-stance/isolates
+new file mode 100644
+index 0000000..e7fdb92
+--- /dev/null
++++ b/rubrics/fixtures/public-private-stance/isolates
+@@ -0,0 +1 @@
++machine-facts
+diff --git a/rubrics/fixtures/public-private-stance/met/change.diff b/rubrics/fixtures/public-private-stance/met/change.diff
+new file mode 100644
+index 0000000..70cd093
+--- /dev/null
++++ b/rubrics/fixtures/public-private-stance/met/change.diff
+@@ -0,0 +1,19 @@
++diff --git a/crates/judge-oracle/README.md b/crates/judge-oracle/README.md
++--- a/crates/judge-oracle/README.md
+++++ b/crates/judge-oracle/README.md
++@@ -75,6 +75,15 @@
++ mise exec -- cargo nextest run -p domhringr-judge-oracle
++ ```
++ 
+++One test is ignored: it asks a real endpoint a question whose transcript states the answer. Start an OpenAI-compatible server that reports log-probabilities, then run the test from the workspace root, naming the server and the model it serves:
+++
+++```sh
+++DOMHRINGR_JUDGE_ENDPOINT=http://127.0.0.1:8000/v1 DOMHRINGR_JUDGE_MODEL=<model> \
+++  mise exec -- cargo nextest run -p domhringr-judge-oracle --run-ignored only
+++```
+++
+++A server that needs a key reads it from `DOMHRINGR_JUDGE_KEY`; the key is never written to the tree.
+++
++ ## The laws
++ 
++ A judge classifies evidence and never adds to it.
+diff --git a/rubrics/fixtures/public-private-stance/met/commits.txt b/rubrics/fixtures/public-private-stance/met/commits.txt
+new file mode 100644
+index 0000000..4980058
+--- /dev/null
++++ b/rubrics/fixtures/public-private-stance/met/commits.txt
+@@ -0,0 +1,7 @@
++commit 9b1e4f7a2c6d0e8b3a5f1c9d7e2b4a6c8f0d1e35
++
++docs(judge): show how the ignored test reaches a real endpoint
++
++The README names the variables the test reads and the server it needs,
++so the test runs by hand against any endpoint without a setting in the
++tree.
+diff --git a/rubrics/fixtures/public-private-stance/unmet/change.diff b/rubrics/fixtures/public-private-stance/unmet/change.diff
+new file mode 100644
+index 0000000..dfc9e67
+--- /dev/null
++++ b/rubrics/fixtures/public-private-stance/unmet/change.diff
+@@ -0,0 +1,19 @@
++diff --git a/crates/judge-oracle/README.md b/crates/judge-oracle/README.md
++--- a/crates/judge-oracle/README.md
+++++ b/crates/judge-oracle/README.md
++@@ -75,6 +75,15 @@
++ mise exec -- cargo nextest run -p domhringr-judge-oracle
++ ```
++ 
+++One test is ignored: it asks a real endpoint a question whose transcript states the answer. Start an OpenAI-compatible server that reports log-probabilities, then run the test from the workspace root, naming the server and the model it serves:
+++
+++```sh
+++cd /home/ada/src/domhringr && DOMHRINGR_JUDGE_ENDPOINT=http://127.0.0.1:8000/v1 DOMHRINGR_JUDGE_MODEL=<model> \
+++  mise exec -- cargo nextest run -p domhringr-judge-oracle --run-ignored only
+++```
+++
+++A server that needs a key reads it from `DOMHRINGR_JUDGE_KEY`; the key is never written to the tree.
+++
++ ## The laws
++ 
++ A judge classifies evidence and never adds to it.
+diff --git a/rubrics/fixtures/public-private-stance/unmet/commits.txt b/rubrics/fixtures/public-private-stance/unmet/commits.txt
+new file mode 100644
+index 0000000..4980058
+--- /dev/null
++++ b/rubrics/fixtures/public-private-stance/unmet/commits.txt
+@@ -0,0 +1,7 @@
++commit 9b1e4f7a2c6d0e8b3a5f1c9d7e2b4a6c8f0d1e35
++
++docs(judge): show how the ignored test reaches a real endpoint
++
++The README names the variables the test reads and the server it needs,
++so the test runs by hand against any endpoint without a setting in the
++tree.
+diff --git a/rubrics/fixtures/pull-requests/isolates b/rubrics/fixtures/pull-requests/isolates
+new file mode 100644
+index 0000000..f116812
+--- /dev/null
++++ b/rubrics/fixtures/pull-requests/isolates
+@@ -0,0 +1 @@
++verdict-follows
+diff --git a/rubrics/fixtures/pull-requests/met/change.diff b/rubrics/fixtures/pull-requests/met/change.diff
+new file mode 100644
+index 0000000..e749a9d
+--- /dev/null
++++ b/rubrics/fixtures/pull-requests/met/change.diff
+@@ -0,0 +1,12 @@
++diff --git a/crates/strategy-document/src/rubric.rs b/crates/strategy-document/src/rubric.rs
++--- a/crates/strategy-document/src/rubric.rs
+++++ b/crates/strategy-document/src/rubric.rs
++@@ -328,7 +328,7 @@ impl Band
++         else {
++             return Grade::Refused;
++         };
++-        if holds >= self.high {
+++        if holds > self.high {
++             Grade::Met
++         }
++         else if holds <= self.low {
+diff --git a/rubrics/fixtures/pull-requests/met/review.md b/rubrics/fixtures/pull-requests/met/review.md
+new file mode 100644
+index 0000000..0de806c
+--- /dev/null
++++ b/rubrics/fixtures/pull-requests/met/review.md
+@@ -0,0 +1,9 @@
++# Review
++
++## Findings
++
++1. `crates/strategy-document/src/rubric.rs`, line 331 of the change, `if holds > self.high {`: a ruling whose probability on the criterion holding is exactly the high bound now grades `undecided`. The record states the opposite: "At or above `high` it is `met`" (`crates/strategy-document/README.md#grades-and-their-composition`).
++
++## Verdict
++
++Changes requested: restore `>=` on line 331, so that a ruling at the high bound grades `met`.
+diff --git a/rubrics/fixtures/pull-requests/unmet/change.diff b/rubrics/fixtures/pull-requests/unmet/change.diff
+new file mode 100644
+index 0000000..e749a9d
+--- /dev/null
++++ b/rubrics/fixtures/pull-requests/unmet/change.diff
+@@ -0,0 +1,12 @@
++diff --git a/crates/strategy-document/src/rubric.rs b/crates/strategy-document/src/rubric.rs
++--- a/crates/strategy-document/src/rubric.rs
+++++ b/crates/strategy-document/src/rubric.rs
++@@ -328,7 +328,7 @@ impl Band
++         else {
++             return Grade::Refused;
++         };
++-        if holds >= self.high {
+++        if holds > self.high {
++             Grade::Met
++         }
++         else if holds <= self.low {
+diff --git a/rubrics/fixtures/pull-requests/unmet/review.md b/rubrics/fixtures/pull-requests/unmet/review.md
+new file mode 100644
+index 0000000..ffd5797
+--- /dev/null
++++ b/rubrics/fixtures/pull-requests/unmet/review.md
+@@ -0,0 +1,9 @@
++# Review
++
++## Findings
++
++1. `crates/strategy-document/src/rubric.rs`, line 331 of the change, `if holds > self.high {`: a ruling whose probability on the criterion holding is exactly the high bound now grades `undecided`. The record states the opposite: "At or above `high` it is `met`" (`crates/strategy-document/README.md#grades-and-their-composition`).
++
++## Verdict
++
++Approved: the change can land as it is.
+diff --git a/rubrics/fixtures/stable-refs/isolates b/rubrics/fixtures/stable-refs/isolates
+new file mode 100644
+index 0000000..691f11d
+--- /dev/null
++++ b/rubrics/fixtures/stable-refs/isolates
+@@ -0,0 +1 @@
++commit-hashes
+diff --git a/rubrics/fixtures/stable-refs/met/change.diff b/rubrics/fixtures/stable-refs/met/change.diff
+new file mode 100644
+index 0000000..c49b456
+--- /dev/null
++++ b/rubrics/fixtures/stable-refs/met/change.diff
+@@ -0,0 +1,9 @@
++diff --git a/crates/strategy-document/README.md b/crates/strategy-document/README.md
++--- a/crates/strategy-document/README.md
+++++ b/crates/strategy-document/README.md
++@@ -164,3 +164,5 @@
++ **A ruling is graded by the probability on its true criterion against the band.** At or above `high` it is `met`, at or below `low` `unmet`, strictly between `undecided`; an unread ruling is `refused`.
++ 
++ **A rubric's grades compose as the conjunction of its criteria.** Any `unmet` makes the composition `unmet`; otherwise any `refused` makes it `refused`; otherwise any `undecided` makes it `undecided`; otherwise it is `met`, as is an empty composition.
+++
+++The conjunction is the strong three-valued one of S. C. Kleene, _Introduction to Metamathematics_, North-Holland, 1952, ISBN 978-0-7204-2103-3, § 64, with refusal placed between failure and indecision. The band it reads is the one [Rubrics](#rubrics) states, and the grader that composes it landed in commit 712b1aacbd1342b61f48362ce64b00785de1db1d.
+diff --git a/rubrics/fixtures/stable-refs/met/commits.txt b/rubrics/fixtures/stable-refs/met/commits.txt
+new file mode 100644
+index 0000000..475a91d
+--- /dev/null
++++ b/rubrics/fixtures/stable-refs/met/commits.txt
+@@ -0,0 +1,6 @@
++commit 3f2a9c4d7e1b8a6f5c0d2e4b9a7c1f3e5d8b6a20
++
++docs(strategy): cite the conjunction a rubric's grades compose by
++
++The composition section names the logic it follows and where the
++grader that implements it landed, so a reader can check both.
+diff --git a/rubrics/fixtures/stable-refs/unmet/change.diff b/rubrics/fixtures/stable-refs/unmet/change.diff
+new file mode 100644
+index 0000000..d457847
+--- /dev/null
++++ b/rubrics/fixtures/stable-refs/unmet/change.diff
+@@ -0,0 +1,9 @@
++diff --git a/crates/strategy-document/README.md b/crates/strategy-document/README.md
++--- a/crates/strategy-document/README.md
+++++ b/crates/strategy-document/README.md
++@@ -164,3 +164,5 @@
++ **A ruling is graded by the probability on its true criterion against the band.** At or above `high` it is `met`, at or below `low` `unmet`, strictly between `undecided`; an unread ruling is `refused`.
++ 
++ **A rubric's grades compose as the conjunction of its criteria.** Any `unmet` makes the composition `unmet`; otherwise any `refused` makes it `refused`; otherwise any `undecided` makes it `undecided`; otherwise it is `met`, as is an empty composition.
+++
+++The conjunction is the strong three-valued one of S. C. Kleene, _Introduction to Metamathematics_, North-Holland, 1952, ISBN 978-0-7204-2103-3, § 64, with refusal placed between failure and indecision. The band it reads is the one [Rubrics](#rubrics) states, and the grader that composes it landed in commit 712b1aa.
+diff --git a/rubrics/fixtures/stable-refs/unmet/commits.txt b/rubrics/fixtures/stable-refs/unmet/commits.txt
+new file mode 100644
+index 0000000..475a91d
+--- /dev/null
++++ b/rubrics/fixtures/stable-refs/unmet/commits.txt
+@@ -0,0 +1,6 @@
++commit 3f2a9c4d7e1b8a6f5c0d2e4b9a7c1f3e5d8b6a20
++
++docs(strategy): cite the conjunction a rubric's grades compose by
++
++The composition section names the logic it follows and where the
++grader that implements it landed, so a reader can check both.
+diff --git a/rubrics/issues.toml b/rubrics/issues.toml
+new file mode 100644
+index 0000000..748a0e6
+--- /dev/null
++++ b/rubrics/issues.toml
+@@ -0,0 +1,40 @@
++#:tombi toml-version = "v1.0.0"
++
++# An issue asks one question that a reader can check and a test can close.
++name = "issues"
++state = ["issue.md"]
++
++[band]
++low = 0.2
++high = 0.8
++
++[questions.acceptance-test]
++instructions = """
++Read the issue. Does it name its acceptance as a test: the behaviour to \
++observe, the input or state it is observed on, and the result that closes \
++the issue?"""
++criteria.true = "The issue names the test whose passing closes it."
++criteria.false = "The issue names no test, or closes on a judgement such as works well or reads better."
++
++[questions.evidence]
++instructions = """
++Read the issue. Does it state the current behaviour with evidence a reader \
++can reproduce: the command run and its output, the file and the anchor or \
++commit it is read at, or the steps that reach the state?"""
++criteria.true = "The issue shows what happens now, with evidence a reader can reproduce."
++criteria.false = "The issue asserts a problem or a need without evidence a reader can reproduce."
++
++[questions.one-question]
++instructions = """
++Read the issue. Does it ask one question or propose one change, so that one \
++answer or one change closes it?"""
++criteria.true = "The issue asks one question or proposes one change."
++criteria.false = "The issue bundles questions or changes that could each be closed on their own."
++
++[questions.self-contained]
++instructions = """
++Read the issue. Can a reader who holds only the issue and the public sources \
++it links understand what is asked, every term defined or linked and nothing \
++resting on a conversation or a document the issue does not name?"""
++criteria.true = "The issue reads on its own and through the public sources it links."
++criteria.false = "The issue rests on context it does not give, such as an earlier conversation."
+diff --git a/rubrics/public-private-stance.toml b/rubrics/public-private-stance.toml
+new file mode 100644
+index 0000000..526e235
+--- /dev/null
++++ b/rubrics/public-private-stance.toml
+@@ -0,0 +1,59 @@
++#:tombi toml-version = "v1.0.0"
++
++# A change to a public tree carries only what any clone needs: no secret, no
++# fact about a particular machine or installation, no private source, and no
++# contributor's own concerns.
++name = "public-private-stance"
++state = ["change.diff", "commits.txt"]
++
++[band]
++low = 0.2
++high = 0.8
++
++[questions.configuration]
++instructions = """
++Read the change and its commit messages. Do they keep the settings of a \
++particular installation out of the tree, reading them from the environment \
++or a configuration directory instead? Such settings are endpoints, model \
++names, registrations, identity keys and options for one machine; a default \
++that every clone needs to build and test is not one of them."""
++criteria.true = "Every installation setting is read from the environment or a configuration directory, or the change has none."
++criteria.false = "The change commits an endpoint, a model name, a registration or another setting of one installation."
++
++[questions.contributor-concerns]
++instructions = """
++Read the change and its commit messages. Do they record only what the \
++project needs, keeping out which tool or session produced the change, a \
++contributor's own configuration, and notes on a contributor's way of \
++working? The Co-authored-by and Assisted-by trailers are the project's \
++record of authorship and meet this."""
++criteria.true = "The change records only what the project needs."
++criteria.false = "The change records the tool or session that produced it, or a contributor's own configuration or notes."
++
++[questions.machine-facts]
++instructions = """
++Read the change and its commit messages. Do they keep out facts about \
++particular machines and people: host names, private network addresses, user \
++names, home directories, and absolute paths on someone's machine? A \
++loopback address, a placeholder such as <model>, and a path relative to the \
++repository meet this."""
++criteria.true = "The change names no particular host, private address, user or absolute local path."
++criteria.false = "The change names a host, a private address, a user, or an absolute path on someone's machine."
++
++[questions.public-sources]
++instructions = """
++Read the change and its commit messages. Does every source they name or \
++link, whether a repository, a document, an issue or a discussion, reach \
++something any reader can open, such as a public repository, a published \
++crate or a paper? A change that names no source meets this."""
++criteria.true = "Every source named is public, or none is named."
++criteria.false = "The change names or links a private repository, document, tracker or conversation."
++
++[questions.secrets]
++instructions = """
++Read the change and its commit messages. Do they hold no secret: no key, \
++token, password, private key or other credential, in code, configuration, a \
++test or a message? Naming the environment variable a secret is read from is \
++not holding it."""
++criteria.true = "The change holds no secret."
++criteria.false = "The change holds a key, a token, a password or another credential."
+diff --git a/rubrics/pull-requests.toml b/rubrics/pull-requests.toml
+new file mode 100644
+index 0000000..9d2638e
+--- /dev/null
++++ b/rubrics/pull-requests.toml
+@@ -0,0 +1,48 @@
++#:tombi toml-version = "v1.0.0"
++
++# A review of a pull request holds the change to the record's own words, line
++# by line, and decides by its findings.
++name = "pull-requests"
++state = ["change.diff", "review.md"]
++
++[band]
++low = 0.2
++high = 0.8
++
++[questions.cites-line]
++instructions = """
++Read the review. Does each finding name the line of the change it is about, \
++by its file and line in the change or by quoting the changed line? A review \
++with no findings meets this."""
++criteria.true = "Every finding names the changed line it is about, or there is none."
++criteria.false = "A finding names no line of the change."
++
++[questions.cites-record]
++instructions = """
++Read the review. Does each finding hold the change to the record's own \
++words, quoting the specification, the documented decision or the rule it \
++applies, and name where those words live by path and anchor? A review with \
++no findings meets this."""
++criteria.true = "Every finding quotes the record's words and names where they live, or there is none."
++criteria.false = "A finding rests on preference or memory, without the record's words or where they live."
++
++[questions.one-defect]
++instructions = """
++Read the review. Does each finding state one defect, so that it can be fixed \
++and checked on its own? A review with no findings meets this."""
++criteria.true = "Each finding states one defect, or there is none."
++criteria.false = "A finding bundles defects that would each be fixed on their own."
++
++[questions.reads-the-line]
++instructions = """
++Read each finding of the review against the change. Does the line it names \
++say what the finding says it says? A review with no findings meets this."""
++criteria.true = "Every finding describes its line as the change has it, or there is none."
++criteria.false = "A finding misreads or misquotes its line, or names a line the change does not have."
++
++[questions.verdict-follows]
++instructions = """
++Read the review. Does it end in a verdict, either approving the change or \
++requesting the changes its findings name, that follows from those findings?"""
++criteria.true = "The verdict follows from the findings: approval when none blocks, changes requested when one does."
++criteria.false = "The review has no verdict, or one its findings contradict."
+diff --git a/rubrics/stable-refs.toml b/rubrics/stable-refs.toml
+new file mode 100644
+index 0000000..1b4d86a
+--- /dev/null
++++ b/rubrics/stable-refs.toml
+@@ -0,0 +1,48 @@
++#:tombi toml-version = "v1.0.0"
++
++# Every reference a change adds resolves for a reader who holds only the text
++# and the public sources it names.
++name = "stable-refs"
++state = ["change.diff", "commits.txt"]
++
++[band]
++low = 0.2
++high = 0.8
++
++[questions.citations]
++instructions = """
++Read the lines the change adds. Wherever they cite a paper or a book, does \
++the citation give its full title, its authors, its venue, its date and a \
++stable identifier such as a DOI, an ISBN, an arXiv id or a HAL id? A change \
++that cites no paper or book meets this."""
++criteria.true = "Every paper or book cited carries its title, authors, venue, date and a stable identifier, or none is cited."
++criteria.false = "A paper or book is cited by a nickname, by its author and year alone, or by a bare link."
++
++[questions.commit-hashes]
++instructions = """
++Read the lines the change adds and its commit messages. Wherever they name \
++a commit, do they name it by its full hash: forty hexadecimal digits for a \
++git commit, sixty-four for a commit of a record? A change that names no \
++commit meets this."""
++criteria.true = "Every commit named is named by its full hash, or none is named."
++criteria.false = "A commit is named by an abbreviated hash, a branch name, or a phrase such as the last commit."
++
++[questions.document-anchors]
++instructions = """
++Read the lines the change adds and its commit messages. Wherever they point \
++into a document, do they name the place by a heading anchor, such as \
++crates/README.md#layering, by another identifier that survives edits to the \
++document, or by a line at a named full revision? A pointer to a whole \
++document meets this, as does a change with no pointer into a document."""
++criteria.true = "Every pointer into a document names a heading anchor, a stable identifier, or a line at a named full revision."
++criteria.false = "A pointer names its place by a bare line number or by position, such as the third section."
++
++[questions.self-contained-ids]
++instructions = """
++Read the lines the change adds and its commit messages. Does every \
++identifier they use resolve from the text itself or from a public source it \
++names? A short code such as M1 or D11, a step or item number of a list the \
++text does not name, and an issue number without its repository resolve only \
++where they were written, and fail this."""
++criteria.true = "Every identifier is defined in the text or resolves in a public source the text names."
++criteria.false = "An identifier such as M1, step 3 or #12 resolves only in a list or tracker the text does not name."
+</state>
+<state name="commits.txt">
+commit 9ed9518e1b1953774acffcab28dcfa2347e6d5a7
+feat(strategy): add the rubric set and grade each fixture pair
+
+Seven rubrics under rubrics/ grade a change to a repository of this
+workspace's shape, each over artifacts a task's record supplies, each
+with a fixture pair whose unmet member fails one named question:
+
+- stable-refs (4 questions): every reference resolves from the text
+  and the public sources it names
+- public-private-stance (5): no secret, machine fact, installation
+  setting, private source or contributor concern
+- issues (4): one question, reproducible evidence, a closing test
+- pull-requests (5): findings quote the record and name their line,
+  and the verdict follows from them
+- ci-shape (7): every gate over every target from pinned actions,
+  and the committed workflow run on a workstation
+- docs (6): a README's purpose, synopsis, decisions, needs and
+  examples, as present fact
+- code (6): specifications, standing diagnostics, reasoned absence,
+  total conversions, behaviour-named tests, dependencies declared
+  once at the root
+
+A state file is named for what it holds (change.diff, commits.txt,
+issue.md, review.md, ci.yml, tasks.toml, README.md), not for where a
+repository keeps it, so one rubric grades any task that supplies it.
+Every rubric shares the example rubric's band, 0.2 to 0.8, until
+calibration measures a judge per rubric.
+
+The peer binary's process test walks rubrics/: every rubric validates
+through `rubric validate` and is named for its file, its pair's states
+read and differ, and from a table reading the isolated question below
+the band and every other above it, `rubric grade` grades the rubric
+met over met and unmet over unmet; the replay holds every grading,
+naming the rubric and every question. An ignored test grades the
+stable-refs pair through the judge the environment configures.
+
+The tests live in surface-peer rather than in strategy-document or a
+test crate of their own. The verdict and the grading are committed by
+the peer binary alone, so a strategy-document test would build those
+receipts itself and test only its own construction; the layering keeps
+the strategy crate below the binary, and a test crate cannot run
+another package's binary.
+
+Co-authored-by: silvanshade <silvanshade@users.noreply.github.com>
+Assisted-by: LLM
+
+</state>

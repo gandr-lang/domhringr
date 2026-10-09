@@ -246,10 +246,12 @@ mod tests
     ///   lines above. S, killed and served again through `echo`, resumes the
     ///   dispatch it holds and prints `reported <tree> R`; O's replay through
     ///   the book then prints the source line, the dispatch line, `report R D S
-    ///   <content hash> content <brief>` and `reported D R`. O's dispatch, sent
-    ///   once more through the book, prints D, the source line and `woken`; S
-    ///   prints `woken <tree> D` and acts no more: O's replay prints the same
-    ///   four lines.
+    ///   <digest> content <brief>`, `reported D R` and `evidence <digest>
+    ///   held`, fetching the report from S, which prints `served <digest>`; O's
+    ///   local `evidence` then prints echo's output, `content <brief>`. O's
+    ///   dispatch, sent once more through the book, prints D, the source line
+    ///   and `woken`; S prints `woken <tree> D` and acts no more: O's replay
+    ///   prints the same five lines.
     /// - panics: on any contract violation.
     #[test]
     fn a_dispatched_seat_reports_across_restarts_of_either_side()
@@ -329,9 +331,15 @@ mod tests
             .to_owned();
         let replayed = finish(peer(o).args(["replay", tree.as_str()]));
         seat.admitted(&o_peer);
-        let [ref source, ref dispatch_line, ref report_line, ref standing] = *replayed.as_slice()
+        let [
+            ref source,
+            ref dispatch_line,
+            ref report_line,
+            ref standing,
+            ref held,
+        ] = *replayed.as_slice()
         else {
-            panic!("the replay is a source line and three task lines: {replayed:?}");
+            panic!("the replay is a source line, three task lines and the evidence: {replayed:?}");
         };
         assert_eq!(source, &through_book);
         assert_eq!(dispatch_line, &dispatched[0]);
@@ -349,9 +357,20 @@ mod tests
         );
         assert!(
             content.len() == 64 && content.bytes().all(|byte| byte.is_ascii_hexdigit()),
-            "the content is named by its hash: {content:?}"
+            "the content is named by its digest: {content:?}"
         );
         assert_eq!(standing, &format!("reported {dispatch} {report}"));
+        assert_eq!(
+            held,
+            &format!("evidence {content} held"),
+            "the replay fetches the report from the seat"
+        );
+        assert_eq!(seat.line(), format!("served {content}"));
+        assert_eq!(
+            finish(peer(o).args(["evidence", "--local", tree.as_str(), content])),
+            [format!("content {BRIEF}")],
+            "the operator holds the report echo printed"
+        );
 
         assert_eq!(
             finish(&mut dispatch_to(&[])),

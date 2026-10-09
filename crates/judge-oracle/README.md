@@ -17,7 +17,7 @@ The judge asks a model one lettered question about a transcript and reads the an
 
 ## Synopsis
 
-**What.** `domhringr-judge-oracle` is the Opponent's oracle. It holds a `Question` (a text and two to twenty-six options, lettered `A`, `B`, … in order, named by the hash of its canonical form), a `Transcript` (the content asked about, held, or named by its hash), and a `Backend` trait that answers a question about a transcript with a `Readout` or a `Refusal`. `ChatCompletions` asks an OpenAI-compatible endpoint. `Static` answers from a table of recorded rulings, for tests and for replay.
+**What.** `domhringr-judge-oracle` is the Opponent's oracle. It holds a `Question` (a text and two to twenty-six options, lettered `A`, `B`, … in order, named by the hash of its canonical form), a `Transcript` (the content asked about, staged as evidence and named by its value manifest), and a `Backend` trait that answers a question about a transcript with a `Readout` or a `Refusal`. `ChatCompletions` asks an OpenAI-compatible endpoint. `Static` answers from a table of recorded rulings, for tests and for replay.
 
 **Why.** Some criteria can only be judged, not computed, and a judge that answers in prose cannot be graded, compared or replayed. A lettered answer read from the model's next-token distribution gives a probability per option along with the letter. A refusal recorded by its reason keeps a judge that did not answer apart from one that did. The verdict that carries the rulings is a receipt of the task's tree (see [`domhringr-record-tree`](../record-tree/README.md#tasks)): this crate reads the rulings, and its caller commits them.
 
@@ -36,15 +36,15 @@ The judge asks a model one lettered question about a transcript and reads the an
 ## Provided features
 
 - `Question`: its text and lettered options, named by the BLAKE3 hash of its canonical form, with its named refusals (`QuestionError`).
-- `Transcript`: content held, its text read when it is UTF-8, or a hash alone.
+- `Transcript`: content staged as evidence ([`domhringr-record-evidence`](../record-evidence/README.md)), named by its manifest digest, its text read when it is UTF-8; `staged` hands the value to the caller to keep beside the verdict.
 - `Backend`: a question about a transcript, answered with a `Readout` or a `Refusal` whose `reason` is the `Unread` a verdict records.
 - `ChatCompletions` over an OpenAI-compatible endpoint, configured by `Config` from the environment, with `Ceiling`, an optional bound on the outside mass.
-- `Static`: a table from a question's hash and a transcript's hash to a ruling, collected from triples or parsed from lines of `<question-hash> <transcript-hash> <ruling>`.
+- `Static`: a table from a question's hash and a transcript's manifest digest to a ruling, collected from triples or parsed from lines of `<question-hash> <transcript-digest> <ruling>`.
 
 ## Expected features
 
 - An async runtime to drive `Backend::ask`; `ChatCompletions` needs Tokio's, as `reqwest` does.
-- For `ChatCompletions`: an endpoint serving `POST <base>/chat/completions` with `logprobs` and `top_logprobs` for chat requests, and the configuration in [Configuration](#configuration). A transcript asked about must be held and UTF-8.
+- For `ChatCompletions`: an endpoint serving `POST <base>/chat/completions` with `logprobs` and `top_logprobs` for chat requests, and the configuration in [Configuration](#configuration). A transcript asked about must be UTF-8.
 
 ## Examples
 
@@ -56,9 +56,9 @@ use domhringr_record_tree::{Content, Ruling};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let question = Question::new("Did every check pass?".into(), vec!["yes".into(), "no".into()])?;
-    let transcript = Transcript::held(Content::from(b"Every check passed.".to_vec()));
+    let transcript = Transcript::held(Content::from(b"Every check passed.".to_vec()))?;
     let recorded = "read A A=0.9 B=0.1 outside=0".parse::<Ruling>()?;
-    let table: Static = [(question.hash(), transcript.hash(), recorded)].into_iter().collect();
+    let table: Static = [(question.hash(), transcript.digest(), recorded)].into_iter().collect();
     let runtime = tokio::runtime::Builder::new_current_thread().build()?;
     let ruling = match runtime.block_on(table.ask(&question, &transcript)) {
         Ok(readout) => Ruling::Read(readout),
@@ -88,11 +88,11 @@ A judge classifies evidence and never adds to it. Refusal is outside the laws: a
 
 - **Unit.** A verdict changes no attempt: the task stands where its seat receipts put it, with or without rulings. Witnesses: `fold::tests::a_judge_rules_on_the_current_dispatch` in `domhringr-record-tree`, and `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict` in `domhringr-surface-peer`, where the task replays `dispatched` after the verdict.
 - **Composition.** A verdict over several questions holds, in the order asked, the ruling each question gets when asked alone: a ruling depends on its question and its transcript alone. Witnesses: `backend::tests::a_table_answers_what_it_records`, and the peer's process test, where the verdict's first ruling is the one `judge ask` printed.
-- **Property grade.** A verdict is a function of what it records. Replay reads the same rulings from the record on any day and against no endpoint, and `Static` answers a recorded ruling again. The verdict names the rubric and the transcript by hash and holds only the rulings, so it adds no evidence. Witnesses: `receipt::tests::every_kind_round_trips` and `ruling::tests::a_ruling_reads_back_from_its_text` in `domhringr-record-tree`, and `backend::tests::each_refusal_records_its_reason` for refusals.
+- **Property grade.** A verdict is a function of what it records. Replay reads the same rulings from the record on any day and against no endpoint, and `Static` answers a recorded ruling again. The verdict names the rubric by hash and the transcript by its manifest, and holds only the rulings, so it adds no evidence: the transcript it names is the one the judge read, kept in the evidence plane. Witnesses: `receipt::tests::every_kind_round_trips` and `ruling::tests::a_ruling_reads_back_from_its_text` in `domhringr-record-tree`, and `backend::tests::each_refusal_records_its_reason` for refusals.
 
 ## Questions and transcripts
 
-**A question is named by the BLAKE3 hash of its canonical form in the value plane's token records.** The form is `open 0x01 · word 1 · bytes text · word count · bytes option{count} · close`, the leading word its version. Two judges asking the same question name it alike, and a verdict names each question by that hash. The text and every option are non-empty and UTF-8, and each option is one line with no control character. A transcript is named by the hash of its bytes, as a report names its content.
+**A question is named by the BLAKE3 hash of its canonical form in the value plane's token records.** The form is `open 0x01 · word 1 · bytes text · word count · bytes option{count} · close`, the leading word its version. Two judges asking the same question name it alike, and a verdict names each question by that hash. The text and every option are non-empty and UTF-8, and each option is one line with no control character. A transcript is named by the identity of the value manifest its bytes stage to, as a report names its content: the evidence plane's name, which any reader can fetch and check.
 
 - the question's text alone as its name: two questions with the same text and different options would share it.
 - a JSON form: a second canonical form beside the value plane's, with its own key-order and number rules.

@@ -1,0 +1,149 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+────────────
+ Nextest run ID 37d8c75f-a8ff-4ba4-a723-781f3fd15bba with nextest profile: default
+    Starting 143 tests across 13 binaries (3 tests skipped)
+        PASS [   0.010s] (  1/143) domhringr-judge-oracle backend::tests::a_table_answers_what_it_records
+        PASS [   0.010s] (  2/143) domhringr::bin/domhringr change::tests::a_change_is_a_branch_and_a_commit
+        PASS [   0.010s] (  3/143) domhringr-judge-oracle backend::tests::each_refusal_records_its_reason
+        PASS [   0.011s] (  4/143) domhringr-judge-oracle readout::tests::a_distribution_that_answers_nothing_is_refused
+        PASS [   0.011s] (  5/143) domhringr::bin/domhringr tests::every_verb_reads_its_options
+        PASS [   0.011s] (  6/143) domhringr-judge-oracle question::tests::a_question_offers_two_to_twenty_six_one_line_options
+        PASS [   0.011s] (  7/143) domhringr-judge-oracle question::tests::a_question_is_named_by_the_hash_of_its_form
+        PASS [   0.011s] (  8/143) domhringr-judge-oracle question::tests::a_transcript_is_named_by_the_hash_of_its_bytes
+        PASS [   0.011s] (  9/143) domhringr-judge-oracle chat::tests::the_configuration_is_read_from_the_environment
+        PASS [   0.011s] ( 10/143) domhringr-judge-oracle readout::tests::the_options_share_the_mass_on_their_letters
+        PASS [   0.011s] ( 11/143) domhringr::bin/domhringr tests::a_malformed_command_line_is_refused
+        PASS [   0.012s] ( 12/143) domhringr-judge-oracle chat::tests::the_endpoint_is_asked_for_one_letter_and_read
+        PASS [   0.015s] ( 13/143) domhringr-judge-oracle chat::tests::what_the_endpoint_cannot_answer_is_refused_by_cause
+        PASS [   0.010s] ( 14/143) domhringr-record-tree check::tests::a_step_id_is_a_short_lowercase_identifier
+        PASS [   0.011s] ( 15/143) domhringr-record-tree decision::tests::a_revision_is_forty_or_sixty_four_lowercase_hex_digits
+        PASS [   0.012s] ( 16/143) domhringr-record-tree anchor::tests::a_commit_reference_may_abbreviate_its_id
+        PASS [   0.011s] ( 17/143) domhringr-record-tree anchor::tests::an_anchor_round_trips_through_its_text
+        PASS [   0.012s] ( 18/143) domhringr-record-tree anchor::tests::a_reserved_segment_is_refused_by_name
+        PASS [   0.012s] ( 19/143) domhringr-record-tree anchor::tests::a_malformed_anchor_is_refused_by_name
+        PASS [   0.014s] ( 20/143) domhringr-record-tree fold::tests::a_bind_by_a_non_member_is_refused
+        PASS [   0.016s] ( 21/143) domhringr-record-tree fold::tests::a_claim_by_anyone_but_the_owner_is_refused
+        PASS [   0.017s] ( 22/143) domhringr-record-tree fold::tests::a_judge_rules_on_the_current_dispatch
+        PASS [   0.017s] ( 23/143) domhringr-record-tree fold::tests::a_duplicate_operation_keeps_the_first
+        PASS [   0.018s] ( 24/143) domhringr-record-tree fold::tests::a_handoff_moves_the_slot_to_its_recipient
+        PASS [   0.019s] ( 25/143) domhringr-record-tree fold::tests::a_landing_carries_out_a_decision_to_land
+        PASS [   0.017s] ( 26/143) domhringr-record-tree fold::tests::a_member_cannot_withdraw_the_owners_presence
+        PASS [   0.014s] ( 27/143) domhringr-record-tree fold::tests::a_note_by_a_non_member_is_refused
+        PASS [   0.015s] ( 28/143) domhringr-record-tree fold::tests::a_note_by_a_peer_granted_in_its_causal_past_is_admitted
+        PASS [   0.015s] ( 29/143) domhringr-record-tree fold::tests::a_presence_by_a_non_member_is_refused
+        PASS [   0.016s] ( 30/143) domhringr-record-tree fold::tests::a_parent_cycle_is_placed_in_commit_id_order
+        PASS [   0.015s] ( 31/143) domhringr-record-tree fold::tests::a_receipt_under_the_wrong_tree_is_refused
+        PASS [   0.018s] ( 32/143) domhringr-record-tree fold::tests::a_presence_naming_another_members_endpoint_is_refused
+        PASS [   0.015s] ( 33/143) domhringr-record-tree fold::tests::a_retired_slot_without_a_report_is_stalled
+        PASS [   0.014s] ( 34/143) domhringr-record-tree fold::tests::a_task_prints_one_line_per_step_and_its_standing
+        PASS [   0.018s] ( 35/143) domhringr-record-tree fold::tests::a_report_on_a_superseded_dispatch_is_refused
+        PASS [   0.011s] ( 36/143) domhringr-record-tree fold::tests::a_view_prints_one_line_per_fact
+        PASS [   0.017s] ( 37/143) domhringr-record-tree fold::tests::a_verdict_on_a_superseded_dispatch_is_refused
+        PASS [   0.019s] ( 38/143) domhringr-record-tree fold::tests::a_runner_verifies_on_the_current_dispatch
+        PASS [   0.018s] ( 39/143) domhringr-record-tree fold::tests::a_view_is_the_same_whatever_order_commits_arrive_in
+        PASS [   0.013s] ( 40/143) domhringr-record-tree fold::tests::an_undecodable_blob_is_refused_and_an_unopened_tree_has_no_view
+        PASS [   0.016s] ( 41/143) domhringr-record-tree fold::tests::an_open_proved_by_another_key_is_refused
+        PASS [   0.021s] ( 42/143) domhringr-record-tree fold::tests::a_verdicts_judge_grades_its_answers
+        PASS [   0.019s] ( 43/143) domhringr-record-tree fold::tests::an_operator_decides_on_the_current_dispatch
+        PASS [   0.017s] ( 44/143) domhringr-record-tree fold::tests::the_book_after_a_withdrawal_does_not_offer_the_endpoint
+        PASS [   0.016s] ( 45/143) domhringr-record-tree fold::tests::the_dispatched_seat_reports_on_its_dispatch
+        PASS [   0.015s] ( 46/143) domhringr-record-tree fold::tests::the_later_introduction_of_a_label_rebinds_it
+        PASS [   0.009s] ( 47/143) domhringr-record-tree id::tests::a_content_hash_is_the_blake3_of_its_bytes
+        PASS [   0.023s] ( 48/143) domhringr-record-tree fold::tests::an_attempt_advances_through_its_lifecycle
+        PASS [   0.010s] ( 49/143) domhringr-record-tree id::tests::a_malformed_endpoint_text_is_refused
+        PASS [   0.009s] ( 50/143) domhringr-record-tree id::tests::a_peer_key_is_exactly_sixty_four_hex_digits
+        PASS [   0.014s] ( 51/143) domhringr-record-tree fold::tests::the_smallest_root_open_names_the_owner
+        PASS [   0.016s] ( 52/143) domhringr-record-tree fold::tests::the_owner_withdraws_a_members_presence
+        PASS [   0.010s] ( 53/143) domhringr-record-tree id::tests::a_peer_key_round_trips_through_its_hex_text
+        PASS [   0.021s] ( 54/143) domhringr-record-tree fold::tests::the_later_bind_in_canonical_order_wins
+        PASS [   0.009s] ( 55/143) domhringr-record-tree id::tests::a_tree_id_is_exactly_fifty_two_z_base_32_characters
+        PASS [   0.011s] ( 56/143) domhringr-record-tree id::tests::a_prefix_spans_the_ids_it_begins
+        PASS [   0.009s] ( 57/143) domhringr-record-tree id::tests::a_tree_id_round_trips_through_its_anchor_text
+        PASS [   0.009s] ( 58/143) domhringr-record-tree id::tests::an_endpoint_key_round_trips_through_its_hex_text
+        PASS [   0.011s] ( 59/143) domhringr-record-tree id::tests::an_endpoint_keeps_the_addresses_it_can_hold
+        PASS [   0.011s] ( 60/143) domhringr-record-tree id::tests::an_endpoint_round_trips_through_its_text
+        PASS [   0.009s] ( 61/143) domhringr-record-tree name::tests::a_domain_round_trips_through_its_text
+        PASS [   0.009s] ( 62/143) domhringr-record-tree name::tests::a_malformed_domain_is_refused_by_name
+        PASS [   0.011s] ( 63/143) domhringr-record-tree name::tests::a_label_round_trips_through_its_text
+        PASS [   0.029s] ( 64/143) domhringr-record-tree fold::tests::the_later_presence_of_an_author_wins
+        PASS [   0.010s] ( 65/143) domhringr-record-tree name::tests::a_malformed_label_is_refused_by_name
+        PASS [   0.009s] ( 66/143) domhringr-record-tree node::tests::a_port_is_one_through_65535
+        PASS [   0.009s] ( 67/143) domhringr-record-tree receipt::tests::a_bind_encodes_to_its_fixed_layout
+        PASS [   0.009s] ( 68/143) domhringr-record-tree receipt::tests::a_claim_and_an_introduction_encode_to_their_fixed_layouts
+        PASS [   0.009s] ( 69/143) domhringr-record-tree receipt::tests::a_decision_and_a_landing_encode_to_their_fixed_layouts
+        PASS [   0.024s] ( 70/143) domhringr-record-tree identity::tests::a_truncated_key_file_is_refused
+        PASS [   0.012s] ( 71/143) domhringr-record-tree receipt::tests::a_malformed_blob_is_refused_by_name
+        PASS [   0.009s] ( 72/143) domhringr-record-tree receipt::tests::a_note_encodes_to_its_fixed_layout
+        PASS [   0.008s] ( 73/143) domhringr-record-tree receipt::tests::a_presence_and_a_withdrawal_encode_to_their_fixed_layouts
+        PASS [   0.008s] ( 74/143) domhringr-record-tree receipt::tests::a_verdict_encodes_to_its_fixed_layout
+        PASS [   0.009s] ( 75/143) domhringr-record-tree receipt::tests::a_verification_and_a_grading_encode_to_their_fixed_layouts
+        PASS [   0.008s] ( 76/143) domhringr-record-tree receipt::tests::fences_are_drawn_fresh
+        PASS [   0.037s] ( 77/143) domhringr-record-tree identity::tests::a_minted_tree_key_is_kept_under_its_tree_id
+        PASS [   0.010s] ( 78/143) domhringr-record-tree receipt::tests::the_seat_receipts_encode_to_their_fixed_layouts
+        PASS [   0.008s] ( 79/143) domhringr-record-tree ruling::tests::a_probability_is_a_number_from_zero_to_one
+        PASS [   0.009s] ( 80/143) domhringr-record-tree ruling::tests::a_letter_is_one_uppercase_ascii_letter
+        PASS [   0.014s] ( 81/143) domhringr-record-tree receipt::tests::every_kind_round_trips
+        PASS [   0.009s] ( 82/143) domhringr-record-tree ruling::tests::a_readout_names_the_option_holding_the_most
+        PASS [   0.009s] ( 83/143) domhringr-record-tree ruling::tests::a_ruling_reads_back_from_its_text
+        PASS [   0.056s] ( 84/143) domhringr-record-tree identity::tests::an_identity_is_created_once_and_read_back
+        PASS [   0.426s] ( 85/143) domhringr-record-tree node::tests::a_fixed_port_is_the_bound_port
+        PASS [   0.539s] ( 86/143) domhringr-record-tree store::tests::a_peer_lists_the_trees_it_holds
+        PASS [   0.575s] ( 87/143) domhringr-record-tree store::tests::a_resolution_names_the_trees_it_reads
+        PASS [   0.670s] ( 88/143) domhringr-record-tree store::tests::a_label_resolves_in_the_tree_that_introduced_it_alone
+        PASS [   0.662s] ( 89/143) domhringr-record-tree store::tests::an_ambiguous_prefix_is_refused_naming_it
+        PASS [   0.711s] ( 90/143) domhringr-record-tree store::tests::a_dns_anchor_resolves_through_the_claim_of_the_tree_its_witness_names
+        PASS [   0.728s] ( 91/143) domhringr-record-tree store::tests::a_witnessed_tree_without_the_claim_is_unclaimed
+        PASS [   0.740s] ( 92/143) domhringr-record-tree store::tests::a_dial_routes_through_the_book_or_the_endpoint_named
+        PASS [   0.010s] ( 93/143) domhringr-record-tree task::tests::a_summary_is_one_short_line
+        PASS [   0.010s] ( 94/143) domhringr-record-tree witness::tests::a_static_witness_names_what_it_was_given
+        PASS [   0.010s] ( 95/143) domhringr-record-tree witness::tests::txt_records_name_the_trees_they_spell
+        PASS [   0.775s] ( 96/143) domhringr-record-tree store::tests::a_commit_resolves_by_its_anchor_to_its_verdict
+        PASS [   0.009s] ( 97/143) domhringr-seat-slot wake::tests::a_malformed_line_is_refused_by_name
+        PASS [   0.009s] ( 98/143) domhringr-seat-slot wake::tests::a_wake_and_a_reply_are_one_line_each
+        PASS [   0.588s] ( 99/143) domhringr-record-tree store::tests::an_empty_witness_is_unwitnessed
+        PASS [   0.011s] (100/143) domhringr-strategy-document load::tests::the_example_playbook_and_rubric_read
+        PASS [   0.009s] (101/143) domhringr-strategy-document playbook::tests::a_malformed_playbook_is_refused_at_its_field
+        PASS [   0.008s] (102/143) domhringr-strategy-document playbook::tests::a_playbook_reads_its_steps_in_order
+        PASS [   0.009s] (103/143) domhringr-strategy-document rubric::tests::a_malformed_rubric_is_refused_at_its_field
+        PASS [   0.009s] (104/143) domhringr-strategy-document rubric::tests::a_rubric_reads_its_state_band_and_questions
+        PASS [   0.007s] (105/143) domhringr-strategy-document rubric::tests::a_ruling_is_graded_at_each_band_position
+        PASS [   0.468s] (106/143) domhringr-record-tree store::tests::committing_a_present_receipt_changes_nothing
+        PASS [   0.009s] (107/143) domhringr-strategy-document rubric::tests::grades_compose_as_the_conjunction_of_their_criteria
+        PASS [   0.096s] (108/143) domhringr-strategy-document verify::tests::a_verifier_runs_in_the_state_directory_and_reads_its_status
+        PASS [   0.119s] (109/143) domhringr-strategy-document rubric::tests::a_transcript_holds_each_state_file_in_order
+        PASS [   0.387s] (110/143) domhringr-strategy-document load::tests::a_plan_reads_its_rubrics_beside_its_playbook
+        PASS [   0.657s] (111/143) domhringr-record-tree store::tests::commits_chain_on_the_heads_and_survive_a_reopen
+        PASS [   0.491s] (112/143) domhringr-record-tree store::tests::whence_resolves_an_anchor_by_fold
+        PASS [   0.536s] (113/143) domhringr-record-tree store::tests::two_witnessed_trees_claiming_one_domain_are_ambiguous
+        PASS [   0.856s] (114/143) domhringr-record-tree store::tests::two_stores_given_one_commit_set_in_two_orders_agree
+        PASS [   2.300s] (115/143) domhringr-record-tree node::tests::a_dialer_naming_another_peer_is_refused
+        PASS [   2.297s] (116/143) domhringr-record-tree node::tests::a_linked_peer_pulls_beside_another_protocol
+        PASS [   2.297s] (117/143) domhringr-record-tree node::tests::a_peer_reached_through_its_presence_syncs
+        PASS [   2.300s] (118/143) domhringr-record-tree node::tests::a_dialer_takes_the_union_of_both_frontiers
+        PASS [   1.539s] (119/143) domhringr-seat-slot seat::tests::a_seat_resumes_on_start_what_it_holds
+        PASS [   0.008s] (120/143) domhringr-surface-peer::bin/domhringr-peer drift::tests::a_malformed_page_datum_is_refused_by_name
+        PASS [   0.008s] (121/143) domhringr-surface-peer::bin/domhringr-peer drift::tests::a_page_datum_reads_its_path_and_commit
+        PASS [   0.008s] (122/143) domhringr-surface-peer::bin/domhringr-peer drift::tests::a_page_stands_by_its_blobs_at_head_and_at_its_commit
+        PASS [   0.008s] (123/143) domhringr-surface-peer::bin/domhringr-peer drift::tests::a_scan_reads_each_citation_with_its_file_and_line
+        PASS [   0.099s] (124/143) domhringr-surface-peer::bin/domhringr-peer drift::tests::a_target_that_names_no_page_is_kept_as_view_writes_it
+        PASS [   0.008s] (125/143) domhringr-surface-peer::bin/domhringr-peer drift::tests::findings_are_reported_in_anchor_order
+        PASS [   0.008s] (126/143) domhringr-surface-peer::bin/domhringr-peer drift::tests::the_vault_answers_each_query_with_a_blob_or_an_absence
+        PASS [   1.350s] (127/143) domhringr-surface-peer::judge tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict
+        PASS [   0.085s] (128/143) domhringr-surface-peer::bin/domhringr-peer tests::a_malformed_command_line_is_refused
+        PASS [   0.155s] (129/143) domhringr-surface-peer::bin/domhringr-peer tests::every_verb_reads_its_operands
+        PASS [   1.694s] (130/143) domhringr-surface-peer::strategy tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts
+        PASS [   2.744s] (131/143) domhringr-seat-slot seat::tests::a_woken_seat_presents_acts_and_reports
+        PASS [   2.830s] (132/143) domhringr-surface-peer::strategy tests::every_rubric_in_the_set_grades_its_fixture_pair
+        PASS [   3.576s] (133/143) domhringr-surface-peer::drift tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair
+        PASS [   4.856s] (134/143) domhringr-surface-peer::sync tests::a_commit_resolves_to_its_verdict_on_both_peers
+        PASS [   4.126s] (135/143) domhringr-surface-peer::sync tests::a_named_anchor_resolves_through_its_claim_or_introduction
+        PASS [   4.658s] (136/143) domhringr-surface-peer::sync tests::two_peers_sync_one_tree_to_identical_heads
+        PASS [   7.836s] (137/143) domhringr::operator tests::open_lists_every_seat_and_task
+        PASS [   7.648s] (138/143) domhringr-surface-peer::seat tests::a_dispatched_seat_reports_across_restarts_of_either_side
+        PASS [   9.252s] (139/143) domhringr::operator tests::a_refused_merge_commits_nothing
+        PASS [   7.490s] (140/143) domhringr-surface-peer::sync tests::two_peers_fold_one_tree_to_identical_views
+        PASS [   9.176s] (141/143) domhringr-surface-peer::presence tests::a_peer_is_reached_through_the_book_until_it_withdraws
+        PASS [   8.239s] (142/143) domhringr-surface-peer::sync tests::an_anchor_resolves_alike_on_both_peers
+        PASS [  11.151s] (143/143) domhringr::operator tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one
+────────────
+     Summary [  11.151s] 143 tests run: 143 passed, 3 skipped

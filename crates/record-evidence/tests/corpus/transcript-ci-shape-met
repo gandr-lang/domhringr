@@ -1,0 +1,89 @@
+<state name="ci.yml">
+name: CI
+
+on:
+  pull_request: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test the workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - name: build every workspace target
+        run: cargo build --locked --workspace --all-targets
+      - name: test every workspace target
+        run: mise run check:tests
+      - name: check private-item rustdoc
+        run: mise run check:doc
+
+  lint:
+    name: check the lint wall
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - name: lint every target
+        run: mise run check:clippy
+      - name: check the compiler-plugin policy
+        run: mise run check:dylint
+
+  gates:
+    name: check formatting and spelling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - name: check formatting
+        run: mise run check:format
+      - name: check spelling
+        run: mise run check:typos
+</state>
+<state name="tasks.toml">
+# The wall. Every `check:*` task is one gate; `check` fans out to all of them.
+[check]
+description = "Every gate"
+depends = ["check:*"]
+
+["check:format"]
+description = "Every formatter in check mode: fails on any file it would change"
+run = "treefmt --ci"
+
+["check:clippy"]
+description = "The clippy half of the lint wall, every target, warnings denied"
+run = "cargo clippy --workspace --all-targets --locked -- --deny warnings"
+
+["check:dylint"]
+description = "The compiler plugin's policy over every target, warnings denied"
+env.DYLINT_RUSTFLAGS = "--deny warnings"
+run = "cargo dylint --lib quenchant_dylints --no-deps -- --workspace --all-targets"
+
+["check:doc"]
+description = "Private-item rustdoc with every rustdoc warning denied"
+env.RUSTDOCFLAGS = "-D warnings"
+run = "cargo doc --workspace --locked --no-deps --document-private-items"
+
+["check:tests"]
+description = "Unit and integration tests over every target"
+run = "cargo nextest run --workspace --locked"
+
+["check:typos"]
+description = "Spelling"
+run = "typos"
+
+# The committed workflow, run on a workstation: the same jobs CI runs.
+["ci:act"]
+description = "Run the committed CI workflow locally"
+run = "act workflow_dispatch --workflows .github/workflows/ci.yml"
+</state>

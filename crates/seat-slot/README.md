@@ -1,6 +1,6 @@
 # domhringr-seat-slot
 
-The seat answers an operator's wake for a dispatch it holds, acts on the brief through a command surface, and reports the result into the task's tree.
+The seat answers an operator's wake for a dispatch it holds, acts on the brief through a command surface, keeps the result as evidence and reports it into the task's tree.
 
 - [Synopsis](#synopsis)
 - [References](#references)
@@ -16,11 +16,11 @@ The seat answers an operator's wake for a dispatch it holds, acts on the brief t
 
 ## Synopsis
 
-**What.** `domhringr-seat-slot` is the Player participant's exchange around a task tree. `wake` is the operator's side: it names a dispatch to the seat holding it and pulls back what the seat committed. `serve` is the seat's side: it answers wakes, presents the seat in the task's book, runs a program on the brief, commits a report of its output, and resumes on start every dispatch it holds unreported. It reports each step as an `Event`.
+**What.** `domhringr-seat-slot` is the Player participant's exchange around a task tree. `wake` is the operator's side: it names a dispatch to the seat holding it and pulls back what the seat committed. `serve` is the seat's side: it answers wakes, presents the seat in the task's book, runs a program on the brief, keeps its output as evidence and commits a report naming it, answers fetches of that evidence, and resumes on start every dispatch it holds unreported. It reports each step as an `Event`.
 
 **Why.** A dispatch, a report, a handoff and a retirement are receipts, and the record plane's fold decides which of them count (see [`domhringr-record-tree`](../record-tree/README.md#tasks)). Something still has to tell a seat that a dispatch waits for it, get the seat the tree, run the work and write the report. Each side must survive a restart with no state outside its store.
 
-**How.** The operator links to the seat over subduction, opens a second connection under the ALPN `domhringr/seat/0`, and writes one line: the dispatch's commit anchor and its own peer id. The seat pulls the task over the operator's link and folds it. It checks that the dispatch is current and that the seat holds its slot, presents itself if the task's book lacks it, and replies `woken` or `declined <reason>`. A woken operator pulls the task back, which carries the seat's presence. The seat then runs its program as `<program> anchor|content <brief>` on a blocking thread and commits a `Report` holding the BLAKE3 hash of the program's standard output and its first line as the summary.
+**How.** The operator links to the seat over subduction, opens a second connection under the ALPN `domhringr/seat/0`, and writes one line: the dispatch's commit anchor and its own peer id. The seat pulls the task over the operator's link and folds it. It checks that the dispatch is current and that the seat holds its slot, presents itself if the task's book lacks it, and replies `woken` or `declined <reason>`. A woken operator pulls the task back, which carries the seat's presence. The seat then runs its program as `<program> anchor|content <brief>` on a blocking thread, commits the program's standard output to its evidence store ([`domhringr-record-evidence`](../record-evidence/README.md)), and commits a `Report` naming that output by its value manifest, with its first line as the summary. Any reader holding the report fetches the output from the seat under `domhringr/evidence/0`.
 
 ## References
 
@@ -29,29 +29,31 @@ The seat answers an operator's wake for a dispatch it holds, acts on the brief t
 | S. Friedl, A. Popov, A. Langley, E. Stephan, _Transport Layer Security (TLS) Application-Layer Protocol Negotiation Extension_, IETF RFC 7301, July 2014, [doi:10.17487/RFC7301](https://doi.org/10.17487/RFC7301) | The protocol name a connection carries, by which the node routes the wake apart from subduction's sync. |
 | `iroh`, [crate documentation](https://docs.rs/iroh) | QUIC connections and their bidirectional streams. |
 | `tokio`, [crate documentation](https://docs.rs/tokio) | Tasks, the event channel, blocking threads for the program, and the reply deadline. |
+| `domhringr-record-evidence`, [crate documentation](../record-evidence/README.md) | The evidence store a report's output is kept in, and the fetch a seat answers. |
 
 ## Provided features
 
 - `PROTOCOL`, the ALPN a seat answers wakes under, for `Peer::bind`.
 - `Wake`, the line naming a dispatch and its operator, and `Reply`, the line answering it, each with its text form and its named refusals.
 - `wake`, the operator's side of one wake. It links, asks, pulls the task back on `woken`, and drops the link, and it reports a decline by its reason.
-- `serve`, the seat's side. It handles accepted links, wakes answered or declined, acts reported or not, and resumption on start, and it reports each as an `Event` on an unbounded channel.
+- `serve`, the seat's side. It handles accepted links, wakes answered or declined, acts reported or not, fetches of its evidence served or not, and resumption on start, and it reports each as an `Event` on an unbounded channel.
 - `Surface`, what a seat acts through: `Hold`, which keeps the slot and never reports, or a `Program`.
 
 ## Expected features
 
 - A Tokio runtime with the multi-threaded scheduler, timers and the blocking pool.
-- A node bound with `PROTOCOL` among its protocols (`Peer::bind`), so that wakes reach `serve`.
+- A node bound with `PROTOCOL` and the evidence protocol among its protocols (`Peer::bind`), so that wakes and fetches reach `serve`; the evidence store beneath the seat's state directory (`Evidence::open`).
 - For `wake`, the dispatch already committed in the operator's store and a route to the seat: its endpoint named by hand, or its presence in the book.
 - For `Surface::Program`, an executable that takes `anchor <anchor>` or `content <hash>` as its two arguments. It reads the task's and the dispatch's anchors from `DOMHRINGR_TASK` and `DOMHRINGR_DISPATCH`, exits 0 when it has a report, and writes the report to standard output with a first line of at most 256 bytes and no control character.
 
 ## Examples
 
-With `domhringr-record-tree`, `domhringr-seat-slot` and Tokio's `rt-multi-thread`, `sync` and `time` features as dependencies, this program opens a task in a fresh state directory supplied as its first argument and dispatches its own peer to a brief. It then serves as that seat through `echo`, which resumes the dispatch on start and reports on it, and prints the report's commit id:
+With `domhringr-record-evidence`, `domhringr-record-tree`, `domhringr-seat-slot` and Tokio's `rt-multi-thread`, `sync` and `time` features as dependencies, this program opens a task in a fresh state directory supplied as its first argument and dispatches its own peer to a brief. It then serves as that seat through `echo`, which resumes the dispatch on start and reports on it, and prints the report's commit id:
 
 ```rust
 use std::sync::Arc;
 
+use domhringr_record_evidence::{Evidence, PROTOCOL as EVIDENCE};
 use domhringr_record_tree::{BindPort, Brief, Content, ContentHash, Identity, Peer, Receipt, StateDir, TreeKey};
 use domhringr_seat_slot::{Event, PROTOCOL, Surface, serve};
 
@@ -62,13 +64,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runtime.block_on(async {
         let identity = Identity::load_or_create(&state)?;
         let me = identity.peer_key();
-        let node = Arc::new(Peer::open(&state, identity)?.bind(BindPort::Ephemeral, &[PROTOCOL]).await?);
+        let node = Arc::new(Peer::open(&state, identity)?.bind(BindPort::Ephemeral, &[PROTOCOL, EVIDENCE]).await?);
         let key = TreeKey::mint(&state)?;
         let tree = key.tree();
         node.peer().commit(tree, Receipt::open(&key, me)?).await?;
         let brief = Brief::Content(ContentHash::of(&Content::from(b"the brief".to_vec())));
         node.peer().commit(tree, Receipt::dispatch(tree, me, brief)?).await?;
-        let mut events = serve(Arc::clone(&node), Surface::Program("echo".into()));
+        let mut events = serve(Arc::clone(&node), Surface::Program("echo".into()), Evidence::open(&state));
         while let Some(event) = events.recv().await {
             if let Event::Reported { report, .. } = event {
                 println!("{report}");
@@ -116,12 +118,19 @@ Reversal: a seat whose addresses change between wakes. It then presents again wh
 
 ## The command surface
 
-**A seat acts by running a program, and its standard output is the report.** The report holds the BLAKE3 hash of the whole output and its first line as the summary. A report is committed only when the program exits 0 with a first line that is a summary, and the hash names exactly the bytes the program printed. The seat does not keep those bytes; a report records what was produced, not where it lives. The program runs on Tokio's blocking pool through `std::process`.
+**A seat acts by running a program, and its standard output is the report.** The seat commits the whole output to its evidence store and the report names it by the value manifest's identity, with its first line as the summary. A report is committed only when the program exits 0 with a first line that is a summary and the output is kept, so the name in the record always resolves on the seat. The program runs on Tokio's blocking pool through `std::process`, and the output is kept on the same pool.
 
+- the BLAKE3 hash of the output, its bytes not kept: a report that names what was produced and that no reader can open.
 - Tokio's `process` feature: an async child for one blocking wait per act, at the cost of a feature and its signal handling.
 - a long-running harness over a pipe: the harness shim. A program per act is enough to act and report, and the shim replaces it.
 
 Reversal: the harness shim, which drives a persistent agent session instead of one program per act.
+
+**A seat answers fetches of the evidence it keeps, under its own protocol.** A connection under `domhringr/evidence/0` is answered from the seat's evidence store as [the evidence plane's transport](../record-evidence/README.md#transport) states, beside wakes and subduction's sync, and told as `Served` or `Unserved`. An operator verifying, grading or landing a report fetches the output it names from the seat through the task's book; a seat answers whoever asks, as the record it serves is already shared with every member.
+
+- a fetch admitted only from members of a task holding the report: the seat would fold every tree it holds to answer one digest, and the digest is unguessable to anyone not shown the record.
+
+Reversal: evidence a member must not read, which needs the fetch admitted against the trees whose receipts name it.
 
 **A failed act leaves the slot held and the report awaited.** A program that cannot start, exits non-zero, or prints no summary is reported as `Unreported` with its reason, and nothing is committed. The next wake for the same dispatch, or the seat's next start, acts again. Only a retirement or a handoff moves the slot.
 

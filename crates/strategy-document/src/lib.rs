@@ -3,8 +3,8 @@
 //!
 //! A [`Playbook`] is a Player strategy written down: named [`Step`]s, each
 //! saying why it is there and bound ([`Bound`]) to a [`Verifier`] — a
-//! program run on the task's state, whose [`Run`] is its output's hash and
-//! how it ended — or to a question of a [`Rubric`]. A rubric is an Opponent
+//! program run on the task's state, whose [`Run`] is its output and how it
+//! ended — or to a question of a [`Rubric`]. A rubric is an Opponent
 //! strategy: the state files it reads into a transcript ([`StateFile`]), the
 //! [`Band`] its grades stand against, and named questions, each asked of a
 //! judge as a choice between its criterion holding and failing. A ruling is
@@ -67,8 +67,8 @@ pub use playbook::Step;
 pub use rubric::Band;
 pub use rubric::ParseStateFileError;
 pub use rubric::Rubric;
-pub use rubric::StateError;
 pub use rubric::StateFile;
+pub use rubric::TranscriptError;
 pub use rubric::compose;
 pub use verify::Run;
 pub use verify::Verifier;

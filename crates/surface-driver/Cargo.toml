@@ -3,7 +3,7 @@ name = "domhringr"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "The domhringr operator's binary: lists a project's seats and tasks, dispatches a seat to a task, and verifies, decides and lands the change it reports"
+description = "The domhringr operator's binary: lists a project's seats and tasks, dispatches a seat to a task, and verifies, decides and lands the change it reports, reading the report as evidence fetched from its seat"
 readme = "README.md"
 repository.workspace = true
 license.workspace = true
@@ -18,9 +18,11 @@ path = "src/main.rs"
 
 [dependencies]
 domhringr-judge-oracle = { workspace = true }
+domhringr-record-evidence = { workspace = true }
 domhringr-record-tree = { workspace = true }
 domhringr-seat-slot = { workspace = true }
 domhringr-strategy-document = { workspace = true }
+gandr-storage-values = { workspace = true }
 lexopt = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

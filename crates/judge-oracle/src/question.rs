@@ -10,19 +10,23 @@
 //! ```
 //!
 //! so two judges asking the same question name it alike, and a verdict names
-//! each question it rules on by that hash. A transcript is named by the hash
-//! of its bytes ([`ContentHash::of`]): a judge asking a model needs its text,
-//! a judge answering from a table its name alone.
+//! each question it rules on by that hash. A transcript is named by the
+//! identity of the value manifest its bytes stage to in the evidence plane
+//! ([`Staged`]): a judge asking a model needs its text, a judge answering
+//! from a table its name, and a verdict names it so any reader can fetch it.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::str::Utf8Error;
 
+use domhringr_record_evidence::EvidenceError;
+use domhringr_record_evidence::Staged;
 use domhringr_record_tree::Content;
 use domhringr_record_tree::ContentHash;
 use gandr_storage_values::CanonicalValue;
 use gandr_storage_values::CanonicalWord;
 use gandr_storage_values::ConstructorTag;
+use gandr_storage_values::ManifestDigest;
 use gandr_storage_values::TokenBytes;
 use gandr_storage_values::TokenReader;
 use gandr_storage_values::TokenSink;
@@ -260,110 +264,111 @@ impl CanonicalValue for Form
     }
 }
 
-/// The content a judge is asked about: its text, or its name alone.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The content a judge is asked about, staged as evidence: its text, and the
+/// value that names it.
+#[derive(Clone, Debug)]
 pub struct Transcript
 {
-    /// The hash of the transcript's bytes.
-    hash: ContentHash,
-    /// What of the transcript the judge holds.
+    /// The transcript staged in the value plane; its manifest names it.
+    staged: Staged,
+    /// Its text, or why it is none.
     held: Held,
 }
 
 impl Transcript
 {
-    /// The transcript `content`, held.
+    /// The transcript `content`, staged as evidence.
     ///
     /// # Specification
-    /// - ensures: the transcript's hash is [`ContentHash::of`] the content, and
-    ///   [`Transcript::text`] reads the content as UTF-8.
+    /// - ensures: the transcript is named by the identity of the manifest its
+    ///   content stages to ([`Staged::new`]), and [`Transcript::text`] reads
+    ///   the content as UTF-8.
+    /// - fails: [`EvidenceError::Commit`] when the value plane refuses the
+    ///   content as a value.
     /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`EvidenceError::Commit`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a held transcript is named by the manifest its bytes
+    ///   stage to, its text reads back, and content holding an invalid byte is
+    ///   no text.
+    /// - witness: `question::tests::a_transcript_is_named_by_its_manifest`
     #[inline]
-    #[must_use]
-    pub fn held(content: Content) -> Self
+    pub fn held(content: Content) -> Result<Self, EvidenceError>
     {
-        let hash = ContentHash::of(&content);
+        let staged = Staged::new(&content)?;
         let held = match String::from_utf8(Vec::from(content)) {
             | Ok(text) => Held::Text(text),
             | Err(binary) => Held::Binary(binary.utf8_error()),
         };
-        Self { hash, held }
+        Ok(Self { staged, held })
     }
 
-    /// The transcript named by `hash`, its content not held.
+    /// The transcript's name: the identity of its value manifest.
     ///
     /// # Specification
     /// trivial.
     #[inline]
     #[must_use]
-    pub const fn named(hash: ContentHash) -> Self
+    pub const fn digest(&self) -> ManifestDigest
     {
-        Self {
-            hash,
-            held: Held::Name,
-        }
+        self.staged.digest()
     }
 
-    /// The transcript's name: the hash of its bytes.
+    /// The transcript staged as evidence, to keep beside the verdict that
+    /// names it.
     ///
     /// # Specification
     /// trivial.
     #[inline]
     #[must_use]
-    pub const fn hash(&self) -> ContentHash
+    pub const fn staged(&self) -> &Staged
     {
-        self.hash
+        &self.staged
     }
 
     /// The transcript's text, to put to a model.
     ///
     /// # Specification
-    /// - ensures: the held content read as UTF-8.
-    /// - fails: [`TextError::Unheld`] for a transcript named alone, and
-    ///   [`TextError::NotText`] for content that is not UTF-8.
+    /// - ensures: the content read as UTF-8.
+    /// - fails: [`TextError`] for content that is not UTF-8.
     /// - panics: none.
     ///
     /// # Errors
     /// - [`TextError`]: as listed above.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — held text reads back, and a named transcript and
-    ///   content holding an invalid byte each meet their own refusal.
-    /// - witness: `question::tests::a_transcript_is_named_by_the_hash_of_its_bytes`
+    /// - hypothesis: L3 — held text reads back, and content holding an invalid
+    ///   byte meets the refusal.
+    /// - witness: `question::tests::a_transcript_is_named_by_its_manifest`
     #[inline]
     pub fn text(&self) -> Result<&String, TextError>
     {
         match self.held {
             | Held::Text(ref text) => Ok(text),
-            | Held::Binary(error) => Err(TextError::NotText(error)),
-            | Held::Name => Err(TextError::Unheld),
+            | Held::Binary(error) => Err(TextError(error)),
         }
     }
 }
 
-/// What of a transcript a judge holds.
+/// What a transcript's bytes read as.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Held
 {
-    /// Its bytes, which are UTF-8 text.
+    /// UTF-8 text.
     Text(String),
-    /// Its bytes are not UTF-8, as this error says; its hash names them.
+    /// No text, as this error says; its manifest names the bytes.
     Binary(Utf8Error),
-    /// Its name alone.
-    Name,
 }
 
-/// Why a transcript's text cannot be put to a model.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum TextError
-{
-    /// Only the transcript's hash is held.
-    #[error("only the transcript's hash is held, not its content")]
-    Unheld,
-    /// The transcript's content is not UTF-8.
-    #[error("the transcript is not UTF-8 text")]
-    NotText(#[source] Utf8Error),
-}
+/// Why a transcript's text cannot be put to a model: its content is not
+/// UTF-8.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the transcript is not UTF-8 text")]
+#[repr(transparent)]
+pub struct TextError(#[source] Utf8Error);
 
 #[cfg(test)]
 mod tests
@@ -371,6 +376,7 @@ mod tests
     use alloc::string::String;
     use alloc::vec::Vec;
 
+    use domhringr_record_evidence::Staged;
     use domhringr_record_tree::Content;
     use domhringr_record_tree::ContentHash;
     use gandr_storage_values::TokenBody;
@@ -380,7 +386,6 @@ mod tests
     use super::Form;
     use super::Question;
     use super::QuestionError;
-    use super::TextError;
     use super::Transcript;
 
     #[test]
@@ -471,14 +476,14 @@ mod tests
     }
 
     #[test]
-    fn a_transcript_is_named_by_the_hash_of_its_bytes()
+    fn a_transcript_is_named_by_its_manifest()
     {
         let content = Content::from(b"the sky is blue".to_vec());
-        let held = Transcript::held(content.clone());
+        let held = Transcript::held(content.clone()).unwrap();
         assert_eq!(
-            held.hash(),
-            ContentHash::of(&content),
-            "a held transcript is named by its bytes' hash"
+            held.digest(),
+            Staged::new(&content).unwrap().digest(),
+            "a held transcript is named by the manifest its bytes stage to"
         );
         assert_eq!(
             held.text().map(String::as_str),
@@ -486,18 +491,11 @@ mod tests
             "its text reads back"
         );
         assert!(
-            matches!(
-                Transcript::held(Content::from(vec![0x68, 0xff])).text(),
-                Err(TextError::NotText(_))
-            ),
+            Transcript::held(Content::from(vec![0x68, 0xff]))
+                .unwrap()
+                .text()
+                .is_err(),
             "content with an invalid byte is no text"
         );
-        let named = Transcript::named(held.hash());
-        assert_eq!(
-            named.hash(),
-            held.hash(),
-            "a named transcript keeps its name"
-        );
-        assert_eq!(named.text(), Err(TextError::Unheld), "and holds no text");
     }
 }

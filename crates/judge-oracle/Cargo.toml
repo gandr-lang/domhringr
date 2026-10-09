@@ -12,6 +12,7 @@ categories = ["text-processing"]
 publish.workspace = true
 
 [dependencies]
+domhringr-record-evidence = { workspace = true }
 domhringr-record-tree = { workspace = true }
 gandr-storage-values = { workspace = true }
 iroh = { workspace = true }

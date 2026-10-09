@@ -4,10 +4,10 @@
 //! A verifier runs its command with its arguments, in the task's state
 //! directory, with no standard input, and its standard output and standard
 //! error written into one pipe, so its output is one stream in the order the
-//! process wrote it. The run is that output's BLAKE3 hash and how the process
-//! ended — the exit code, or the signal that ended it ([`Status`]) — never a
-//! pass or a fail: what a code means is the verifier's to say. The output's
-//! bytes are not kept.
+//! process wrote it. The run is that output and how the process ended — the
+//! exit code, or the signal that ended it ([`Status`]) — never a pass or a
+//! fail: what a code means is the verifier's to say. The caller commits the
+//! output as evidence and records its name.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -19,7 +19,6 @@ use std::process::Stdio;
 
 use domhringr_record_tree::Code;
 use domhringr_record_tree::Content;
-use domhringr_record_tree::ContentHash;
 use domhringr_record_tree::Status;
 
 use crate::document::Key;
@@ -97,9 +96,9 @@ impl Verifier
     /// # Specification
     /// - ensures: runs the command with its arguments, `directory` as its
     ///   working directory, standard input closed, and standard output and
-    ///   standard error into one pipe; waits for it to end; returns the BLAKE3
-    ///   hash of everything the process wrote, in the order written, and its
-    ///   exit code, or the signal that ended it.
+    ///   standard error into one pipe; waits for it to end; returns everything
+    ///   the process wrote, in the order written, and its exit code, or the
+    ///   signal that ended it.
     /// - fails: [`VerifyError::Pipe`] when the pipe cannot be made,
     ///   [`VerifyError::Spawn`] when the command cannot be started — no such
     ///   program, or `directory` missing — [`VerifyError::Read`] when the
@@ -117,10 +116,10 @@ impl Verifier
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a real shell verifier writing to both streams in a
-    ///   state directory is run, its output hash compared with the BLAKE3 of
-    ///   the bytes it wrote there and its exit code read; a failing exit code
-    ///   is read as the code, a process killing itself as its signal, and a
-    ///   missing program is refused as unspawned.
+    ///   state directory is run, its output compared with the bytes it wrote
+    ///   there and its exit code read; a failing exit code is read as the code,
+    ///   a process killing itself as its signal, and a missing program is
+    ///   refused as unspawned.
     /// - witness: `verify::tests::a_verifier_runs_in_the_state_directory_and_reads_its_status`
     #[inline]
     pub fn run(
@@ -148,9 +147,10 @@ impl Verifier
         let mut output = Vec::new();
         let _length = reader.read_to_end(&mut output).map_err(VerifyError::Read)?;
         let ended = child.wait().map_err(VerifyError::Wait)?;
+        let status = status(ended)?;
         Ok(Run {
-            output: ContentHash::of(&Content::from(output)),
-            status: status(ended)?,
+            output: Content::from(output),
+            status,
         })
     }
 }
@@ -187,27 +187,27 @@ fn status(ended: ExitStatus) -> Result<Status, VerifyError>
     Err(VerifyError::Unended)
 }
 
-/// What a verifier's run left: its output's hash and how it ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What a verifier's run left: its output and how it ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Run
 {
-    /// The BLAKE3 hash of what the process wrote to its output and error.
-    output: ContentHash,
+    /// What the process wrote to its output and error, in the order written.
+    output: Content,
     /// How the process ended.
     status: Status,
 }
 
 impl Run
 {
-    /// The hash of the process's output.
+    /// The process's output.
     ///
     /// # Specification
     /// trivial.
     #[inline]
     #[must_use]
-    pub const fn output(&self) -> ContentHash
+    pub const fn output(&self) -> &Content
     {
-        self.output
+        &self.output
     }
 
     /// How the process ended.
@@ -255,7 +255,6 @@ mod tests
 {
     use domhringr_record_tree::Code;
     use domhringr_record_tree::Content;
-    use domhringr_record_tree::ContentHash;
     use domhringr_record_tree::Signal;
     use domhringr_record_tree::Status;
 
@@ -284,7 +283,7 @@ mod tests
             .unwrap();
         assert_eq!(
             run.output(),
-            ContentHash::of(&Content::from(b"+ one line\nto-error\n".to_vec())),
+            &Content::from(b"+ one line\nto-error\n".to_vec()),
             "the output is both streams in the order written, read in the state directory"
         );
         assert_eq!(
@@ -296,7 +295,7 @@ mod tests
         assert_eq!(
             (run.output(), run.status()),
             (
-                ContentHash::of(&Content::from(Vec::new())),
+                &Content::from(Vec::new()),
                 Status::Exited(Code::from(0_i32))
             ),
             "a silent passing verifier"

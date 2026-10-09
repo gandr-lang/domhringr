@@ -22,7 +22,7 @@ Playbooks and rubrics: TOML documents read with every refusal named by its field
 
 **Why.** A check that lives in prose is skipped, and one that lives in code is changed without review. Written as data, a playbook says what is checked and why, and its hash names exactly the checks a receipt answers to. A verifier decides what a program can compute; a rubric question takes what can only be judged to the judge oracle and grades the answer, so both leave a receipt on the task. A document that does not read is refused at the field at fault, so its author fixes the field rather than reading a parser trace.
 
-**How.** The documents are TOML, parsed into the `toml` crate's document tree and read from it by hand, each table against the fields it admits. A verifier runs through `std::process` in the task's state directory, its standard output and standard error in one pipe; its output is named by hash and its exit status kept. A rubric question is a `domhringr-judge-oracle` `Question` whose options are the criterion holding (`A`) and failing (`B`); its ruling is graded by the probability on `A` against the band, and the grades compose as a conjunction. The receipts that record a run, `Verified` and `Graded`, are `domhringr-record-tree`'s; this crate reads, runs and grades, and its caller commits.
+**How.** The documents are TOML, parsed into the `toml` crate's document tree and read from it by hand, each table against the fields it admits. A verifier runs through `std::process` in the task's state directory, its standard output and standard error in one pipe; its output is handed to the caller, who commits it as evidence, and its exit status kept. A rubric question is a `domhringr-judge-oracle` `Question` whose options are the criterion holding (`A`) and failing (`B`); its ruling is graded by the probability on `A` against the band, and the grades compose as a conjunction. The receipts that record a run, `Verified` and `Graded`, are `domhringr-record-tree`'s; this crate reads, runs and grades, and its caller commits.
 
 ## References
 
@@ -33,14 +33,15 @@ Playbooks and rubrics: TOML documents read with every refusal named by its field
 | `toml`, [crate documentation](https://docs.rs/toml) | `de::DeTable::parse`: the document tree with each key's and value's span. |
 | `domhringr-judge-oracle`, [crate documentation](../judge-oracle/README.md) | The question a rubric asks and the judge that answers it. |
 | `domhringr-record-tree`, [crate documentation](../record-tree/README.md#tasks) | The `Verified` and `Graded` receipts, `StepId`, `Status`, `Grade` and the `Ruling` a grade reads. |
+| `domhringr-record-evidence`, [crate documentation](../record-evidence/README.md) | The evidence plane a transcript is staged in and a verifier's output is committed to. |
 
 ## Provided features
 
 - `Playbook` and `Rubric`, read from TOML text with `FromStr`, refused with a `Refusal`: the `Field` at fault and the `Reason`.
 - `Loaded<D>`: a document read from its file and named by the hash of its bytes; `LoadError` names the file.
 - `Plan`: a playbook and each rubric its steps name, read beside it, every question it names checked to exist; `Plan::gradings` groups the questions by rubric.
-- `Verifier::run`: a program run in a directory to its end, its merged output by hash and its `Status`.
-- `Rubric::transcript`: the state files read into one transcript.
+- `Verifier::run`: a program run in a directory to its end, its merged output and its `Status`.
+- `Rubric::transcript`: the state files read into one transcript, staged as evidence and named by its value manifest; `TranscriptError` names the state file that cannot be read.
 - `Band::grade`: a ruling graded `met`, `unmet`, `undecided` or `refused`; `compose`: a rubric's grades composed into one.
 
 ## Expected features
@@ -151,13 +152,14 @@ Reversal: a consumer that needs the shape as a machine-readable schema, such as 
 
 ## Verifiers
 
-**A verifier runs in the task's state directory, and its output is recorded by hash.** It runs with its standard input closed and its standard output and standard error in one pipe, so the hash names everything it wrote in the order written. The receipt holds the hash and the status, `exit <code>` or `signal <number>`; a failing status is recorded, never hidden behind an error. The bytes are not kept: as a report does, a verification records what was produced, not where it lives.
+**A verifier runs in the task's state directory, and its output is kept as evidence.** It runs with its standard input closed and its standard output and standard error in one pipe, so the output is everything it wrote in the order written. The caller commits that output to the evidence plane ([`domhringr-record-evidence`](../record-evidence/README.md)); the receipt holds the manifest digest that names it and the status, `exit <code>` or `signal <number>`. A failing status is recorded, never hidden behind an error, and the output any reader of the record fetches by the receipt's name is the output the verifier wrote.
 
-- two hashes, one per stream: interleaving lost, and a diagnostic read apart from the output it explains.
+- two outputs, one per stream: interleaving lost, and a diagnostic read apart from the output it explains.
 - the output's bytes in the receipt: every receipt sized by its noisiest verifier.
+- a hash of the output, its bytes not kept: a verification that records what was produced and cannot show it again.
 - Tokio's `process`: an async child for one blocking wait per verifier, at the cost of a feature and its signal handling; the caller runs `run` on a blocking thread.
 
-Reversal: a verifier whose output must be read again later, which needs the bytes stored under their hash beside the record.
+Reversal: a verifier whose output is too large to hold in memory, which needs the run to stream its output into the value plane as it is read.
 
 ## Grades and their composition
 
