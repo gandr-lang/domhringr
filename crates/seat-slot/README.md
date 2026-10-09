@@ -129,6 +129,12 @@ Reversal: the harness shim, which drives a persistent agent session instead of o
 
 Reversal: a failure kind the operator must see in the record, such as a brief the program refuses. It needs a receipt of its own.
 
+**The report ends the seat's part; the operator verifies, grades, decides and lands from it.** After a report the operator's receipts follow on the same dispatch: verifications, gradings, a decision to land, rework or abandon, and a landing ([`domhringr-record-tree`](../record-tree/README.md#tasks)). None of them needs the seat, which is woken again only by a new dispatch, as a rework calls for. The seat records its program's summary as printed and reads nothing into it; an operator that lands code reads the change from it by its own convention ([`domhringr`](../surface-driver/README.md#the-change)).
+
+- the seat committing the change's branch and commit in a field of its own: the seat's record would hold a version-control fact that only an operator landing code reads.
+
+Reversal: a second consumer of the change, beside the operator that lands it, which needs the change in a field the fold can check.
+
 ## Resuming
 
 **On start a seat acts again on every dispatch it holds unreported, in every tree its store holds.** The store is the seat's only state. A seat killed while acting resumes the act, and a seat whose act failed retries it when it next starts. While an act runs, a wake for the same dispatch replies `woken` and starts no second act. An act interrupted by a kill runs its program again on resume, so a program sees each dispatch at least once.

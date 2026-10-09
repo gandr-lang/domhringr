@@ -92,12 +92,13 @@ The peer binary's process test `strategy::tests::every_rubric_in_the_set_grades_
 mise exec -- cargo nextest run -p domhringr-surface-peer -E 'test(every_rubric_in_the_set_grades_its_fixture_pair)'
 ```
 
-**The set is tested through the peer binary.** The grade is `domhringr-strategy-document`'s, and the verdict and the grading that record it are committed by `domhringr-peer`, the one program that commits them, so the test reads the receipts a real grading leaves.
+**The set is tested through the peer binary.** The grade is `domhringr-strategy-document`'s, and the verdict and the grading that record it are committed by `domhringr-peer`'s `rubric grade`, which grades a fixture's state directory as it stands, so the test reads the receipts a real grading leaves. The operator's `domhringr decide` grades by the same rubrics, but over the state it writes from a reported change — a diff and its commit messages — so a fixture pair, which is a state directory and not a change, is graded through the peer.
 
 - a test in `domhringr-strategy-document`: it would build the verdict and the grading itself and test its own construction, and the layering keeps the strategy crate below the binary, so it cannot run it.
 - a test crate of its own: a member with no library, which still cannot run another package's binary.
+- a test through `domhringr decide`: each pair would first be turned into a change in a repository, and a rubric reading an issue or a workflow would find none of it in the diff `decide` writes.
 
-Reversal: an operator command that grades a task, whose tests then walk the set.
+Reversal: `decide` writing every artifact the set reads — the issue, the review, the workflow — from the record of the task, when its tests then walk the set.
 
 **A table grades what it is told.** The test shows that each rubric reads, that each pair's states read and differ, and that the band grades a judge 90 percent sure as met or unmet; it does not show that a model tells a pair apart. An ignored test asks that of a real judge, grading the `stable-refs` pair through the endpoint the environment configures, as [`domhringr-judge-oracle`](../crates/judge-oracle/README.md#configuration) states:
 

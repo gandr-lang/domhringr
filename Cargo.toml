@@ -45,6 +45,7 @@ default-features = false
 # The judge: the letter readout over a model, its backends.
 # consumers:
 # - strategy-document
+# - surface-driver
 # - surface-peer
 [workspace.dependencies.domhringr-judge-oracle]
 path = "crates/judge-oracle"
@@ -54,12 +55,14 @@ path = "crates/judge-oracle"
 # - judge-oracle
 # - seat-slot
 # - strategy-document
+# - surface-driver
 # - surface-peer
 [workspace.dependencies.domhringr-record-tree]
 path = "crates/record-tree"
 
 # The seat: the wake protocol, acting through a surface, reporting.
 # consumers:
+# - surface-driver
 # - surface-peer
 [workspace.dependencies.domhringr-seat-slot]
 path = "crates/seat-slot"
@@ -67,6 +70,7 @@ path = "crates/seat-slot"
 # Playbooks and rubrics: their documents, a step's verifier run, a rubric's
 # grades.
 # consumers:
+# - surface-driver
 # - surface-peer
 [workspace.dependencies.domhringr-strategy-document]
 path = "crates/strategy-document"
@@ -129,8 +133,9 @@ features = ["portmapper", "tls-ring"]
 version = "0.6"
 default-features = false
 
-# The peer binary's argument lexer: options and subcommands from `OsString`s.
+# The binaries' argument lexer: options and subcommands from `OsString`s.
 # consumers:
+# - surface-driver
 # - surface-peer
 [workspace.dependencies.lexopt]
 version = "0.3"
@@ -208,8 +213,10 @@ default-features = false
 version = "0.3"
 default-features = false
 
-# Throwaway state directories for the process-level and library tests.
+# Throwaway directories: the driver's checkouts and the state it grades, and
+# the state directories of the process-level and library tests.
 # consumers:
+# - surface-driver
 # - surface-peer (dev)
 # - seat-slot (dev)
 # - strategy-document (dev)
@@ -219,9 +226,10 @@ version = "3.27"
 default-features = false
 
 # `derive(Error)` for the record library's, the seat's, the strategy
-# documents' and the peer binary's error enums.
+# documents' and the binaries' error enums.
 # consumers:
 # - judge-oracle
+# - surface-driver
 # - surface-peer
 # - seat-slot
 # - strategy-document
@@ -230,13 +238,14 @@ default-features = false
 version = "2.0"
 default-features = false
 
-# The async runtime under iroh, subduction and the peer binary.
+# The async runtime under iroh, subduction and the binaries.
 # features:
-# - rt-multi-thread: the peer binary's and the tests' multi-threaded runtime
+# - rt-multi-thread: the binaries' and the tests' multi-threaded runtime
 # - time: `tokio::time::timeout` behind subduction's call deadlines
 # - sync: the seat's event channel and its lock on the dispatches it acts on
 # consumers:
 # - judge-oracle (dev)
+# - surface-driver
 # - surface-peer
 # - seat-slot
 # - record-tree

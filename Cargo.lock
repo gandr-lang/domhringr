@@ -675,6 +675,16 @@ dependencies = [
 [[package]]
 name = "domhringr"
 version = "0.0.0"
+dependencies = [
+ "domhringr-judge-oracle",
+ "domhringr-record-tree",
+ "domhringr-seat-slot",
+ "domhringr-strategy-document",
+ "lexopt",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
 
 [[package]]
 name = "domhringr-judge-oracle"

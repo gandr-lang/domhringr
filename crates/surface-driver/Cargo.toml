@@ -3,12 +3,12 @@ name = "domhringr"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Driver for the domhringr factory toolchain"
+description = "The domhringr operator's binary: lists a project's seats and tasks, dispatches a seat to a task, and verifies, decides and lands the change it reports"
 readme = "README.md"
 repository.workspace = true
 license.workspace = true
 keywords = ["agents", "domhringr", "factory", "toolchain"]
-categories = ["development-tools"]
+categories = ["command-line-utilities", "development-tools"]
 # The one published crate of this workspace: the name is claimed at 0.0.0.
 publish = true
 
@@ -17,6 +17,14 @@ name = "domhringr"
 path = "src/main.rs"
 
 [dependencies]
+domhringr-judge-oracle = { workspace = true }
+domhringr-record-tree = { workspace = true }
+domhringr-seat-slot = { workspace = true }
+domhringr-strategy-document = { workspace = true }
+lexopt = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true
