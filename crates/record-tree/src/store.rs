@@ -1,5 +1,6 @@
 //! The tree store: a subduction peer over one redb file, committing receipts
-//! into sedimentrees, reading their heads, and folding them into views.
+//! into sedimentrees, reading their heads, folding them into views, and
+//! routing a dial for a tree through its book.
 
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
@@ -38,11 +39,15 @@ use crate::fold::View;
 use crate::fold::fold;
 use crate::id::CommitPrefix;
 use crate::id::PeerKey;
+use crate::id::RemotePeer;
 use crate::id::TreeId;
 use crate::identity::Identity;
 use crate::identity::StateDir;
 use crate::name::Domain;
 use crate::name::Label;
+use crate::presence::Aim;
+use crate::presence::At;
+use crate::presence::Route;
 use crate::receipt::Receipt;
 use crate::runtime::TokioSpawner;
 use crate::runtime::TokioTimer;
@@ -425,6 +430,167 @@ impl Peer
         }
     }
 
+    /// The trees a resolution of `reference` reads that can be named now,
+    /// before any is synced.
+    ///
+    /// # Specification
+    /// - ensures: a key names its own tree. A DNS name names every tree
+    ///   `witness` names for it. A label names `scope`'s tree and, for a path
+    ///   or a commit under it, also the tree that tree's local view introduces
+    ///   for the label ([`View::introductions`]) — none while the store does
+    ///   not hold the scope's tree, or holds it without that introduction.
+    /// - ensures: these are exactly the trees [`Peer::whence`] would fold, save
+    ///   a label's introduced tree not yet introduced here: a caller that syncs
+    ///   them and asks again, until no new tree is named, has synced every tree
+    ///   the resolution reads.
+    /// - fails: [`WhenceError::Witness`] when the witness cannot be read,
+    ///   [`WhenceError::Unwitnessed`] when it names no tree for the domain,
+    ///   [`WhenceError::Unscoped`] for a label read in no tree, and
+    ///   [`WhenceError::View`] when the scope's tree's commits cannot be read.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`WhenceError::Witness`]: the witness cannot be read.
+    /// - [`WhenceError::Unwitnessed`]: the witness names no tree.
+    /// - [`WhenceError::Unscoped`]: a label is read in no tree.
+    /// - [`WhenceError::View`]: the scope's tree's commits cannot be read.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a key names its tree alone, a DNS name both trees its
+    ///   witness names, a bare label its scope's tree alone, a label path its
+    ///   scope's tree and the tree introduced, a label path read in an unheld
+    ///   scope that scope alone, and an unscoped label and an empty witness are
+    ///   refused.
+    /// - witness: `store::tests::a_resolution_names_the_trees_it_reads`
+    #[inline]
+    pub async fn reads<W>(
+        &self,
+        reference: &Reference,
+        witness: &W,
+        scope: Scope,
+    ) -> Result<BTreeSet<TreeId>, WhenceError>
+    where
+        W: Witness + Sync,
+    {
+        match *reference.authority() {
+            | Authority::Key(tree) => Ok(BTreeSet::from([tree])),
+            | Authority::Domain(ref domain) => {
+                let candidates =
+                    witness
+                        .lookup(domain)
+                        .await
+                        .map_err(|source| WhenceError::Witness {
+                            domain: domain.clone(),
+                            source,
+                        })?;
+                if candidates.is_empty() {
+                    return Err(WhenceError::Unwitnessed {
+                        domain: domain.clone(),
+                    });
+                }
+                Ok(candidates)
+            },
+            | Authority::Label(ref label) => {
+                let Scope::In(within) = scope
+                else {
+                    return Err(WhenceError::Unscoped {
+                        label: label.clone(),
+                    });
+                };
+                let mut trees = BTreeSet::from([within]);
+                if matches!(reference.locus(), Locus::Tree) {
+                    return Ok(trees);
+                }
+                match self.view(within).await {
+                    | Ok(view) => {
+                        if let Some(&(_introducer, introduced)) = view.introductions().get(label) {
+                            let _named_twice = trees.insert(introduced);
+                        }
+                    },
+                    | Err(ViewError::Unopened(_)) => {},
+                    | Err(source @ ViewError::Load(_)) => {
+                        return Err(WhenceError::View {
+                            tree: within,
+                            source,
+                        });
+                    },
+                }
+                Ok(trees)
+            },
+        }
+    }
+
+    /// The remote a dial for `tree` reaches: the peer `aim` names, at the
+    /// endpoint `at` names or its presence in the tree's book.
+    ///
+    /// # Specification
+    /// - ensures: the peer aimed at is the peer named, or for [`Aim::Owner`]
+    ///   the owner of `tree`'s local view. When it is this peer the route is
+    ///   [`Route::Itself`], whatever `at` names. Otherwise [`At::Given`] routes
+    ///   to that endpoint without reading the book ([`Route::Given`]), and
+    ///   [`At::Book`] to the endpoint of the peer's presence in the local
+    ///   view's book ([`View::book`]) with the commit that presented it
+    ///   ([`Route::Book`]).
+    /// - ensures: nothing is dialed and no address lookup is consulted: the
+    ///   answer reads the local store alone.
+    /// - fails: [`RouteError::View`] when the tree's commits cannot be read,
+    ///   [`RouteError::Unheld`] when the owner is aimed at and the store does
+    ///   not hold the tree, and [`RouteError::Unreachable`] when the book is
+    ///   read and holds no presence of the peer — withdrawn, never presented,
+    ///   or the tree not held.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RouteError::View`]: the tree's commits cannot be read.
+    /// - [`RouteError::Unheld`]: the owner is aimed at in a tree not held.
+    /// - [`RouteError::Unreachable`]: the book holds no presence of the peer.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the owner's and a named member's presences route
+    ///   through the book at their presenting commits, a withdrawn presence is
+    ///   unreachable, an endpoint named by hand overrides the book and reaches
+    ///   a peer the book lacks, the dialer itself is no one to reach, and the
+    ///   owner of an unheld tree is unheld while a named peer there is
+    ///   unreachable from the book.
+    /// - witness: `store::tests::a_dial_routes_through_the_book_or_the_endpoint_named`
+    #[inline]
+    pub async fn route(
+        &self,
+        tree: TreeId,
+        aim: Aim,
+        at: At,
+    ) -> Result<Route, RouteError>
+    {
+        let view = match self.view(tree).await {
+            | Ok(view) => Some(view),
+            | Err(ViewError::Unopened(_)) => None,
+            | Err(source @ ViewError::Load(_)) => return Err(RouteError::View { tree, source }),
+        };
+        let peer = match (aim, view.as_ref()) {
+            | (Aim::Peer(peer), _) => peer,
+            | (Aim::Owner, Some(view)) => view.owner(),
+            | (Aim::Owner, None) => return Err(RouteError::Unheld { tree }),
+        };
+        if peer == self.identity.peer_key() {
+            return Ok(Route::Itself);
+        }
+        match at {
+            | At::Given(endpoint) => Ok(Route::Given {
+                remote: RemotePeer::new(endpoint, peer),
+            }),
+            | At::Book => {
+                let presence = view.as_ref().and_then(|view| view.book().get(&peer));
+                match presence {
+                    | Some(presence) => Ok(Route::Book {
+                        remote: RemotePeer::new(presence.endpoint().clone(), peer),
+                        since: presence.since(),
+                    }),
+                    | None => Err(RouteError::Unreachable { peer, tree }),
+                }
+            },
+        }
+    }
+
     /// Fold `tree` for a resolution.
     ///
     /// # Specification
@@ -746,6 +912,38 @@ pub enum WhenceError
     },
 }
 
+/// Why a dial for a tree has no remote to reach.
+#[derive(Debug, thiserror::Error)]
+pub enum RouteError
+{
+    /// The tree's commits cannot be read.
+    #[error("cannot fold the tree {tree}")]
+    View
+    {
+        /// The tree folded.
+        tree: TreeId,
+        /// Why it has no view.
+        source: ViewError,
+    },
+    /// The tree's owner is aimed at, and the store does not hold the tree to
+    /// name it: the peer to reach must be named.
+    #[error("unheld {tree}")]
+    Unheld
+    {
+        /// The tree.
+        tree: TreeId,
+    },
+    /// The tree's book holds no presence of the peer aimed at.
+    #[error("unreachable {peer}: no presence in the book")]
+    Unreachable
+    {
+        /// The peer aimed at.
+        peer: PeerKey,
+        /// The tree whose book was read.
+        tree: TreeId,
+    },
+}
+
 /// Why a tree's heads cannot be read.
 #[derive(Debug, thiserror::Error)]
 #[error("cannot read the tree's heads")]
@@ -757,15 +955,20 @@ mod tests
 {
     use alloc::collections::BTreeSet;
     use alloc::string::String;
+    use core::net::Ipv4Addr;
+    use core::net::SocketAddr;
 
     use future_form::Sendable;
     use gandr_storage_values::TokenOffset;
     use gandr_storage_values::ValueError;
     use sedimentree_core::blob::Blob;
+    use sedimentree_core::loose_commit::LooseCommit;
     use sedimentree_core::loose_commit::id::CommitId;
     use subduction_core::storage::traits::Storage;
+    use subduction_crypto::verified_meta::VerifiedMeta;
 
     use super::Peer;
+    use super::RouteError;
     use super::ViewError;
     use super::WhenceError;
     use crate::anchor::Anchor;
@@ -776,11 +979,18 @@ mod tests
     use crate::anchor::Target;
     use crate::fold::Refusal;
     use crate::fold::Verdict;
+    use crate::id::Endpoint;
+    use crate::id::EndpointKey;
+    use crate::id::RemotePeer;
     use crate::id::TreeId;
     use crate::identity::Identity;
     use crate::identity::StateDir;
     use crate::name::Domain;
     use crate::name::Label;
+    use crate::presence::Aim;
+    use crate::presence::At;
+    use crate::presence::Route;
+    use crate::receipt::EndpointProof;
     use crate::receipt::Receipt;
     use crate::testing::commit;
     use crate::testing::elsewhere_key;
@@ -847,6 +1057,198 @@ mod tests
     fn open(state: &StateDir) -> Peer
     {
         Peer::open(state, Identity::load_or_create(state).unwrap()).unwrap()
+    }
+
+    /// Save `commit` of `tree` into `peer`'s store, as a sync would.
+    ///
+    /// # Specification
+    /// trivial.
+    async fn save(
+        peer: &Peer,
+        tree: TreeId,
+        commit: &VerifiedMeta<LooseCommit>,
+    )
+    {
+        Storage::<Sendable>::save_loose_commit(&peer.storage, tree.sedimentree(), commit.clone())
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn a_dial_routes_through_the_book_or_the_endpoint_named()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let (a, b) = (owner(), other());
+        let endpoint = |seed: u8, port: u16| {
+            let secret = iroh::SecretKey::from_bytes(&[seed; 32]);
+            let key = EndpointKey::new(secret.public());
+            let endpoint =
+                Endpoint::new(key).with_direct(SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
+            (secret, endpoint)
+        };
+        let (owner_secret, owner_endpoint) = endpoint(5, 5);
+        let (member_secret, member_endpoint) = endpoint(6, 6);
+        let (_, given) = endpoint(7, 7);
+        let tree = tree();
+        runtime().block_on(async {
+            let peer = open(&state);
+            let me = peer.identity().peer_key();
+            let opened = commit(&a, tree, &[], &Receipt::open(&tree_key(), key(&a)).unwrap()).await;
+            let granted = commit(&a, tree, &[&opened], &Receipt::grant(tree, key(&b)).unwrap()).await;
+            let presence = |secret: &iroh::SecretKey, endpoint: &Endpoint, holder| {
+                let proof = EndpointProof::sign(secret, holder);
+                Receipt::present(tree, endpoint.clone(), proof).unwrap()
+            };
+            let present_a = presence(&owner_secret, &owner_endpoint, key(&a));
+            let present_a = commit(&a, tree, &[&granted], &present_a).await;
+            let present_b = presence(&member_secret, &member_endpoint, key(&b));
+            let present_b = commit(&b, tree, &[&present_a], &present_b).await;
+            for saved in [&opened, &granted, &present_a, &present_b] {
+                save(&peer, tree, saved).await;
+            }
+            assert_eq!(
+                peer.route(tree, Aim::Owner, At::Book).await.unwrap(),
+                Route::Book {
+                    remote: RemotePeer::new(owner_endpoint.clone(), key(&a)),
+                    since: id(&present_a),
+                },
+                "the owner is reached at its presence, since the commit that presented it"
+            );
+            assert_eq!(
+                peer.route(tree, Aim::Peer(key(&b)), At::Book).await.unwrap(),
+                Route::Book {
+                    remote: RemotePeer::new(member_endpoint, key(&b)),
+                    since: id(&present_b),
+                },
+                "a member named is reached at its own presence"
+            );
+            assert_eq!(
+                peer.route(tree, Aim::Owner, At::Given(given.clone())).await.unwrap(),
+                Route::Given {
+                    remote: RemotePeer::new(given.clone(), key(&a)),
+                },
+                "an endpoint named by hand overrides the book"
+            );
+            for at in [At::Book, At::Given(given.clone())] {
+                assert_eq!(
+                    peer.route(tree, Aim::Peer(me), at).await.unwrap(),
+                    Route::Itself,
+                    "the dialer itself is no one to reach"
+                );
+            }
+            let withdrawn = Receipt::withdraw(tree, key(&a)).unwrap();
+            let withdrawn = commit(&a, tree, &[&present_b], &withdrawn).await;
+            save(&peer, tree, &withdrawn).await;
+            assert!(
+                matches!(
+                    peer.route(tree, Aim::Owner, At::Book).await,
+                    Err(RouteError::Unreachable { peer, tree: read }) if peer == key(&a) && read == tree
+                ),
+                "a withdrawn presence is not offered"
+            );
+            assert_eq!(
+                peer.route(tree, Aim::Owner, At::Given(given.clone())).await.unwrap(),
+                Route::Given {
+                    remote: RemotePeer::new(given.clone(), key(&a)),
+                },
+                "an endpoint named by hand reaches a peer the book lacks"
+            );
+            assert!(
+                matches!(
+                    peer.route(unheld(), Aim::Owner, At::Given(given.clone())).await,
+                    Err(RouteError::Unheld { tree: read }) if read == unheld()
+                ),
+                "the owner of a tree not held is no one this peer can name"
+            );
+            assert!(
+                matches!(
+                    peer.route(unheld(), Aim::Peer(key(&a)), At::Book).await,
+                    Err(RouteError::Unreachable { .. })
+                ),
+                "a tree not held offers no book"
+            );
+            assert_eq!(
+                peer.route(unheld(), Aim::Peer(key(&a)), At::Given(given.clone()))
+                    .await
+                    .unwrap(),
+                Route::Given {
+                    remote: RemotePeer::new(given, key(&a)),
+                },
+                "a peer named at an endpoint named is reached in a tree not held"
+            );
+            drop(peer);
+        });
+    }
+
+    #[test]
+    fn a_resolution_names_the_trees_it_reads()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let (a, b) = (tree(), elsewhere_key().tree());
+        let nobody = Static::default();
+        let reference = |text: &str| text.parse::<Reference>().unwrap();
+        runtime().block_on(async {
+            let peer = open(&state);
+            let me = peer.identity().peer_key();
+            peer.commit(a, Receipt::open(&tree_key(), me).unwrap())
+                .await
+                .unwrap();
+            let introduced = Receipt::introduce(a, "b".parse().unwrap(), b).unwrap();
+            peer.commit(a, introduced).await.unwrap();
+            let by_key = reference(&format!("domhringr://{a}/x"));
+            assert_eq!(
+                peer.reads(&by_key, &nobody, Scope::Unscoped).await.unwrap(),
+                BTreeSet::from([a]),
+                "a key names its own tree"
+            );
+            let witness = [(example(), a), (example(), unheld())]
+                .into_iter()
+                .collect::<Static>();
+            let by_name = reference("domhringr://example.test/x");
+            assert_eq!(
+                peer.reads(&by_name, &witness, Scope::Unscoped)
+                    .await
+                    .unwrap(),
+                BTreeSet::from([a, unheld()]),
+                "a DNS name names every tree its witness names, held or not"
+            );
+            assert!(
+                matches!(
+                    peer.reads(&by_name, &nobody, Scope::Unscoped).await,
+                    Err(WhenceError::Unwitnessed { .. })
+                ),
+                "a witness naming no tree is refused"
+            );
+            let bare = reference("domhringr://b/");
+            assert_eq!(
+                peer.reads(&bare, &nobody, Scope::In(a)).await.unwrap(),
+                BTreeSet::from([a]),
+                "a bare label reads its scope alone"
+            );
+            let within = reference("domhringr://b/x");
+            assert_eq!(
+                peer.reads(&within, &nobody, Scope::In(a)).await.unwrap(),
+                BTreeSet::from([a, b]),
+                "a path under a label reads its scope and the tree introduced"
+            );
+            assert_eq!(
+                peer.reads(&within, &nobody, Scope::In(unheld()))
+                    .await
+                    .unwrap(),
+                BTreeSet::from([unheld()]),
+                "a scope not held names no introduced tree yet"
+            );
+            assert!(
+                matches!(
+                    peer.reads(&within, &nobody, Scope::Unscoped).await,
+                    Err(WhenceError::Unscoped { .. })
+                ),
+                "a label read in no tree is refused"
+            );
+            drop(peer);
+        });
     }
 
     #[test]

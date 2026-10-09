@@ -18,6 +18,8 @@
 //!            | open 0x04 · bytes path (UTF-8) · target · close            Bind
 //!            | open 0x05 · bytes domain (ASCII) · close                   Claim
 //!            | open 0x06 · bytes tree (32) · bytes label (UTF-8) · close  Introduce
+//!            | open 0x07 · endpoint · bytes proof (64) · close            Present
+//!            | open 0x08 · bytes peer (32) · close                        Withdraw
 //! target    := open 0x01 · anchor · close                                 Anchor
 //!            | open 0x02 · bytes endpoint (32) · close                    Endpoint
 //!            | open 0x03 · bytes datum (UTF-8) · close                    Datum
@@ -27,27 +29,43 @@
 //! authority := open 0x01 · bytes tree (32) · close                        Key
 //!            | open 0x02 · bytes domain (ASCII) · close                   Domain
 //!            | open 0x03 · bytes label (UTF-8) · close                    Label
+//! endpoint  := open 0x01 · bytes id (32) · word count · address{count} · close
+//! address   := open 0x01 · bytes ip (4 or 16) · word port · close         Direct
+//!            | open 0x02 · bytes url (UTF-8) · close                      Relay
 //! ```
 //!
 //! A tree, in the receipt's header, as an authority or as the tree
-//! introduced, and an endpoint are ed25519 verifying keys; a commit is its
-//! whole 32-byte id, never a prefix; a path is its segments joined by `/`,
-//! none empty or beginning with `.`; a domain is a DNS name as [`Domain`]
-//! admits it, and a label one as [`Label`] admits it. An anchor is written as
-//! its typed parts, so each part takes the record and the refusal it takes
-//! elsewhere in a receipt.
+//! introduced, and an endpoint are ed25519 verifying keys; a grantee and a
+//! withdrawn peer are 32-byte peer ids; a commit is its whole 32-byte id,
+//! never a prefix; a path is its segments joined by `/`, none empty or
+//! beginning with `.`; a domain is a DNS name as [`Domain`] admits it, and a
+//! label one as [`Label`] admits it. An anchor is written as its typed parts,
+//! so each part takes the record and the refusal it takes elsewhere in a
+//! receipt. A presented endpoint lists its addresses in their order, each
+//! once: direct addresses first, IPv4 before IPv6, by address and then port,
+//! an IPv6 address without flow label or scope id; then relays by the URL's
+//! text, each an `http` or `https` URL written as it parses back and holding
+//! no `@`. A presence carries no time: its commit is when it holds since.
 //!
 //! The decoder admits exactly what the encoder writes, so a receipt has one
 //! blob. A constructor whose tag or payload it does not admit — another
-//! receipt tag or version, an unknown kind, target, anchor or authority, an id
-//! of the wrong length (an abbreviated commit id among them), a tree or
-//! endpoint that is not a verifying key, text that is not UTF-8, a path with
-//! an empty or reserved segment, a malformed domain or label — is refused as
-//! that constructor ([`ValueError::UnexpectedConstructor`] at its open
-//! record): the value plane's refusals name token shapes, and this is the one
-//! that names the constructor a codec turns away.
+//! receipt tag or version, an unknown kind, target, anchor, authority or
+//! address, an id of the wrong length (an abbreviated commit id among them), a
+//! tree or endpoint that is not a verifying key, text that is not UTF-8, a
+//! path with an empty or reserved segment, a malformed domain or label, an IP
+//! address of another length, a port beyond 65535, a relay that is no
+//! canonical `http` or `https` URL or holds `@`, addresses out of order or
+//! repeated — is refused as that constructor
+//! ([`ValueError::UnexpectedConstructor`] at its open record): the value
+//! plane's refusals name token shapes, and this is the one that names the
+//! constructor a codec turns away.
 
+use alloc::collections::BTreeSet;
 use alloc::string::String;
+use core::net::IpAddr;
+use core::net::Ipv4Addr;
+use core::net::Ipv6Addr;
+use core::net::SocketAddr;
 
 use gandr_storage_values::CanonicalValue;
 use gandr_storage_values::CanonicalWord;
@@ -58,6 +76,7 @@ use gandr_storage_values::TokenOffset;
 use gandr_storage_values::TokenReader;
 use gandr_storage_values::TokenSink;
 use gandr_storage_values::ValueError;
+use gandr_storage_values::ValueQuantity;
 use gandr_storage_values::decode_flat;
 use gandr_storage_values::encode_flat;
 use sedimentree_core::blob::Blob;
@@ -68,6 +87,8 @@ use crate::anchor::Anchor;
 use crate::anchor::Authority;
 use crate::anchor::Path;
 use crate::anchor::Target;
+use crate::id::Address;
+use crate::id::Endpoint;
 use crate::id::EndpointKey;
 use crate::id::PeerKey;
 use crate::id::TreeId;
@@ -99,6 +120,12 @@ const CLAIM: u8 = 0x05;
 /// The constructor tag of [`Kind::Introduce`].
 const INTRODUCE: u8 = 0x06;
 
+/// The constructor tag of [`Kind::Present`].
+const PRESENT: u8 = 0x07;
+
+/// The constructor tag of [`Kind::Withdraw`].
+const WITHDRAW: u8 = 0x08;
+
 /// The constructor tag of [`Target::Anchor`].
 const ANCHOR: u8 = 0x01;
 
@@ -126,9 +153,23 @@ const DOMAIN: u8 = 0x02;
 /// The constructor tag of [`Authority::Label`].
 const LABEL: u8 = 0x03;
 
+/// The constructor tag of a presented [`Endpoint`] with its addresses.
+const REACHED: u8 = 0x01;
+
+/// The constructor tag of a direct [`Address`].
+const DIRECT: u8 = 0x01;
+
+/// The constructor tag of a relay [`Address`].
+const RELAY: u8 = 0x02;
+
 /// The domain an Open proof is signed under: the first of the two 32-byte
 /// blocks of the message it signs, the owner's peer key the second.
 const OPEN_PROOF_DOMAIN: [u8; 32] = *b"domhringr record tree open proof";
+
+/// The domain an endpoint proof is signed under: the first of the two 32-byte
+/// blocks of the message the endpoint key signs, the holder's peer key the
+/// second.
+const ENDPOINT_PROOF_DOMAIN: [u8; 32] = *b"domhringr record endpoint holder";
 
 /// An operation's idempotency fence: sixteen bytes drawn at random when the
 /// receipt is made. Two receipts carrying the same fence are one operation.
@@ -218,6 +259,65 @@ impl OpenProof
     }
 }
 
+/// The proof a presence carries: the presented endpoint key's signature
+/// naming the presence's author, so a presence names only an endpoint whose
+/// key its author holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct EndpointProof(iroh::Signature);
+
+impl EndpointProof
+{
+    /// Sign, under the endpoint key `key`, the message naming `holder`.
+    ///
+    /// # Specification
+    /// - ensures: the message is [`ENDPOINT_PROOF_DOMAIN`] followed by
+    ///   `holder`'s 32 bytes, so a proof names one holder and is no signature
+    ///   over any other message this crate signs.
+    /// - panics: none.
+    pub(crate) fn sign(
+        key: &iroh::SecretKey,
+        holder: PeerKey,
+    ) -> Self
+    {
+        let message = [ENDPOINT_PROOF_DOMAIN, *holder.peer_id().as_bytes()];
+        Self(key.sign(message.as_flattened()))
+    }
+
+    /// Check the proof names `holder` under `endpoint`'s key.
+    ///
+    /// # Specification
+    /// - ensures: succeeds iff the proof is the strict ed25519 signature, under
+    ///   `endpoint`'s verifying key, of the message [`EndpointProof::sign`]
+    ///   signs for `holder`.
+    /// - fails: iroh's [`SignatureError`] otherwise.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`SignatureError`]: the proof was made by another key, for another
+    ///   holder, or is no signature.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a presence proved by the presented endpoint's key for
+    ///   its author is admitted; one proved by another endpoint's key, and one
+    ///   the presented endpoint's key made for another member, are each
+    ///   refused.
+    /// - witness: `fold::tests::a_presence_naming_another_members_endpoint_is_refused`
+    ///
+    /// [`SignatureError`]: iroh::SignatureError
+    pub(crate) fn verify(
+        self,
+        endpoint: EndpointKey,
+        holder: PeerKey,
+    ) -> Result<(), iroh::SignatureError>
+    {
+        let message = [ENDPOINT_PROOF_DOMAIN, *holder.peer_id().as_bytes()];
+        endpoint
+            .endpoint_id()
+            .verify(message.as_flattened(), &self.0)
+    }
+}
+
 /// The transition a receipt records.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind
@@ -264,6 +364,21 @@ pub enum Kind
         tree: TreeId,
         /// The petname it is introduced by.
         label: Label,
+    },
+    /// The author presents `endpoint` as where it is reached, from this
+    /// receipt's commit until the record withdraws or supersedes it.
+    Present
+    {
+        /// The endpoint presented, with its addresses.
+        endpoint: Endpoint,
+        /// The endpoint key's proof naming the author its holder.
+        proof: EndpointProof,
+    },
+    /// The author withdraws the presence of `of`.
+    Withdraw
+    {
+        /// The member whose presence is withdrawn.
+        of: PeerKey,
     },
 }
 
@@ -431,6 +546,53 @@ impl Receipt
         }))
     }
 
+    /// A fresh [`Kind::Present`] in `tree` of `endpoint`, carrying `proof`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the presence of `endpoint`
+    ///   proved by `proof`, and carries a fresh fence ([`Operation::random`]);
+    ///   the fold admits it only from a member whose key `proof` names under
+    ///   the endpoint's key.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    pub(crate) fn present(
+        tree: TreeId,
+        endpoint: Endpoint,
+        proof: EndpointProof,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Present {
+            endpoint,
+            proof,
+        }))
+    }
+
+    /// A fresh [`Kind::Withdraw`] in `tree` of the presence of `of`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the withdrawal of `of`'s
+    ///   presence, and carries a fresh fence ([`Operation::random`]); the fold
+    ///   admits it from the tree's owner, and from a member for its own
+    ///   presence.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn withdraw(
+        tree: TreeId,
+        of: PeerKey,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Withdraw { of }))
+    }
+
     /// The tree the receipt names.
     ///
     /// # Specification
@@ -521,9 +683,14 @@ impl Receipt
     ///   unknown target, anchor and authority, an endpoint that is not a key,
     ///   an abbreviated commit id, a key authority that is not a key, a
     ///   malformed domain or label as authority and in a claim or an
-    ///   introduction, an introduced tree that is not a key, and an extra
-    ///   payload each meet their own refusal, beside the round trip of every
-    ///   kind, every target and every anchor under every authority.
+    ///   introduction, an introduced tree that is not a key, a presented
+    ///   endpoint that is not a key or has a short proof, an unknown address,
+    ///   an IP address of another length, a port beyond 65535, a relay that is
+    ///   not UTF-8, not canonical, of another scheme or holding `@`, addresses
+    ///   out of order or repeated, a count above or below the addresses given,
+    ///   a short withdrawn peer, and an extra payload each meet their own
+    ///   refusal, beside the round trip of every kind, every target, every
+    ///   anchor under every authority and a presence with every address form.
     /// - witness: `receipt::tests::every_kind_round_trips`
     /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     pub(crate) fn decode(blob: &Blob) -> Result<Self, ValueError>
@@ -547,12 +714,13 @@ impl CanonicalValue for Receipt
     /// - [`ValueError`]: the sink refused a record.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — the flat forms of a note, a bind, a claim and an
-    ///   introduction are compared byte for byte with records written
-    ///   independently, and every kind round-trips.
+    /// - hypothesis: L3 — the flat forms of a note, a bind, a claim, an
+    ///   introduction, a presence and a withdrawal are compared byte for byte
+    ///   with records written independently, and every kind round-trips.
     /// - witness: `receipt::tests::a_note_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_bind_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_claim_and_an_introduction_encode_to_their_fixed_layouts`
+    /// - witness: `receipt::tests::a_presence_and_a_withdrawal_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::every_kind_round_trips`
     #[inline]
     fn emit_tokens<Sink>(
@@ -599,6 +767,18 @@ impl CanonicalValue for Receipt
                 let label: &str = label.as_ref();
                 sink.bytes(TokenBytes::from(label.as_bytes()))?;
             },
+            | Kind::Present {
+                ref endpoint,
+                proof,
+            } => {
+                sink.open(ConstructorTag::from(PRESENT))?;
+                endpoint.emit_tokens(sink)?;
+                sink.bytes(TokenBytes::from(proof.0.to_bytes().as_slice()))?;
+            },
+            | Kind::Withdraw { of } => {
+                sink.open(ConstructorTag::from(WITHDRAW))?;
+                sink.bytes(TokenBytes::from(of.peer_id().as_bytes().as_slice()))?;
+            },
         }
         sink.close()?;
         sink.close()
@@ -616,10 +796,11 @@ impl CanonicalValue for Receipt
     ///   the wrong length, text that is not UTF-8, a path that is not UTF-8 or
     ///   has an empty or reserved segment, a domain that is not a DNS name
     ///   [`Domain`] admits, an introduced tree of the wrong length or that is
-    ///   not a verifying key, or a label that is not UTF-8 or not one [`Label`]
-    ///   admits; as [`Target`]'s decoder refuses for a bind's target; and the
-    ///   reader's own refusals for a record of the wrong kind, a truncated
-    ///   stream or an exhausted budget.
+    ///   not a verifying key, a label that is not UTF-8 or not one [`Label`]
+    ///   admits, a presence's proof or a withdrawn peer of the wrong length; as
+    ///   [`Target`]'s decoder refuses for a bind's target and [`Endpoint`]'s
+    ///   for a presented endpoint; and the reader's own refusals for a record
+    ///   of the wrong kind, a truncated stream or an exhausted budget.
     /// - panics: none.
     ///
     /// # Errors
@@ -678,6 +859,23 @@ impl CanonicalValue for Receipt
                 Kind::Introduce {
                     tree: TreeId::new(tree),
                     label,
+                }
+            },
+            | PRESENT => {
+                let endpoint = Endpoint::decode_tokens(reader)?;
+                let proof = <&[u8]>::from(reader.read_bytes()?);
+                let proof =
+                    <[u8; 64]>::try_from(proof).map_err(|_wrong_length| opened.refused())?;
+                Kind::Present {
+                    endpoint,
+                    proof: EndpointProof(iroh::Signature::from_bytes(&proof)),
+                }
+            },
+            | WITHDRAW => {
+                let of = <&[u8]>::from(reader.read_bytes()?);
+                let of = <[u8; 32]>::try_from(of).map_err(|_wrong_length| opened.refused())?;
+                Kind::Withdraw {
+                    of: PeerKey::new(PeerId::new(of)),
                 }
             },
             | _unknown => return Err(opened.refused()),
@@ -976,6 +1174,199 @@ impl CanonicalValue for Authority
     }
 }
 
+impl CanonicalValue for Endpoint
+{
+    /// Walk the presented endpoint into `sink` in the module grammar's order.
+    ///
+    /// # Specification
+    /// - ensures: on success `sink` received exactly one balanced value: the
+    ///   endpoint's constructor holding its id's 32 bytes, the count of its
+    ///   addresses, and each address's value in order.
+    /// - fails: propagates the sink's refusal unchanged, and the value plane's
+    ///   overflow refusal for more addresses than a word counts.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: the sink refused a record.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a presence of an endpoint at an IPv4, an IPv6 and a
+    ///   relay address is compared byte for byte with records written
+    ///   independently, and presences with no address and with every address
+    ///   form round-trip.
+    /// - witness: `receipt::tests::a_presence_and_a_withdrawal_encode_to_their_fixed_layouts`
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    #[inline]
+    fn emit_tokens<Sink>(
+        &self,
+        sink: &mut Sink,
+    ) -> Result<(), ValueError>
+    where
+        Sink: TokenSink + ?Sized,
+    {
+        sink.open(ConstructorTag::from(REACHED))?;
+        sink.bytes(TokenBytes::from(
+            self.key().endpoint_id().as_bytes().as_slice(),
+        ))?;
+        let count = u64::try_from(self.addresses().len()).map_err(|_too_many| {
+            ValueError::ArithmeticOverflow {
+                quantity: ValueQuantity::TokenCount,
+            }
+        })?;
+        sink.word(CanonicalWord::from(count))?;
+        for address in self.addresses() {
+            address.emit_tokens(sink)?;
+        }
+        sink.close()
+    }
+
+    /// Read one presented endpoint from `reader`.
+    ///
+    /// # Specification
+    /// - ensures: on success the endpoint whose emission the records are, and
+    ///   the reader stands after the endpoint's close.
+    /// - fails: [`ValueError::UnexpectedConstructor`] at the endpoint's open
+    ///   record for another tag, an id of the wrong length or that is not a
+    ///   verifying key, or an address not after the one before it in order —
+    ///   out of order or repeated; as [`Address`]'s decoder refuses for an
+    ///   address; and the reader's own refusals for fewer addresses than the
+    ///   count, more, or any other record.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — witnessed through the receipt decoder: presences with
+    ///   no address and with every address form round-trip, and an unknown
+    ///   endpoint tag, an id that is not a key, two addresses out of order, a
+    ///   repeated address, a count above and one below the addresses given each
+    ///   meet their own refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    #[inline]
+    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    {
+        let opened = Opened::read(reader)?;
+        if u8::from(opened.tag) != REACHED {
+            return Err(opened.refused());
+        }
+        let key = opened.key(reader)?;
+        let count = u64::from(reader.read_word()?);
+        let mut addresses = BTreeSet::new();
+        for _place in 0 .. count {
+            let address = Address::decode_tokens(reader)?;
+            if addresses.last().is_some_and(|last| *last >= address) {
+                return Err(opened.refused());
+            }
+            let _was_held = addresses.insert(address);
+        }
+        reader.read_close()?;
+        Ok(Self::from_parts(EndpointKey::new(key), addresses))
+    }
+}
+
+impl CanonicalValue for Address
+{
+    /// Walk the address into `sink` in the module grammar's order.
+    ///
+    /// # Specification
+    /// - ensures: on success `sink` received exactly one balanced value: a
+    ///   direct address's constructor holding the IP address's 4 or 16 bytes
+    ///   and the port's word, or a relay's holding the URL's text.
+    /// - fails: propagates the sink's refusal unchanged.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: the sink refused a record.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — an IPv4, an IPv6 and a relay address are compared
+    ///   byte for byte with records written independently.
+    /// - witness: `receipt::tests::a_presence_and_a_withdrawal_encode_to_their_fixed_layouts`
+    #[inline]
+    fn emit_tokens<Sink>(
+        &self,
+        sink: &mut Sink,
+    ) -> Result<(), ValueError>
+    where
+        Sink: TokenSink + ?Sized,
+    {
+        match *self {
+            | Self::Direct(direct) => {
+                sink.open(ConstructorTag::from(DIRECT))?;
+                match direct.ip() {
+                    | IpAddr::V4(ip) => sink.bytes(TokenBytes::from(ip.octets().as_slice()))?,
+                    | IpAddr::V6(ip) => sink.bytes(TokenBytes::from(ip.octets().as_slice()))?,
+                }
+                sink.word(CanonicalWord::from(u64::from(direct.port())))?;
+            },
+            | Self::Relay(ref url) => {
+                sink.open(ConstructorTag::from(RELAY))?;
+                sink.bytes(TokenBytes::from(url.as_str().as_bytes()))?;
+            },
+        }
+        sink.close()
+    }
+
+    /// Read one address from `reader`.
+    ///
+    /// # Specification
+    /// - ensures: on success the address whose emission the records are, and
+    ///   the reader stands after the address's close.
+    /// - fails: [`ValueError::UnexpectedConstructor`] at the address's open
+    ///   record for an unknown address, an IP address of any length but 4 or 16
+    ///   bytes, a port beyond 65535, or a relay that is not UTF-8, not a URL
+    ///   written as it parses back, or one [`Address::relay`] refuses; and the
+    ///   reader's own refusals otherwise.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — witnessed through the receipt decoder: every address
+    ///   form round-trips, and an unknown address, a 5-byte IP address, port
+    ///   65536, and a relay that is not UTF-8, not canonical, of the `ftp`
+    ///   scheme or holding `@` each meet their own refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    #[inline]
+    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    {
+        let opened = Opened::read(reader)?;
+        let address = match u8::from(opened.tag) {
+            | DIRECT => {
+                let ip = <&[u8]>::from(reader.read_bytes()?);
+                let ip = if let Ok(v4) = <[u8; 4]>::try_from(ip) {
+                    IpAddr::V4(Ipv4Addr::from(v4))
+                }
+                else {
+                    let v6 = <[u8; 16]>::try_from(ip).map_err(|_wrong_length| opened.refused())?;
+                    IpAddr::V6(Ipv6Addr::from(v6))
+                };
+                let port = u64::from(reader.read_word()?);
+                let port = u16::try_from(port).map_err(|_beyond_a_port| opened.refused())?;
+                Self::Direct(SocketAddr::new(ip, port))
+            },
+            | RELAY => {
+                let text = <&[u8]>::from(reader.read_bytes()?);
+                let text = core::str::from_utf8(text).map_err(|_not_utf8| opened.refused())?;
+                let url = text
+                    .parse::<iroh::RelayUrl>()
+                    .map_err(|_not_a_url| opened.refused())?;
+                if url.as_str() != text {
+                    return Err(opened.refused());
+                }
+                Self::relay(url).map_err(|_not_a_relay| opened.refused())?
+            },
+            | _unknown => return Err(opened.refused()),
+        };
+        reader.read_close()?;
+        Ok(address)
+    }
+}
+
 /// A constructor's open record, as the receipt decoder read it.
 #[derive(Clone, Copy, Debug)]
 struct Opened
@@ -1141,6 +1532,9 @@ mod tests
 {
     use alloc::string::String;
     use alloc::vec::Vec;
+    use core::net::Ipv4Addr;
+    use core::net::Ipv6Addr;
+    use core::net::SocketAddr;
 
     use gandr_storage_values::ConstructorTag;
     use gandr_storage_values::TokenKind;
@@ -1149,12 +1543,14 @@ mod tests
     use sedimentree_core::blob::Blob;
     use sedimentree_core::loose_commit::id::CommitId;
 
+    use super::EndpointProof;
     use super::Kind;
     use super::Operation;
     use super::Receipt;
     use crate::anchor::Anchor;
     use crate::anchor::Authority;
     use crate::anchor::Target;
+    use crate::id::Endpoint;
     use crate::id::EndpointKey;
     use crate::id::PeerKey;
     use crate::id::TreeId;
@@ -1214,7 +1610,21 @@ mod tests
                 elsewhere_key().tree(),
             )
             .unwrap(),
+            Receipt::withdraw(tree(), peer).unwrap(),
         ];
+        let secret = iroh::SecretKey::from_bytes(&[7; 32]);
+        let proof = EndpointProof::sign(&secret, peer);
+        for presented in [
+            Endpoint::new(endpoint),
+            Endpoint::new(endpoint)
+                .with_direct(SocketAddr::from((Ipv4Addr::LOCALHOST, 5)))
+                .with_direct(SocketAddr::from((Ipv6Addr::LOCALHOST, 9))),
+            format!("{endpoint}@https://relay.example.org@[2001:db8::1]:65535")
+                .parse()
+                .unwrap(),
+        ] {
+            receipts.push(Receipt::present(tree(), presented, proof).unwrap());
+        }
         for target in targets {
             let path = "concept/sub concept/größe".parse().unwrap();
             receipts.push(Receipt::bind(tree(), path, target).unwrap());
@@ -1393,6 +1803,70 @@ mod tests
     }
 
     #[test]
+    fn a_presence_and_a_withdrawal_encode_to_their_fixed_layouts()
+    {
+        let bytes = |payload: &[u8]| {
+            let length = u64::try_from(payload.len()).unwrap().to_le_bytes();
+            [&[0x03_u8][..], &length, payload].concat()
+        };
+        let word = |value: u64| [&[0x02_u8][..], &value.to_le_bytes()].concat();
+        let header = || {
+            let mut header = vec![0x01_u8, 0x01];
+            header.extend(word(2));
+            header.extend(bytes(tree().key().as_bytes()));
+            header.extend(bytes(&[0x0f; 16]));
+            header
+        };
+        let key = EndpointKey::new(iroh::SecretKey::from_bytes(&[7; 32]).public());
+        let endpoint = format!("{key}@https://relay.example.org/@[::1]:9@127.0.0.1:5")
+            .parse::<Endpoint>()
+            .unwrap();
+        let presence = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Present {
+            endpoint,
+            proof: EndpointProof(iroh::Signature::from_bytes(&[0x70; 64])),
+        });
+        let expected = [
+            header(),
+            vec![0x01, 0x07, 0x01, 0x01],
+            bytes(key.endpoint_id().as_bytes()),
+            word(3),
+            vec![0x01, 0x01],
+            bytes(&[127, 0, 0, 1]),
+            word(5),
+            vec![0x05, 0x01, 0x01],
+            bytes(&Ipv6Addr::LOCALHOST.octets()),
+            word(9),
+            vec![0x05, 0x01, 0x02],
+            bytes(b"https://relay.example.org/"),
+            vec![0x05, 0x05],
+            bytes(&[0x70; 64]),
+            vec![0x05, 0x05],
+        ]
+        .concat();
+        assert_eq!(
+            presence.encode().unwrap().as_slice(),
+            expected.as_slice(),
+            "open receipt, version word, tree, fence, open present, open endpoint, id, count, \
+             the IPv4, the IPv6 and the relay address each opened and closed in order, close, \
+             proof, two closes"
+        );
+        let peer = PEER.parse::<PeerKey>().unwrap();
+        let withdrawal = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Withdraw { of: peer });
+        let expected = [
+            header(),
+            vec![0x01, 0x08],
+            bytes(peer.peer_id().as_bytes()),
+            vec![0x05, 0x05],
+        ]
+        .concat();
+        assert_eq!(
+            withdrawal.encode().unwrap().as_slice(),
+            expected.as_slice(),
+            "open receipt, version word, tree, fence, open withdraw, peer, two closes"
+        );
+    }
+
+    #[test]
     fn a_malformed_blob_is_refused_by_name()
     {
         let open = |tag: u8| vec![0x01_u8, tag];
@@ -1539,8 +2013,8 @@ mod tests
         receipt[3] = bytes(&[0x0f; 17]);
         assert_eq!(refused(&receipt), Err(constructor(1, 0)), "a long fence");
         let mut receipt = note(b"hi");
-        receipt[4] = open(7);
-        assert_eq!(refused(&receipt), Err(constructor(7, 4)), "an unknown kind");
+        receipt[4] = open(9);
+        assert_eq!(refused(&receipt), Err(constructor(9, 4)), "an unknown kind");
         let mut receipt = note(b"hi");
         receipt[4] = open(1);
         receipt[5] = bytes(&[0x70; 63]);
@@ -1696,6 +2170,130 @@ mod tests
             refused(&receipt),
             Err(ValueError::TrailingTokens { position: at(8) }),
             "a record after the receipt"
+        );
+        let endpoint = *iroh::SecretKey::from_bytes(&[7; 32]).public().as_bytes();
+        let reached = |id: &[u8], count: u64, addresses: Vec<Vec<u8>>| {
+            let mut records = vec![open(1), bytes(id), word(count)];
+            records.extend(addresses);
+            records.push(close());
+            records
+        };
+        let present = |presented: Vec<Vec<u8>>, proof: &[u8]| {
+            let mut records = vec![open(1), word(2), bytes(&tree), bytes(&fence), open(7)];
+            records.extend(presented);
+            records.extend([bytes(proof), close(), close()]);
+            records
+        };
+        let direct = |ip: &[u8], port: u64| vec![open(1), bytes(ip), word(port), close()];
+        let relay = |url: &[u8]| vec![open(2), bytes(url), close()];
+        let at_one = |address: Vec<Vec<u8>>| present(reached(&endpoint, 1, address), &[0x70; 64]);
+        assert!(
+            refused(&present(
+                reached(
+                    &endpoint,
+                    2,
+                    [direct(&[127, 0, 0, 1], 5), relay(b"https://a.example/")].concat()
+                ),
+                &[0x70; 64]
+            ))
+            .is_ok(),
+            "the well-formed presence decodes"
+        );
+        assert_eq!(
+            refused(&present(
+                [vec![open(2)], reached(&endpoint, 0, vec![]).split_off(1)].concat(),
+                &[0x70; 64]
+            )),
+            Err(constructor(2, 5)),
+            "an unknown endpoint"
+        );
+        for id in [&endpoint[.. 31], &not_a_key] {
+            assert_eq!(
+                refused(&present(reached(id, 0, vec![]), &[0x70; 64])),
+                Err(constructor(1, 5)),
+                "a presented endpoint that is short or not a verifying key"
+            );
+        }
+        assert_eq!(
+            refused(&present(reached(&endpoint, 0, vec![]), &[0x70; 63])),
+            Err(constructor(7, 4)),
+            "a short endpoint proof"
+        );
+        assert_eq!(
+            refused(&at_one(vec![open(3), bytes(b"x"), close()])),
+            Err(constructor(3, 8)),
+            "an unknown address"
+        );
+        // One past the largest port, 65535.
+        let beyond = 0x0001_0000_u64;
+        for (ip, port) in [(&[127_u8, 0, 0, 1, 0][..], 5), (&[127, 0, 0, 1], beyond)] {
+            assert_eq!(
+                refused(&at_one(direct(ip, port))),
+                Err(constructor(1, 8)),
+                "the IP address {ip:?} is of another length or the port {port} beyond a port"
+            );
+        }
+        for url in [
+            &[0x68, 0xff][..],
+            b"https://a.example",
+            b"ftp://a.example/",
+            b"https://user@a.example/",
+            b"nowhere",
+        ] {
+            assert_eq!(
+                refused(&at_one(relay(url))),
+                Err(constructor(2, 8)),
+                "the relay {url:?} is not UTF-8, not canonical, of another scheme, holds @ or is \
+                 no URL"
+            );
+        }
+        let first = direct(&[127, 0, 0, 1], 5);
+        for (addresses, case) in [
+            (
+                [relay(b"https://a.example/"), first.clone()].concat(),
+                "out of order",
+            ),
+            ([first.clone(), first.clone()].concat(), "repeated"),
+        ] {
+            assert_eq!(
+                refused(&present(reached(&endpoint, 2, addresses), &[0x70; 64])),
+                Err(constructor(1, 5)),
+                "addresses {case}"
+            );
+        }
+        assert!(
+            matches!(
+                refused(&present(reached(&endpoint, 2, first.clone()), &[0x70; 64])),
+                Err(ValueError::UnexpectedToken {
+                    found: TokenKind::Close,
+                    position,
+                    ..
+                }) if position == at(12)
+            ),
+            "a count above the addresses given"
+        );
+        assert_eq!(
+            refused(&present(reached(&endpoint, 0, first), &[0x70; 64])),
+            Err(ValueError::UnexpectedToken {
+                expected: TokenKind::Close,
+                found: TokenKind::Open,
+                position: at(8),
+            }),
+            "a count below the addresses given"
+        );
+        assert_eq!(
+            refused(&[
+                open(1),
+                word(2),
+                bytes(&tree),
+                bytes(&fence),
+                open(8),
+                bytes(&[0x70; 31]),
+                close(),
+                close(),
+            ]),
+            Err(constructor(8, 4)),
+            "a short withdrawn peer"
         );
     }
 }

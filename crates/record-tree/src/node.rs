@@ -1,12 +1,14 @@
 //! A peer bound to an iroh endpoint: reached by endpoint id, accepting
-//! connections, and dialing other peers to sync a tree.
+//! connections, presenting its endpoint in a tree, and dialing other peers to
+//! sync a tree.
 //!
 //! The endpoint uses n0's preset (relay, DNS address publishing and lookup)
 //! plus mDNS address lookup, so a peer is reached by its endpoint id alone:
 //! on the LAN through mDNS and direct addresses, across networks through the
-//! relay and DNS. A dialer that knows the remote's direct address names it
-//! ([`Address::Direct`]) and does not wait on the lookups. Each connection
-//! reports the network path iroh selected for it ([`SelectedPath`]).
+//! relay and DNS. A dialer that knows the remote's addresses — from a
+//! presence in the tree's book, or named by hand — names them in the dial
+//! ([`Endpoint`]) and does not wait on the lookups. Each connection reports
+//! the network path iroh selected for it ([`SelectedPath`]).
 
 use core::convert::Infallible;
 use core::fmt;
@@ -20,6 +22,7 @@ use core::str::FromStr;
 use core::time::Duration;
 
 use futures::StreamExt as _;
+use sedimentree_core::loose_commit::id::CommitId;
 use subduction_core::connection::managed::CallError;
 use subduction_core::connection::message::SyncMessage;
 use subduction_core::handshake::MAX_PLAUSIBLE_DRIFT;
@@ -32,11 +35,15 @@ use subduction_iroh::error::DisconnectionError;
 use subduction_iroh::error::SendError;
 use subduction_redb_storage::RedbStorage;
 
-use crate::id::Address;
+use crate::id::Endpoint;
 use crate::id::EndpointKey;
 use crate::id::PeerKey;
 use crate::id::RemotePeer;
 use crate::id::TreeId;
+use crate::receipt::EndpointProof;
+use crate::receipt::RandomError;
+use crate::receipt::Receipt;
+use crate::store::CommitError;
 use crate::store::Heads;
 use crate::store::HeadsError;
 use crate::store::Peer;
@@ -51,6 +58,14 @@ type EngineIoError = IoError<future_form::Sendable, RedbStorage, Transport, Sync
 /// path about two seconds into the round, and in some dials not at all; five
 /// seconds covers the first without holding the second open long.
 const SETTLE: Duration = Duration::from_secs(5);
+
+/// How long a peer presenting its endpoint waits for it to reach its home
+/// relay before it reads the endpoint's addresses. Right after binding,
+/// iroh as published names the local interface addresses alone; once the
+/// endpoint reaches a relay, about half a second in, it adds the relay and
+/// the address the relay saw. An endpoint that reaches no relay — offline,
+/// or the relay blocked — is presented at what it has once this elapses.
+const ONLINE: Duration = Duration::from_secs(5);
 
 impl Peer
 {
@@ -464,13 +479,57 @@ impl Node
         })
     }
 
-    /// Dial `remote` by endpoint id, at its direct address when it names one,
-    /// batch-sync `tree` with it, and disconnect.
+    /// Commit this node's endpoint, at its current addresses, as its presence
+    /// in `tree`.
     ///
     /// # Specification
-    /// - ensures: the dial's endpoint address is `remote`'s endpoint id, with
-    ///   its direct address when it names one ([`Address::Direct`]), so such a
-    ///   dial does not wait on address lookup; iroh's lookups run beside it.
+    /// - ensures: waits until the endpoint has reached its home relay or
+    ///   [`ONLINE`] has elapsed, whichever comes first, then commits to `tree`
+    ///   a presence of the endpoint at the addresses iroh then names for it
+    ///   ([`Endpoint::of`]), proved by the endpoint key for this peer's key
+    ///   ([`EndpointProof::sign`]), under a fresh operation fence; returns the
+    ///   commit's id, which is the presence's `since`.
+    /// - ensures: the presence is the one [`View::book`] offers for this peer
+    ///   once the fold admits it: from the owner or a member, which it is when
+    ///   this peer holds the tree's authority.
+    /// - fails: [`PresentError::Random`] when no fence can be drawn and
+    ///   [`PresentError::Commit`] when the commit cannot be appended.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`PresentError::Random`]: the random source failed.
+    /// - [`PresentError::Commit`]: the commit cannot be appended.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a bound peer presents itself in a tree it owns, and
+    ///   the book then offers its endpoint id at the presenting commit, with at
+    ///   least the address a dial on this host reaches; a second peer dialing
+    ///   it through that presence syncs.
+    /// - witness: `node::tests::a_peer_reached_through_its_presence_syncs`
+    ///
+    /// [`View::book`]: crate::fold::View::book
+    #[inline]
+    pub async fn present(
+        &self,
+        tree: TreeId,
+    ) -> Result<CommitId, PresentError>
+    {
+        let _online = tokio::time::timeout(ONLINE, self.endpoint.online()).await;
+        let endpoint = Endpoint::of(&self.endpoint.addr());
+        let identity = self.peer.identity();
+        let proof = EndpointProof::sign(identity.endpoint_secret(), identity.peer_key());
+        let receipt = Receipt::present(tree, endpoint, proof)?;
+        let commit = self.peer.commit(tree, receipt).await?;
+        Ok(commit)
+    }
+
+    /// Dial `remote` at the endpoint it names, batch-sync `tree` with it, and
+    /// disconnect.
+    ///
+    /// # Specification
+    /// - ensures: the dial's endpoint address is `remote`'s endpoint with every
+    ///   address it names, so a dial naming one does not wait on address
+    ///   lookup; iroh's lookups run beside it.
     /// - ensures: on success the remote proved it holds `remote`'s peer key;
     ///   every commit the remote held for `tree` when it answered is durable in
     ///   this peer's store; the connection is closed; returns this peer's heads
@@ -509,10 +568,12 @@ impl Node
     ///   dialer's heads after a sync at the remote's direct address are
     ///   compared exactly with the union of both frontiers, which a pull that
     ///   dropped either side, or one that skipped storage, would not produce; a
-    ///   dial naming the wrong peer key is refused as a connect failure,
-    ///   whether looked up or direct; the dialer reports a selected path.
+    ///   dial naming the wrong peer key is refused as a connect failure; the
+    ///   dialer reports a selected path; a dial at the addresses the remote's
+    ///   presence names syncs.
     /// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
     /// - witness: `node::tests::a_dialer_naming_another_peer_is_refused`
+    /// - witness: `node::tests::a_peer_reached_through_its_presence_syncs`
     #[inline]
     pub async fn sync(
         &self,
@@ -521,11 +582,7 @@ impl Node
     ) -> Result<Synced, SyncError>
     {
         let peer = remote.peer().peer_id();
-        let address = iroh::EndpointAddr::from(remote.endpoint().endpoint_id());
-        let address = match remote.address() {
-            | Address::Lookup => address,
-            | Address::Direct(direct) => address.with_ip_addr(direct),
-        };
+        let address = remote.endpoint().addr();
         let connected = subduction_iroh::client::connect(
             &self.endpoint,
             address,
@@ -592,6 +649,18 @@ pub enum BindError
     Endpoint(#[source] iroh::endpoint::BindError),
 }
 
+/// Why a peer cannot present its endpoint.
+#[derive(Debug, thiserror::Error)]
+pub enum PresentError
+{
+    /// No operation fence can be drawn for the presence.
+    #[error(transparent)]
+    Random(#[from] RandomError),
+    /// The presence cannot be committed.
+    #[error(transparent)]
+    Commit(#[from] CommitError),
+}
+
 /// Why a text is not a UDP port.
 #[derive(Debug, thiserror::Error)]
 #[error("a port is a decimal number from 1 through 65535")]
@@ -656,11 +725,14 @@ mod tests
     use super::SelectedPath;
     use super::SyncError;
     use super::UdpPort;
-    use crate::id::Address;
+    use crate::id::Endpoint;
     use crate::id::RemotePeer;
     use crate::id::TreeId;
     use crate::identity::Identity;
     use crate::identity::StateDir;
+    use crate::presence::Aim;
+    use crate::presence::At;
+    use crate::presence::Route;
     use crate::receipt::Receipt;
     use crate::store::Peer;
     use crate::testing::runtime;
@@ -715,16 +787,17 @@ mod tests
         node.peer().commit(tree, receipt).await.unwrap()
     }
 
-    /// `node`'s direct address on this host: the loopback address at its
-    /// IPv4 socket's port.
+    /// `node`'s endpoint at its direct address on this host: the loopback
+    /// address at its IPv4 socket's port.
     ///
     /// # Specification
     /// trivial.
-    fn direct(node: &Node) -> Address
+    fn direct(node: &Node) -> Endpoint
     {
         let sockets = node.endpoint.bound_sockets();
         let ipv4 = sockets.iter().find(|socket| socket.is_ipv4()).unwrap();
-        Address::Direct(SocketAddr::from((Ipv4Addr::LOCALHOST, ipv4.port())))
+        Endpoint::new(node.endpoint_key())
+            .with_direct(SocketAddr::from((Ipv4Addr::LOCALHOST, ipv4.port())))
     }
 
     #[test]
@@ -739,8 +812,7 @@ mod tests
             commit(&a, tree, "a1".into()).await;
             let a2 = commit(&a, tree, "a2".into()).await;
             let b1 = commit(&b, tree, "b1".into()).await;
-            let remote =
-                RemotePeer::new(a.endpoint_key(), a.peer().identity().peer_key(), direct(&a));
+            let remote = RemotePeer::new(direct(&a), a.peer().identity().peer_key());
             let synced = b.sync(&remote, tree).await.unwrap();
             let mut expected = vec![a2, b1];
             expected.sort();
@@ -778,7 +850,7 @@ mod tests
             serve(&a);
             commit(&a, tree, "a1".into()).await;
             let impostor = b.peer().identity().peer_key();
-            let remote = RemotePeer::new(a.endpoint_key(), impostor, direct(&a));
+            let remote = RemotePeer::new(direct(&a), impostor);
             let refused = b.sync(&remote, tree).await;
             assert!(
                 matches!(refused, Err(SyncError::Connect(_))),
@@ -788,6 +860,67 @@ mod tests
                 b.peer().heads(tree).await.unwrap().iter().count(),
                 0,
                 "nothing was synced"
+            );
+            b.close().await;
+            drop(b);
+            a.close().await;
+            drop(a);
+        });
+    }
+
+    #[test]
+    fn a_peer_reached_through_its_presence_syncs()
+    {
+        let (root_a, root_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let key = tree_key();
+        let tree = key.tree();
+        runtime().block_on(async {
+            let a = Arc::new(bound(&root_a, BindPort::Ephemeral).await);
+            let b = bound(&root_b, BindPort::Ephemeral).await;
+            serve(&a);
+            let owner = a.peer().identity().peer_key();
+            a.peer()
+                .commit(tree, Receipt::open(&key, owner).unwrap())
+                .await
+                .unwrap();
+            let presented = a.present(tree).await.unwrap();
+            let view = a.peer().view(tree).await.unwrap();
+            let presence = view.book().get(&owner).unwrap();
+            assert_eq!(
+                presence.since(),
+                presented,
+                "the presence holds since the commit that presented it"
+            );
+            assert_eq!(
+                presence.endpoint().key(),
+                a.endpoint_key(),
+                "a peer presents its own endpoint"
+            );
+            assert!(
+                !presence.endpoint().addresses().is_empty(),
+                "the presence names where the endpoint is reached: {}",
+                presence.endpoint()
+            );
+            b.sync(&RemotePeer::new(direct(&a), owner), tree)
+                .await
+                .unwrap();
+            let later = commit(&a, tree, "after the presence".into()).await;
+            let route = b.peer().route(tree, Aim::Owner, At::Book).await.unwrap();
+            let Route::Book { remote, since } = route
+            else {
+                panic!("the synced book holds the owner's presence: {route:?}");
+            };
+            assert_eq!(since, presented, "the route names the presenting commit");
+            assert_eq!(
+                remote.endpoint(),
+                presence.endpoint(),
+                "the route dials the endpoint as presented"
+            );
+            let synced = b.sync(&remote, tree).await.unwrap();
+            assert_eq!(
+                synced.heads().iter().copied().collect::<Vec<_>>(),
+                [later],
+                "a dial at the presented endpoint syncs what the owner committed since"
             );
             b.close().await;
             drop(b);

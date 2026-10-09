@@ -34,6 +34,7 @@ use crate::line::Field;
 use crate::line::OneLine;
 use crate::name::Domain;
 use crate::name::Label;
+use crate::presence::Presence;
 use crate::receipt::Kind;
 use crate::receipt::Operation;
 use crate::receipt::Receipt;
@@ -41,8 +42,8 @@ use crate::receipt::Receipt;
 /// What a peer makes of a tree.
 ///
 /// Its owner, the peers granted write authority, the admitted notes, the paths
-/// bound, the DNS names claimed, the trees introduced, the commits admitted,
-/// and the commits refused.
+/// bound, the DNS names claimed, the trees introduced, the book of who is
+/// reachable at which endpoint, the commits admitted, and the commits refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View
 {
@@ -60,6 +61,9 @@ pub struct View
     /// Each introduced label's introduction: the admitted introduction last in
     /// canonical order, its author and the tree it names.
     introductions: BTreeMap<Label, (PeerKey, TreeId)>,
+    /// Each present author's presence: the admitted presence last in
+    /// canonical order, unless an admitted withdrawal follows it.
+    book: BTreeMap<PeerKey, Presence>,
     /// The admitted commits' ids.
     admitted: BTreeSet<CommitId>,
     /// The refused commits and why, in canonical order.
@@ -235,6 +239,33 @@ impl View
         &self.introductions
     }
 
+    /// The book: each present author's presence — the endpoint it is reached
+    /// at and the commit that presented it — in key order.
+    ///
+    /// # Specification
+    /// - ensures: an author is in the book iff the fold admitted a presence of
+    ///   it, and no withdrawal of it was admitted later in canonical order; its
+    ///   entry is the presence admitted last. A withdrawn or superseded
+    ///   presence is absent, and an author never presented is absent; no entry
+    ///   is a default.
+    /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a presence later superseded by its author, and one
+    ///   withdrawn by the owner or by its author, are read back absent or
+    ///   replaced, while refused presences and withdrawals leave the book as it
+    ///   was.
+    /// - witness: `fold::tests::the_later_presence_of_an_author_wins`
+    /// - witness: `fold::tests::the_book_after_a_withdrawal_does_not_offer_the_endpoint`
+    /// - witness: `fold::tests::the_owner_withdraws_a_members_presence`
+    /// - witness: `fold::tests::a_member_cannot_withdraw_the_owners_presence`
+    #[inline]
+    #[must_use]
+    pub const fn book(&self) -> &BTreeMap<PeerKey, Presence>
+    {
+        &self.book
+    }
+
     /// The refused commits and why, in canonical order.
     ///
     /// # Specification
@@ -254,8 +285,10 @@ impl fmt::Display for View
     /// `bind <path> <target>` per bound path in path order, one `claim
     /// <domain>` per claimed name in name order, one `introduce <label>
     /// <anchor>` per introduced label in label order, the anchor the
-    /// introduced tree's key form, and one `refused <commit> <reason>` per
-    /// refusal in canonical order.
+    /// introduced tree's key form, one `present <key> <endpoint> <commit>` per
+    /// author in the book in key order, the endpoint in its text form and the
+    /// commit the one that presented it, and one `refused <commit> <reason>`
+    /// per refusal in canonical order.
     ///
     /// # Specification
     /// - ensures: every line ends in a newline, and each fact stays one line: a
@@ -270,8 +303,8 @@ impl fmt::Display for View
     ///   path with a space bound to a datum with a newline, a path bound to a
     ///   commit in another tree, a path bound to an anchor whose label holds a
     ///   space and whose path holds a newline, two claims, two introductions,
-    ///   one by a label with a space, and a refusal is printed and compared
-    ///   line for line.
+    ///   one by a label with a space, a presence at an IPv4 address and a
+    ///   relay, and a refusal is printed and compared line for line.
     /// - witness: `fold::tests::a_view_prints_one_line_per_fact`
     #[inline]
     fn fmt(
@@ -300,6 +333,9 @@ impl fmt::Display for View
             f.write_str("introduce ")?;
             write!(OneLine::new(f, Field::Inner), "{label}")?;
             writeln!(f, " {}", Anchor::key(tree))?;
+        }
+        for (author, presence) in &self.book {
+            writeln!(f, "present {author} {presence}")?;
         }
         for &(commit, ref refusal) in &self.refused {
             writeln!(f, "refused {commit} {refusal}")?;
@@ -337,6 +373,12 @@ pub enum Refusal
     /// A claim whose author is not the tree's owner: only the owner names the
     /// tree by a DNS name, whatever authority a grant gave.
     NotOwner,
+    /// A presence whose proof is not the presented endpoint key's signature
+    /// naming its author: a member presents its own endpoint alone.
+    ForeignEndpoint,
+    /// A withdrawal of another member's presence by anyone but the owner: a
+    /// member withdraws its own presence alone.
+    ForeignPresence,
 }
 
 impl fmt::Display for Refusal
@@ -359,6 +401,8 @@ impl fmt::Display for Refusal
             | Self::BadProof => "bad proof",
             | Self::NotOwner => "not owner",
             | Self::SecondOpen => "second open",
+            | Self::ForeignEndpoint => "foreign endpoint",
+            | Self::ForeignPresence => "foreign presence",
         })
     }
 }
@@ -444,18 +488,28 @@ struct Carry
 ///   under `tree` for its author ([`OpenProof::verify`]), the first in
 ///   canonical order, whose author is the owner — or it is a claim whose author
 ///   is the owner, or it is a grant, a note, a bind or an introduction whose
-///   author is the owner or has an admitted grant among its ancestors.
+///   author is the owner or has an admitted grant among its ancestors, or it is
+///   a presence by such an author whose proof verifies under the presented
+///   endpoint's key for its author ([`EndpointProof::verify`]), or it is a
+///   withdrawal whose author is the owner, or has an admitted grant among its
+///   ancestors and withdraws its own presence.
 /// - ensures: a refused commit is listed with the first refusal that holds,
 ///   checked in this order: [`Refusal::Undecodable`], [`Refusal::WrongTree`],
 ///   [`Refusal::Duplicate`] (an admitted commit earlier in canonical order
 ///   carries the same operation), then for an Open [`Refusal::BadProof`] when
 ///   its proof fails and [`Refusal::SecondOpen`] when it is not the tree's,
-///   [`Refusal::NotOwner`] for a claim, and [`Refusal::NoAuthority`] for a
-///   grant, a note, a bind or an introduction.
+///   [`Refusal::NotOwner`] for a claim, [`Refusal::NoAuthority`] for a grant, a
+///   note, a bind, an introduction, a presence or a withdrawal by an author
+///   neither the owner nor granted, then [`Refusal::ForeignEndpoint`] for a
+///   presence whose proof fails and [`Refusal::ForeignPresence`] for a member's
+///   withdrawal of another's presence.
 /// - ensures: each path's binding is the admitted bind of that path last in
 ///   canonical order, each label's introduction the admitted introduction of
 ///   that label last in canonical order, the claims the domains of every
-///   admitted claim, and the admitted commits the ids of every commit admitted.
+///   admitted claim, each author's presence in the book its admitted presence
+///   last in canonical order unless an admitted withdrawal of it comes later,
+///   whose `since` is that presence's commit, and the admitted commits the ids
+///   of every commit admitted.
 /// - fails: [`Unopened`] when no commit is the tree's Open.
 /// - panics: none.
 /// - intension: when parents claim a cycle no topological order exists; the
@@ -474,8 +528,12 @@ struct Carry
 ///   the smallest-root Open, a forged and a replayed proof, the last-wins bind
 ///   from every arrival order, the owner-only claim refused to a member and a
 ///   non-member, the last-wins introduction and an introduction refused to a
-///   non-member, an unopened tree and a parent cycle are each pinned by a case
-///   of their own.
+///   non-member, a presence refused to a non-member, a presence of another
+///   member's endpoint and one proved by another key, the last-wins presence
+///   from every arrival order, the owner's withdrawal of a member's presence
+///   and a member's of its own, a member's withdrawal of the owner's refused,
+///   an unopened tree and a parent cycle are each pinned by a case of their
+///   own.
 /// - witness: `fold::tests::a_view_is_the_same_whatever_order_commits_arrive_in`
 /// - witness: `fold::tests::a_note_by_a_non_member_is_refused`
 /// - witness: `fold::tests::a_note_by_a_peer_granted_in_its_causal_past_is_admitted`
@@ -487,10 +545,17 @@ struct Carry
 /// - witness: `fold::tests::a_bind_by_a_non_member_is_refused`
 /// - witness: `fold::tests::a_claim_by_anyone_but_the_owner_is_refused`
 /// - witness: `fold::tests::the_later_introduction_of_a_label_rebinds_it`
+/// - witness: `fold::tests::a_presence_by_a_non_member_is_refused`
+/// - witness: `fold::tests::a_presence_naming_another_members_endpoint_is_refused`
+/// - witness: `fold::tests::the_later_presence_of_an_author_wins`
+/// - witness: `fold::tests::the_owner_withdraws_a_members_presence`
+/// - witness: `fold::tests::a_member_cannot_withdraw_the_owners_presence`
+/// - witness: `fold::tests::the_book_after_a_withdrawal_does_not_offer_the_endpoint`
 /// - witness: `fold::tests::an_undecodable_blob_is_refused_and_an_unopened_tree_has_no_view`
 /// - witness: `fold::tests::a_parent_cycle_is_placed_in_commit_id_order`
 ///
 /// [`OpenProof::verify`]: crate::receipt::OpenProof::verify
+/// [`EndpointProof::verify`]: crate::receipt::EndpointProof::verify
 pub fn fold(
     tree: TreeId,
     commits: Vec<VerifiedMeta<LooseCommit>>,
@@ -539,7 +604,9 @@ pub fn fold(
                 | Kind::Note { .. }
                 | Kind::Bind { .. }
                 | Kind::Claim { .. }
-                | Kind::Introduce { .. } => None,
+                | Kind::Introduce { .. }
+                | Kind::Present { .. }
+                | Kind::Withdraw { .. } => None,
             },
             | Ok(_) | Err(_) => None,
         };
@@ -574,6 +641,7 @@ pub fn fold(
         bindings: BTreeMap::new(),
         claims: BTreeSet::new(),
         introductions: BTreeMap::new(),
+        book: BTreeMap::new(),
         admitted: BTreeSet::new(),
         refused: Vec::new(),
     };
@@ -643,10 +711,29 @@ pub fn fold(
                                 view.introductions.insert(label, (node.author, introduced));
                             None
                         },
+                        | Kind::Present { endpoint, proof } if authorized => {
+                            match proof.verify(endpoint.key(), node.author) {
+                                | Ok(()) => {
+                                    let presence = Presence::new(endpoint, node.commit);
+                                    let _superseded = view.book.insert(node.author, presence);
+                                    None
+                                },
+                                | Err(_foreign) => Some(Refusal::ForeignEndpoint),
+                            }
+                        },
+                        | Kind::Withdraw { of }
+                            if node.author == owner || (authorized && of == node.author) =>
+                        {
+                            let _withdrawn = view.book.remove(&of);
+                            None
+                        },
+                        | Kind::Withdraw { .. } if authorized => Some(Refusal::ForeignPresence),
                         | Kind::Grant { .. }
                         | Kind::Note { .. }
                         | Kind::Bind { .. }
-                        | Kind::Introduce { .. } => Some(Refusal::NoAuthority),
+                        | Kind::Introduce { .. }
+                        | Kind::Present { .. }
+                        | Kind::Withdraw { .. } => Some(Refusal::NoAuthority),
                     };
                     if refusal.is_none() {
                         admit(&mut admitted, operation, node.commit);
@@ -751,6 +838,8 @@ mod tests
     use alloc::collections::BTreeSet;
     use alloc::string::String;
     use alloc::vec::Vec;
+    use core::net::Ipv4Addr;
+    use core::net::SocketAddr;
 
     use gandr_storage_values::TokenOffset;
     use gandr_storage_values::ValueError;
@@ -767,8 +856,13 @@ mod tests
     use crate::anchor::Path;
     use crate::anchor::Resolution;
     use crate::anchor::Target;
+    use crate::id::Endpoint;
+    use crate::id::EndpointKey;
+    use crate::id::PeerKey;
     use crate::id::TreeId;
     use crate::name::Label;
+    use crate::presence::Presence;
+    use crate::receipt::EndpointProof;
     use crate::receipt::Kind;
     use crate::receipt::Operation;
     use crate::receipt::Receipt;
@@ -842,6 +936,66 @@ mod tests
     ) -> Receipt
     {
         Receipt::new(tree(), operation, Kind::Note { text })
+    }
+
+    /// A loopback UDP port an endpoint in a test is reached at.
+    #[derive(Clone, Copy, Debug)]
+    #[repr(transparent)]
+    struct Port(u16);
+
+    /// The endpoint secret of the peer `a`.
+    ///
+    /// # Specification
+    /// trivial.
+    fn a_secret() -> iroh::SecretKey
+    {
+        iroh::SecretKey::from_bytes(&[5; 32])
+    }
+
+    /// The endpoint secret of the peer `b`.
+    ///
+    /// # Specification
+    /// trivial.
+    fn b_secret() -> iroh::SecretKey
+    {
+        iroh::SecretKey::from_bytes(&[6; 32])
+    }
+
+    /// The endpoint of `secret` at the loopback address and `port`.
+    ///
+    /// # Specification
+    /// trivial.
+    fn endpoint(
+        secret: &iroh::SecretKey,
+        port: Port,
+    ) -> Endpoint
+    {
+        let key = EndpointKey::new(secret.public());
+        Endpoint::new(key).with_direct(SocketAddr::from((Ipv4Addr::LOCALHOST, port.0)))
+    }
+
+    /// A fresh presence of `secret`'s endpoint at `port`, proved for
+    /// `holder`.
+    ///
+    /// # Specification
+    /// trivial.
+    fn present(
+        secret: &iroh::SecretKey,
+        port: Port,
+        holder: PeerKey,
+    ) -> Receipt
+    {
+        let proof = EndpointProof::sign(secret, holder);
+        Receipt::present(tree(), endpoint(secret, port), proof).unwrap()
+    }
+
+    /// A fresh withdrawal of `of`'s presence.
+    ///
+    /// # Specification
+    /// trivial.
+    fn withdraw(of: PeerKey) -> Receipt
+    {
+        Receipt::withdraw(tree(), of).unwrap()
     }
 
     #[test]
@@ -1223,6 +1377,241 @@ mod tests
     }
 
     #[test]
+    fn a_presence_by_a_non_member_is_refused()
+    {
+        let (a, b) = (owner(), other());
+        let secret = b_secret();
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let squat = commit(&b, tree(), &[&opened], &present(&secret, Port(9), key(&b))).await;
+            let view = fold(tree(), vec![opened, squat.clone()]).unwrap();
+            assert_eq!(
+                view.refused(),
+                [(id(&squat), Refusal::NoAuthority)],
+                "a non-member's presence of its own endpoint is refused for want of authority"
+            );
+            assert!(view.book().is_empty(), "the book offers no endpoint");
+        });
+    }
+
+    #[test]
+    fn a_presence_naming_another_members_endpoint_is_refused()
+    {
+        let (a, b) = (owner(), other());
+        let (mine, theirs) = (a_secret(), b_secret());
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let granted = commit(&a, tree(), &[&opened], &grant(&b)).await;
+            let presented =
+                commit(&a, tree(), &[&granted], &present(&mine, Port(5), key(&a))).await;
+            let stolen = commit(&b, tree(), &[&presented], &present(&mine, Port(7), key(&a))).await;
+            let theirs_for_them = EndpointProof::sign(&theirs, key(&b));
+            let misproved =
+                Receipt::present(tree(), endpoint(&mine, Port(8)), theirs_for_them).unwrap();
+            let misproved = commit(&b, tree(), &[&stolen], &misproved).await;
+            let view = fold(tree(), vec![
+                opened,
+                granted,
+                presented.clone(),
+                stolen.clone(),
+                misproved.clone(),
+            ])
+            .unwrap();
+            assert_eq!(
+                view.refused(),
+                [
+                    (id(&stolen), Refusal::ForeignEndpoint),
+                    (id(&misproved), Refusal::ForeignEndpoint),
+                ],
+                "a member presenting the owner's endpoint, under the proof naming the owner or \
+                 one its own endpoint key signed, is refused by name"
+            );
+            assert_eq!(
+                view.book().get(&key(&a)),
+                Some(&Presence::new(endpoint(&mine, Port(5)), id(&presented))),
+                "the owner's own presence stands"
+            );
+            assert_eq!(
+                view.book().get(&key(&b)),
+                None,
+                "the member holds no presence"
+            );
+        });
+    }
+
+    #[test]
+    fn the_later_presence_of_an_author_wins()
+    {
+        let a = owner();
+        let secret = a_secret();
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let first = commit(&a, tree(), &[&opened], &present(&secret, Port(1), key(&a))).await;
+            let moved = commit(&a, tree(), &[&first], &present(&secret, Port(2), key(&a))).await;
+            let left = commit(&a, tree(), &[&moved], &present(&secret, Port(3), key(&a))).await;
+            let right = commit(&a, tree(), &[&moved], &present(&secret, Port(4), key(&a))).await;
+            let later = if id(&left) < id(&right) {
+                Presence::new(endpoint(&secret, Port(4)), id(&right))
+            }
+            else {
+                Presence::new(endpoint(&secret, Port(3)), id(&left))
+            };
+            let arrived = vec![opened, first, moved, left, right];
+            let mut orders = vec![arrived.clone()];
+            for turn in 1 .. arrived.len() {
+                let mut rotated = arrived.clone();
+                rotated.rotate_left(turn);
+                orders.push(rotated.clone());
+                rotated.reverse();
+                orders.push(rotated);
+            }
+            for order in orders {
+                let view = fold(tree(), order).unwrap();
+                assert_eq!(
+                    view.book(),
+                    &BTreeMap::from([(key(&a), later.clone())]),
+                    "of two concurrent presences the larger commit id, placed later, wins over \
+                     the presences they descend from"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn the_owner_withdraws_a_members_presence()
+    {
+        let (a, b) = (owner(), other());
+        let secret = b_secret();
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let granted = commit(&a, tree(), &[&opened], &grant(&b)).await;
+            let presented =
+                commit(&b, tree(), &[&granted], &present(&secret, Port(9), key(&b))).await;
+            let before = fold(tree(), vec![
+                opened.clone(),
+                granted.clone(),
+                presented.clone(),
+            ])
+            .unwrap();
+            assert_eq!(
+                before.book(),
+                &BTreeMap::from([(
+                    key(&b),
+                    Presence::new(endpoint(&secret, Port(9)), id(&presented))
+                )]),
+                "a member presents its own endpoint"
+            );
+            let withdrawn = commit(&a, tree(), &[&presented], &withdraw(key(&b))).await;
+            let view = fold(tree(), vec![opened, granted, presented, withdrawn]).unwrap();
+            assert!(view.refused().is_empty(), "{:?}", view.refused());
+            assert!(
+                view.book().is_empty(),
+                "the owner's withdrawal removes the member's presence"
+            );
+        });
+    }
+
+    #[test]
+    fn a_member_cannot_withdraw_the_owners_presence()
+    {
+        let (a, b, c) = (owner(), other(), MemorySigner::from_bytes(&[5; 32]));
+        let secret = a_secret();
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let granted = commit(&a, tree(), &[&opened], &grant(&b)).await;
+            let presented =
+                commit(&a, tree(), &[&granted], &present(&secret, Port(5), key(&a))).await;
+            let by_member = commit(&b, tree(), &[&presented], &withdraw(key(&a))).await;
+            let by_stranger = commit(&c, tree(), &[&presented], &withdraw(key(&a))).await;
+            let own = commit(&b, tree(), &[&presented], &withdraw(key(&b))).await;
+            let view = fold(tree(), vec![
+                opened,
+                granted,
+                presented.clone(),
+                by_member.clone(),
+                by_stranger.clone(),
+                own.clone(),
+            ])
+            .unwrap();
+            assert_eq!(view.refused().len(), 2, "{:?}", view.refused());
+            assert!(
+                view.refused()
+                    .contains(&(id(&by_member), Refusal::ForeignPresence)),
+                "a member's withdrawal of the owner's presence is refused by name"
+            );
+            assert!(
+                view.refused()
+                    .contains(&(id(&by_stranger), Refusal::NoAuthority)),
+                "a non-member's withdrawal is refused for want of authority"
+            );
+            assert!(
+                view.admitted.contains(&id(&own)),
+                "a member withdraws its own presence, absent or not"
+            );
+            assert_eq!(
+                view.book(),
+                &BTreeMap::from([(
+                    key(&a),
+                    Presence::new(endpoint(&secret, Port(5)), id(&presented))
+                )]),
+                "the owner's presence stands"
+            );
+        });
+    }
+
+    #[test]
+    fn the_book_after_a_withdrawal_does_not_offer_the_endpoint()
+    {
+        let (a, b) = (owner(), other());
+        let (mine, theirs) = (a_secret(), b_secret());
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let granted = commit(&a, tree(), &[&opened], &grant(&b)).await;
+            let presented =
+                commit(&a, tree(), &[&granted], &present(&mine, Port(5), key(&a))).await;
+            let member = commit(
+                &b,
+                tree(),
+                &[&presented],
+                &present(&theirs, Port(6), key(&b)),
+            )
+            .await;
+            let withdrawn = commit(&a, tree(), &[&member], &withdraw(key(&a))).await;
+            let view = fold(tree(), vec![
+                opened.clone(),
+                granted.clone(),
+                presented.clone(),
+                member.clone(),
+                withdrawn.clone(),
+            ])
+            .unwrap();
+            assert_eq!(
+                view.book(),
+                &BTreeMap::from([(
+                    key(&b),
+                    Presence::new(endpoint(&theirs, Port(6)), id(&member))
+                )]),
+                "the withdrawn presence is absent and the other stands"
+            );
+            let back = commit(&a, tree(), &[&withdrawn], &present(&mine, Port(7), key(&a))).await;
+            let view = fold(tree(), vec![
+                opened,
+                granted,
+                presented,
+                member,
+                withdrawn,
+                back.clone(),
+            ])
+            .unwrap();
+            assert_eq!(
+                view.book().get(&key(&a)),
+                Some(&Presence::new(endpoint(&mine, Port(7)), id(&back))),
+                "a presence after the withdrawal is offered again, at its own commit"
+            );
+        });
+    }
+
+    #[test]
     fn the_later_introduction_of_a_label_rebinds_it()
     {
         let (a, b, c) = (owner(), other(), MemorySigner::from_bytes(&[5; 32]));
@@ -1348,6 +1737,11 @@ mod tests
         let refused = CommitId::new([7; 32]);
         let bound = CommitId::new([8; 32]);
         let elsewhere = elsewhere_key().tree();
+        let presented = CommitId::new([6; 32]);
+        let direct = endpoint(&a_secret(), Port(5));
+        let reached = format!("{direct}@https://relay.example.org/")
+            .parse::<Endpoint>()
+            .unwrap();
         let view = View {
             owner: author,
             members: BTreeSet::from([member]),
@@ -1383,6 +1777,7 @@ mod tests
                 ("my friend".parse::<Label>().unwrap(), (member, elsewhere)),
                 ("b".parse::<Label>().unwrap(), (author, tree())),
             ]),
+            book: BTreeMap::from([(author, Presence::new(reached.clone(), presented))]),
             admitted: BTreeSet::new(),
             refused: vec![(refused, Refusal::NoAuthority)],
         };
@@ -1395,9 +1790,15 @@ mod tests
                  one\\nline, spaced\nbind x anchor domhringr://{theirs}/.commit/{bound}\nbind y \
                  anchor domhringr://my friend/line\\none\nclaim a.example.test\nclaim \
                  example.test\nintroduce b domhringr://{mine}/\nintroduce my\\u{{20}}friend \
-                 domhringr://{theirs}/\nrefused {refused} no authority\n"
+                 domhringr://{theirs}/\npresent {author} {reached} {presented}\nrefused \
+                 {refused} no authority\n"
             ),
             "one line per fact, control characters escaped, a path's and a label's spaces too"
+        );
+        assert_eq!(
+            reached.to_string(),
+            format!("{}@127.0.0.1:5@https://relay.example.org/", direct.key()),
+            "the presence line writes the endpoint id and every address"
         );
     }
 }

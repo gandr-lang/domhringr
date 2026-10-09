@@ -1,10 +1,12 @@
 //! `domhringr-peer`: one record-plane peer over a state directory. It opens a
 //! sedimentree under a key of the tree's own, grants write authority on it,
 //! writes notes to it, binds paths in it, claims DNS names for it, introduces
-//! other trees in it by label, resolves an anchor or a commit to what it
-//! names, prints the view every peer holding the same commits folds them to,
-//! reads the tree's heads, syncs the tree with another peer over iroh, and
-//! checks a concepts tree's bindings against a public and a vault checkout.
+//! other trees in it by label, presents and withdraws the endpoint it is
+//! reached at, resolves an anchor or a commit to what it names, prints the
+//! view every peer holding the same commits folds them to and the book of
+//! who is reachable where, reads the tree's heads, syncs the tree with
+//! another peer over iroh, and checks a concepts tree's bindings against a
+//! public and a vault checkout.
 //!
 //! ```text
 //! domhringr-peer --state <dir> id
@@ -15,10 +17,14 @@
 //! domhringr-peer --state <dir> bind <anchor> <target>
 //! domhringr-peer --state <dir> claim <tree> <domain>
 //! domhringr-peer --state <dir> introduce <tree> <label> <tree>
+//! domhringr-peer --state <dir> present <tree> [--port <port>]
+//! domhringr-peer --state <dir> withdraw <tree> [<peer-id>]
+//! domhringr-peer --state <dir> book <tree>
 //! domhringr-peer --state <dir> whence <name> [--witness <domain>=<tree-id>]... [--in <tree>]
+//!                [--peer <peer-id>] [--at <endpoint>] [--local]
 //! domhringr-peer --state <dir> view <tree>
 //! domhringr-peer --state <dir> heads <tree>
-//! domhringr-peer --state <dir> sync <endpoint-id> <peer-id> <tree> [--at <ip:port>]
+//! domhringr-peer --state <dir> sync <tree> [--peer <peer-id>] [--at <endpoint>]
 //! domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
 //! ```
 //!
@@ -39,7 +45,29 @@
 //! `unknown` when the tree holds no such commit. A target is `anchor
 //! <anchor>`, a tree, a path or a commit in any of the three forms with the
 //! commit id whole, `endpoint <endpoint-id>` or `datum <text>`. Peer, endpoint
-//! and commit ids are 64 hex digits.
+//! and commit ids are 64 hex digits. An endpoint is an endpoint id followed by
+//! any number of `@<address>`, each an IP address and port (an IPv6 address
+//! in brackets) or a relay URL: `<endpoint-id>@192.0.2.7:4433`.
+//!
+//! `present` binds the endpoint at `--port`, the port `serve` binds after it,
+//! and commits a presence of it at the addresses iroh names for it: who the
+//! peer is reached at, for every peer that syncs the tree. `withdraw` commits
+//! the withdrawal of a presence, this peer's own unless a peer id is named.
+//! `book` prints each present peer as `<peer-id> <endpoint> <commit-id>`, the
+//! commit the one that presented the endpoint. The book is the record's, so
+//! a peer is reached where it last said it is, until it or the owner
+//! withdraws that.
+//!
+//! `sync` dials the peer `--peer` names, or the tree's owner, at the endpoint
+//! `--at` names, or else at that peer's presence in the tree's book, and
+//! prints `source <tree> book <commit-id>` or `source <tree> at <endpoint>`
+//! first: where the endpoint came from. `whence` reaches the same way, before
+//! resolving, each tree the resolution reads that the peer aimed at is not
+//! this peer — the key's tree, every tree the DNS name's witness names, or the
+//! label's `--in` tree and then the tree it introduces — printing a `source`
+//! line for each; `--local` resolves from the local store alone. A peer with no
+//! presence in the book and no `--at` is unreachable; first contact names the
+//! endpoint by hand, and one sync carries the book.
 //!
 //! The state directory holds the peer's two keys, the key of each tree it
 //! opened, and its tree store, all created on first use. A command holds the
@@ -73,10 +101,9 @@ extern crate alloc;
 
 mod drift;
 
+use alloc::collections::BTreeSet;
 use core::error::Error;
 use core::fmt;
-use core::net::AddrParseError;
-use core::net::SocketAddr;
 use core::str::FromStr;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -85,8 +112,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use domhringr_record_tree::AcceptError;
-use domhringr_record_tree::Address;
+use domhringr_record_tree::Aim;
 use domhringr_record_tree::Anchor;
+use domhringr_record_tree::At;
 use domhringr_record_tree::Authority;
 use domhringr_record_tree::BindError;
 use domhringr_record_tree::BindPort;
@@ -97,6 +125,7 @@ use domhringr_record_tree::HeadsError;
 use domhringr_record_tree::Identity;
 use domhringr_record_tree::IdentityError;
 use domhringr_record_tree::Label;
+use domhringr_record_tree::Node;
 use domhringr_record_tree::OpenError;
 use domhringr_record_tree::ParseAnchorError;
 use domhringr_record_tree::ParseDomainError;
@@ -106,10 +135,13 @@ use domhringr_record_tree::ParsePortError;
 use domhringr_record_tree::Path;
 use domhringr_record_tree::Peer;
 use domhringr_record_tree::PeerKey;
+use domhringr_record_tree::PresentError;
 use domhringr_record_tree::RandomError;
 use domhringr_record_tree::Receipt;
 use domhringr_record_tree::Reference;
-use domhringr_record_tree::RemotePeer;
+use domhringr_record_tree::Resolution;
+use domhringr_record_tree::Route;
+use domhringr_record_tree::RouteError;
 use domhringr_record_tree::Scope;
 use domhringr_record_tree::StateDir;
 use domhringr_record_tree::Static;
@@ -120,6 +152,7 @@ use domhringr_record_tree::TreeKey;
 use domhringr_record_tree::UdpPort;
 use domhringr_record_tree::ViewError;
 use domhringr_record_tree::WhenceError;
+use domhringr_record_tree::Witness;
 
 /// The synopsis written after a usage error.
 const USAGE: &str = "\
@@ -131,10 +164,14 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> bind <anchor> <target>
        domhringr-peer --state <dir> claim <tree> <domain>
        domhringr-peer --state <dir> introduce <tree> <label> <tree>
+       domhringr-peer --state <dir> present <tree> [--port <port>]
+       domhringr-peer --state <dir> withdraw <tree> [<peer-id>]
+       domhringr-peer --state <dir> book <tree>
        domhringr-peer --state <dir> whence <name> [--witness <domain>=<tree-id>]... [--in <tree>]
+                      [--peer <peer-id>] [--at <endpoint>] [--local]
        domhringr-peer --state <dir> view <tree>
        domhringr-peer --state <dir> heads <tree>
-       domhringr-peer --state <dir> sync <endpoint-id> <peer-id> <tree> [--at <ip:port>]
+       domhringr-peer --state <dir> sync <tree> [--peer <peer-id>] [--at <endpoint>]
        domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
 where  <tree>   is domhringr://<tree-id>/
        <anchor> is domhringr://<tree-id>/<segment>/.../<segment>
@@ -145,6 +182,9 @@ where  <tree>   is domhringr://<tree-id>/
                 resolved through its witness and the tree's claim; or by label, <label>
                 in place of <tree-id>: a name without a dot, resolved in the --in tree
        <target> is anchor <name> | endpoint <endpoint-id> | datum <text>
+       <endpoint> is <endpoint-id>, then @<ip:port> or @<relay-url> for each address
+                it is reached at; sync and whence reach the tree's owner, or --peer,
+                at --at, or else at its presence in the tree's book
        <checkout> is a directory in a git working tree, read as its whole repository
 A segment beginning with . is reserved for the forms above: no path holds one.
 ";
@@ -175,6 +215,12 @@ enum Verb
     Claim,
     /// Introduce a tree by a label in another.
     Introduce,
+    /// Present this peer's endpoint in a tree.
+    Present,
+    /// Withdraw a presence from a tree.
+    Withdraw,
+    /// Print a tree's book.
+    Book,
     /// Print what an anchor or a commit resolves to.
     Whence,
     /// Print a tree's view.
@@ -207,10 +253,16 @@ impl fmt::Display for Verb
             | Self::Bind => "bind <anchor> anchor|endpoint|datum <target>",
             | Self::Claim => "claim <tree> <domain>",
             | Self::Introduce => "introduce <tree> <label> <tree>",
-            | Self::Whence => "whence <name> [--witness <domain>=<tree-id>]... [--in <tree>]",
+            | Self::Present => "present <tree> [--port <port>]",
+            | Self::Withdraw => "withdraw <tree> [<peer-id>]",
+            | Self::Book => "book <tree>",
+            | Self::Whence => {
+                "whence <name> [--witness <domain>=<tree-id>]... [--in <tree>] [--peer \
+                 <peer-id>] [--at <endpoint>] [--local]"
+            },
             | Self::View => "view <tree>",
             | Self::Heads => "heads <tree>",
-            | Self::Sync => "sync <endpoint-id> <peer-id> <tree> [--at <ip:port>]",
+            | Self::Sync => "sync <tree> [--peer <peer-id>] [--at <endpoint>]",
             | Self::Drift => "drift --public <checkout> --vault <checkout> <tree>",
         })
     }
@@ -220,16 +272,19 @@ impl fmt::Display for Verb
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Operand
 {
-    /// The tree to grant on, write to, claim for, introduce in, read, sync,
-    /// or read a label in, or the tree introduced.
+    /// The tree to grant on, write to, claim for, introduce in, present in,
+    /// withdraw from, read, sync, or read a label in, or the tree introduced.
     Tree,
     /// The anchor to bind or resolve.
     Anchor,
     /// A bind's target anchor.
     Target,
-    /// The remote's iroh endpoint id, or a bind's target endpoint.
+    /// A bind's target endpoint.
     Endpoint,
-    /// The remote's or the grantee's subduction peer id.
+    /// The endpoint `--at` names: the remote's endpoint id and addresses.
+    At,
+    /// The grantee's, the remote's or the withdrawn presence's subduction
+    /// peer id.
     Peer,
     /// The tree a witness supplied by hand names.
     Witness,
@@ -251,6 +306,7 @@ impl fmt::Display for Operand
             | Self::Anchor => "anchor",
             | Self::Target => "target anchor",
             | Self::Endpoint => "endpoint id",
+            | Self::At => "endpoint",
             | Self::Peer => "peer id",
             | Self::Witness => "witness's tree id",
         })
@@ -318,8 +374,34 @@ enum Command
         /// The tree the label names.
         introduced: TreeId,
     },
-    /// Print what `reference` resolves to, asking `witnessing` for a DNS name's
-    /// candidates and reading a label in `scope`.
+    /// Bind on `port`, commit this peer's endpoint as its presence in `tree`,
+    /// and print the commit id.
+    Present
+    {
+        /// The tree presented in.
+        tree: TreeId,
+        /// The UDP port the endpoint binds: the one `serve` binds after.
+        port: BindPort,
+    },
+    /// Commit the withdrawal of `of`'s presence from `tree` and print the
+    /// commit id.
+    Withdraw
+    {
+        /// The tree withdrawn from.
+        tree: TreeId,
+        /// Whose presence is withdrawn.
+        of: Withdrawn,
+    },
+    /// Print `tree`'s book.
+    Book
+    {
+        /// The tree folded.
+        tree: TreeId,
+    },
+    /// Reach the trees `reference` reads as `reach` says, print where each
+    /// was reached, then print what `reference` resolves to, asking
+    /// `witnessing` for a DNS name's candidates and reading a label in
+    /// `scope`.
     Whence
     {
         /// The anchor or the commit resolved.
@@ -328,6 +410,8 @@ enum Command
         witnessing: Witnessing,
         /// The tree a label is read in.
         scope: Scope,
+        /// Whether, and whom, the trees read are reached.
+        reach: Reach,
     },
     /// Print `tree`'s view.
     View
@@ -341,13 +425,14 @@ enum Command
         /// The tree read.
         tree: TreeId,
     },
-    /// Sync `tree` with `remote` and print the heads after it, then the path.
+    /// Sync `tree` with the remote `dial` names, and print where its endpoint
+    /// came from, the heads after the sync, then the path.
     Sync
     {
-        /// The peer dialed.
-        remote: RemotePeer,
         /// The tree synced.
         tree: TreeId,
+        /// Whom to dial, and at which endpoint.
+        dial: Dial,
     },
     /// Check `tree`'s bindings against the checkouts at `public` and `vault`,
     /// and print one line per finding.
@@ -370,6 +455,70 @@ enum Witnessing
     Dns,
     /// The trees `--witness` named, in place of DNS.
     ByHand(Static),
+}
+
+/// Whose presence a `withdraw` withdraws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Withdrawn
+{
+    /// This peer's own.
+    Own,
+    /// The peer's with this key.
+    Of(PeerKey),
+}
+
+/// Whom a dial for a tree aims at, and where the endpoint comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Dial
+{
+    /// The peer aimed at: `--peer`, or the tree's owner.
+    aim: Aim,
+    /// The endpoint: `--at`, or the book's.
+    at: At,
+}
+
+/// Whether `whence` reaches the trees it reads before resolving.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Reach
+{
+    /// `--local`: resolve from the local store alone.
+    Local,
+    /// Reach each tree read as the dial says, then resolve.
+    Dial(Dial),
+}
+
+/// A tree a command reached, and the route it reached it by.
+#[derive(Debug)]
+struct Reached
+{
+    /// The tree.
+    tree: TreeId,
+    /// The route dialed.
+    route: Route,
+}
+
+impl fmt::Display for Reached
+{
+    /// Write `source <tree> book <commit-id>` for a remote reached at its
+    /// presence in the book, `source <tree> at <endpoint>` for one reached at
+    /// an endpoint named by hand, and nothing for this peer itself.
+    ///
+    /// # Specification
+    /// trivial.
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result
+    {
+        let tree = Anchor::key(self.tree);
+        match self.route {
+            | Route::Itself => Ok(()),
+            | Route::Book { since, .. } => writeln!(f, "source {tree} book {since}"),
+            | Route::Given { ref remote } => {
+                writeln!(f, "source {tree} at {}", remote.endpoint())
+            },
+        }
+    }
 }
 
 /// A command line, read.
@@ -462,9 +611,10 @@ enum UsageError
     /// `--port`'s value is not a UDP port.
     #[error("cannot read the port")]
     Port(#[source] ParsePortError),
-    /// `--at`'s value is not an IP address and port.
-    #[error("cannot read the address")]
-    At(#[source] AddrParseError),
+    /// `--local` stands beside `--peer` or `--at`: a local resolution reaches
+    /// no one.
+    #[error("--local reaches no peer: it takes no --peer or --at")]
+    Local,
 }
 
 /// Why a command failed once its command line was read.
@@ -495,6 +645,15 @@ enum RunError
     /// The view cannot be folded.
     #[error(transparent)]
     View(#[from] ViewError),
+    /// The presence cannot be committed.
+    #[error(transparent)]
+    Present(#[from] PresentError),
+    /// The tree has no remote to dial.
+    #[error(transparent)]
+    Route(#[from] RouteError),
+    /// The peer the dial aims at is this peer.
+    #[error("no one to reach: the peer aimed at is this peer")]
+    Itself,
     /// The anchor does not resolve.
     #[error(transparent)]
     Whence(#[from] WhenceError),
@@ -520,13 +679,15 @@ enum RunError
 /// # Specification
 /// - ensures: accepts `--state <dir>` (or `--state=<dir>`; the last one given
 ///   wins) followed by a verb and exactly the operands that verb takes, or, for
-///   `serve`, the options [`serve_port`] reads, or, for `sync`, `whence` and
-///   `drift`, what [`sync_command`], [`whence_command`] and [`drift_command`]
-///   read. Other verbs' operands are taken verbatim, so a note's text or a
-///   datum beginning with `-` is a text, not an option. A tree operand is a
-///   bare anchor in the key form, `bind`'s anchor names a path in the key form,
-///   `claim`'s DNS name and `introduce`'s label are read as [`read_name`] reads
-///   them, and `bind`'s target is read as [`read_target`] reads it.
+///   `serve`, the options [`serve_port`] reads, or, for `present`, `sync`,
+///   `whence` and `drift`, what [`present_command`], [`sync_command`],
+///   [`whence_command`] and [`drift_command`] read. Other verbs' operands are
+///   taken verbatim, so a note's text or a datum beginning with `-` is a text,
+///   not an option. A tree operand is a bare anchor in the key form, `bind`'s
+///   anchor names a path in the key form, `claim`'s DNS name and `introduce`'s
+///   label are read as [`read_name`] reads them, `bind`'s target is read as
+///   [`read_target`] reads it, and `withdraw` withdraws this peer's own
+///   presence unless a peer id follows the tree.
 /// - fails: [`UsageError::Arguments`] for any option but `--state` or for
 ///   `--state` without a value, [`UsageError::NoCommand`] when no verb follows
 ///   the options, [`UsageError::Command`] for an unknown verb,
@@ -541,8 +702,8 @@ enum RunError
 ///   text, a DNS name or a label that is not UTF-8, [`UsageError::Domain`] and
 ///   [`UsageError::Label`] for a DNS name or a label that does not parse, as
 ///   [`read_target`] for `bind`'s target, as [`serve_port`] for `serve`, and as
-///   [`sync_command`], [`whence_command`] and [`drift_command`] for `sync`,
-///   `whence` and `drift`.
+///   [`present_command`], [`sync_command`], [`whence_command`] and
+///   [`drift_command`] for `present`, `sync`, `whence` and `drift`.
 /// - panics: none.
 ///
 /// # Errors
@@ -564,18 +725,21 @@ enum RunError
 /// - [`UsageError::Target`]: the bind's target kind is unknown.
 /// - [`UsageError::Text`]: the note's text, a datum, a DNS name or a label is
 ///   not UTF-8.
-/// - [`UsageError::Port`]: `serve`'s port is not a UDP port.
-/// - [`UsageError::At`]: `sync`'s address is not an IP address and port.
+/// - [`UsageError::Port`]: `serve`'s or `present`'s port is not a UDP port.
+/// - [`UsageError::Local`]: `whence`'s `--local` stands beside `--peer` or
+///   `--at`.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — each verb with its operands, every bind target kind, a
 ///   bare, a path and a commit anchor to resolve in each of the three forms and
-///   an abbreviated commit, both `--state` spellings, `serve` with and without
-///   a port, `sync` with and without an address, `whence` with and without
-///   witnesses and a scope, `drift` with its options before and after its
-///   operand, and a dash-leading note and datum separate the accepted lines,
-///   and one line per refusal pins which refusal each malformation gets,
-///   including an arity error that wins over a malformed operand.
+///   an abbreviated commit, both `--state` spellings, `serve` and `present`
+///   with and without a port, `withdraw` with and without a peer, `sync` with
+///   and without a peer and an endpoint, `whence` with and without witnesses, a
+///   scope, a peer, an endpoint and `--local`, `drift` with its options before
+///   and after its operand, and a dash-leading note and datum separate the
+///   accepted lines, and one line per refusal pins which refusal each
+///   malformation gets, including an arity error that wins over a malformed
+///   operand.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
@@ -600,6 +764,10 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
         let command = sync_command(&mut arguments)?;
         return Ok(Invocation { state, command });
     }
+    if verb == Verb::Present {
+        let command = present_command(&mut arguments)?;
+        return Ok(Invocation { state, command });
+    }
     if verb == Verb::Whence {
         let command = whence_command(&mut arguments)?;
         return Ok(Invocation { state, command });
@@ -614,6 +782,20 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     let command = match (verb, operands) {
         | (Verb::Id, (None, None, None, None)) => Command::Id,
         | (Verb::Open, (None, None, None, None)) => Command::Open,
+        | (Verb::Withdraw, (Some(tree), None, None, None)) => Command::Withdraw {
+            tree: read_tree(&tree)?,
+            of: Withdrawn::Own,
+        },
+        | (Verb::Withdraw, (Some(tree), Some(of), None, None)) => {
+            let tree = read_tree(&tree)?;
+            Command::Withdraw {
+                tree,
+                of: Withdrawn::Of(read_id(&of, Operand::Peer)?),
+            }
+        },
+        | (Verb::Book, (Some(tree), None, None, None)) => Command::Book {
+            tree: read_tree(&tree)?,
+        },
         | (Verb::Grant, (Some(tree), Some(to), None, None)) => {
             let tree = read_tree(&tree)?;
             Command::Grant {
@@ -660,46 +842,51 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     Ok(Invocation { state, command })
 }
 
-/// Read `sync`'s operands and options from what follows the verb.
+/// Read `sync`'s operand and options from what follows the verb.
 ///
 /// # Specification
-/// - ensures: accepts the endpoint id, the peer id and the tree anchor, in that
-///   order, with `--at <ip:port>` (or `--at=<ip:port>`; the last one given
-///   wins) anywhere among them, which names the remote's direct address; with
-///   no `--at` the remote is looked up by its endpoint id.
-/// - fails: [`UsageError::Arguments`] for any other option or for `--at`
-///   without a value, [`UsageError::At`] for a value that is not an IP address
-///   and port, [`UsageError::Operands`] for other than three operands, checked
-///   before any operand is read, and [`UsageError::Operand`],
-///   [`UsageError::Anchor`] and [`UsageError::NotTree`] for an operand that is
-///   not what it stands for.
+/// - ensures: accepts one tree anchor in the key form, with `--peer <peer-id>`
+///   and `--at <endpoint>` (or `--peer=<peer-id>` and `--at=<endpoint>`; the
+///   last one given of each wins) anywhere around it: the dial aims at the peer
+///   `--peer` names, or else at the tree's owner, at the endpoint `--at` names,
+///   or else at the book's.
+/// - fails: [`UsageError::Arguments`] for any other option or for an option
+///   without a value, [`UsageError::Operand`] for a peer id or an endpoint that
+///   does not parse, [`UsageError::Operands`] for other than one operand,
+///   checked before the operand is read, and as [`read_tree`] for an operand
+///   that is no key-form tree anchor.
 /// - panics: none.
 ///
 /// # Errors
-/// - [`UsageError::Arguments`]: an unknown option, or `--at` lacks a value.
-/// - [`UsageError::At`]: the address is not an IP address and port.
-/// - [`UsageError::Operands`]: there are not three operands.
-/// - [`UsageError::Operand`]: the endpoint id or the peer id does not parse.
-/// - [`UsageError::Anchor`]: the tree anchor does not parse.
-/// - [`UsageError::NotTree`]: the tree anchor names a path.
+/// - [`UsageError::Arguments`]: an unknown option, or an option lacks a value.
+/// - [`UsageError::Operand`]: the peer id or the endpoint does not parse.
+/// - [`UsageError::Operands`]: there is not one operand.
+/// - [`UsageError::Anchor`], [`UsageError::NotTree`], [`UsageError::NotKey`]:
+///   as [`read_tree`] for the tree.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — no option, both `--at` spellings and an `--at` before the
-///   operands are read to their addresses, and a malformed address, a missing
-///   value, a surplus operand and each malformed operand meet their own
-///   refusal.
+/// - hypothesis: L3 — no option, both options in both spellings, before and
+///   after the operand and repeated, are read to their dial, and a malformed
+///   endpoint and peer id, a missing value, a surplus operand and a tree naming
+///   a path each meet their own refusal.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn sync_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 {
-    let mut address = Address::Lookup;
+    let mut dial = Dial {
+        aim: Aim::Owner,
+        at: At::Book,
+    };
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
+            | lexopt::Arg::Long("peer") => {
+                let value = arguments.value()?;
+                dial.aim = Aim::Peer(read_id(&value, Operand::Peer)?);
+            },
             | lexopt::Arg::Long("at") => {
                 let value = arguments.value()?;
-                let direct = value.to_string_lossy().parse::<SocketAddr>();
-                address = Address::Direct(direct.map_err(UsageError::At)?);
+                dial.at = At::Given(read_id(&value, Operand::At)?);
             },
             | lexopt::Arg::Value(operand) => operands.push(operand),
             | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
@@ -708,21 +895,66 @@ fn sync_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
         }
     }
     let mut operands = operands.into_iter();
-    match (
-        operands.next(),
-        operands.next(),
-        operands.next(),
-        operands.next(),
-    ) {
-        | (Some(endpoint), Some(peer), Some(tree), None) => {
-            let endpoint = read_id(&endpoint, Operand::Endpoint)?;
-            let peer = read_id(&peer, Operand::Peer)?;
-            Ok(Command::Sync {
-                remote: RemotePeer::new(endpoint, peer, address),
-                tree: read_tree(&tree)?,
-            })
-        },
+    match (operands.next(), operands.next()) {
+        | (Some(tree), None) => Ok(Command::Sync {
+            tree: read_tree(&tree)?,
+            dial,
+        }),
         | _ => Err(UsageError::Operands(Verb::Sync)),
+    }
+}
+
+/// Read `present`'s operand and options from what follows the verb.
+///
+/// # Specification
+/// - ensures: accepts one tree anchor in the key form, with `--port <port>` (or
+///   `--port=<port>`; the last one given wins) anywhere around it, which fixes
+///   the port the endpoint binds and is presented at; with none it is
+///   ephemeral.
+/// - fails: [`UsageError::Arguments`] for any other option or for `--port`
+///   without a value, [`UsageError::Port`] for a value that is not a port from
+///   1 through 65535, [`UsageError::Operands`] for other than one operand,
+///   checked before the operand is read, and as [`read_tree`] for an operand
+///   that is no key-form tree anchor.
+/// - panics: none.
+///
+/// # Errors
+/// - [`UsageError::Arguments`]: an unknown option, or `--port` lacks a value.
+/// - [`UsageError::Port`]: the value is not a UDP port.
+/// - [`UsageError::Operands`]: there is not one operand.
+/// - [`UsageError::Anchor`], [`UsageError::NotTree`], [`UsageError::NotKey`]:
+///   as [`read_tree`] for the tree.
+///
+/// # Adequacy
+/// - hypothesis: L3 — no option and `--port` in both spellings, before and
+///   after the operand, are read to their command, and port 0, a missing
+///   operand and a surplus one each meet their own refusal.
+/// - witness: `tests::every_verb_reads_its_operands`
+/// - witness: `tests::a_malformed_command_line_is_refused`
+fn present_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
+{
+    let mut port = BindPort::Ephemeral;
+    let mut operands = Vec::new();
+    while let Some(argument) = arguments.next()? {
+        match argument {
+            | lexopt::Arg::Long("port") => {
+                let value = arguments.value()?;
+                let fixed = value.to_string_lossy().parse::<UdpPort>();
+                port = BindPort::Fixed(fixed.map_err(UsageError::Port)?);
+            },
+            | lexopt::Arg::Value(operand) => operands.push(operand),
+            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+                return Err(UsageError::from(other.unexpected()));
+            },
+        }
+    }
+    let mut operands = operands.into_iter();
+    match (operands.next(), operands.next()) {
+        | (Some(tree), None) => Ok(Command::Present {
+            tree: read_tree(&tree)?,
+            port,
+        }),
+        | _ => Err(UsageError::Operands(Verb::Present)),
     }
 }
 
@@ -731,16 +963,22 @@ fn sync_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 /// # Specification
 /// - ensures: accepts one reference, an anchor or a commit in any of the three
 ///   forms, the commit's id whole or abbreviated, with any number of `--witness
-///   <domain>=<tree-id>` and at most one effective `--in <tree>` (or
-///   `--in=<tree>`; the last one given wins) anywhere around it. With no
-///   `--witness`, a DNS name's candidates are its `_domhringr.<domain>` TXT
-///   records; with any, they are the trees the `--witness` values name for it,
-///   and DNS is not asked. With no `--in`, a label is read in no tree.
+///   <domain>=<tree-id>`, at most one effective `--in <tree>`, `--peer
+///   <peer-id>` and `--at <endpoint>` (or `--in=<tree>`, `--peer=<peer-id>` and
+///   `--at=<endpoint>`; the last one given of each wins), and `--local`,
+///   anywhere around it. With no `--witness`, a DNS name's candidates are its
+///   `_domhringr.<domain>` TXT records; with any, they are the trees the
+///   `--witness` values name for it, and DNS is not asked. With no `--in`, a
+///   label is read in no tree. With `--local` the resolution reads the local
+///   store alone; without, it reaches the trees it reads first, dialing as
+///   [`sync_command`] reads `--peer` and `--at`.
 /// - fails: [`UsageError::Arguments`] for any other option or for an option
 ///   without a value, [`UsageError::Witness`], [`UsageError::Text`],
 ///   [`UsageError::Domain`] and [`UsageError::Operand`] as [`read_witness`] for
-///   a malformed witness, [`UsageError::Anchor`], [`UsageError::NotTree`] and
+///   a malformed witness, [`UsageError::Operand`] for a peer id or an endpoint
+///   that does not parse, [`UsageError::Anchor`], [`UsageError::NotTree`] and
 ///   [`UsageError::NotKey`] as [`read_tree`] for a malformed `--in`,
+///   [`UsageError::Local`] for `--local` beside `--peer` or `--at`,
 ///   [`UsageError::Operands`] for other than one operand, checked before the
 ///   operand is read, and [`UsageError::Anchor`] for an operand that is not a
 ///   reference.
@@ -750,23 +988,32 @@ fn sync_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 /// - [`UsageError::Arguments`]: an unknown option, or an option lacks a value.
 /// - [`UsageError::Witness`], [`UsageError::Text`], [`UsageError::Domain`],
 ///   [`UsageError::Operand`]: as [`read_witness`].
+/// - [`UsageError::Operand`]: the peer id or the endpoint does not parse.
 /// - [`UsageError::NotTree`], [`UsageError::NotKey`]: as [`read_tree`] for
 ///   `--in`.
+/// - [`UsageError::Local`]: `--local` stands beside `--peer` or `--at`.
 /// - [`UsageError::Operands`]: there is not one operand.
 /// - [`UsageError::Anchor`]: the reference or `--in`'s tree does not parse.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — a key, a DNS and a label anchor, a commit whole and
-///   abbreviated, two witnesses for one name and a repeated `--in` are read to
-///   their command, and a witness without `=`, with a malformed name or tree
-///   id, an `--in` naming a path, a reserved segment, a commit id too short to
-///   read, a missing operand and a surplus one each meet their own refusal.
+///   abbreviated, two witnesses for one name, a repeated `--in`, a peer and an
+///   endpoint, and `--local` are read to their command, and a witness without
+///   `=`, with a malformed name or tree id, an `--in` naming a path, a
+///   malformed endpoint, `--local` beside `--at` and beside `--peer`, a
+///   reserved segment, a commit id too short to read, a missing operand and a
+///   surplus one each meet their own refusal.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn whence_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 {
     let mut scope = Scope::Unscoped;
     let mut witnessed = Vec::new();
+    let mut dial = Dial {
+        aim: Aim::Owner,
+        at: At::Book,
+    };
+    let (mut named, mut local) = (false, false);
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
@@ -778,6 +1025,17 @@ fn whence_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
                 let value = arguments.value()?;
                 scope = Scope::In(read_tree(&value)?);
             },
+            | lexopt::Arg::Long("peer") => {
+                let value = arguments.value()?;
+                dial.aim = Aim::Peer(read_id(&value, Operand::Peer)?);
+                named = true;
+            },
+            | lexopt::Arg::Long("at") => {
+                let value = arguments.value()?;
+                dial.at = At::Given(read_id(&value, Operand::At)?);
+                named = true;
+            },
+            | lexopt::Arg::Long("local") => local = true,
             | lexopt::Arg::Value(operand) => operands.push(operand),
             | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
@@ -790,12 +1048,18 @@ fn whence_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     else {
         Witnessing::ByHand(witnessed.into_iter().collect())
     };
+    let reach = match (local, named) {
+        | (false, _) => Reach::Dial(dial),
+        | (true, false) => Reach::Local,
+        | (true, true) => return Err(UsageError::Local),
+    };
     let mut operands = operands.into_iter();
     match (operands.next(), operands.next()) {
         | (Some(reference), None) => Ok(Command::Whence {
             reference: read_anchor(&reference, Operand::Anchor)?,
             witnessing,
             scope,
+            reach,
         }),
         | _ => Err(UsageError::Operands(Verb::Whence)),
     }
@@ -942,8 +1206,8 @@ fn serve_port(arguments: &mut lexopt::Parser) -> Result<BindPort, UsageError>
 ///
 /// # Specification
 /// - ensures: `id`, `serve`, `open`, `grant`, `note`, `bind`, `claim`,
-///   `introduce`, `whence`, `view`, `heads`, `sync` and `drift` name their
-///   verbs.
+///   `introduce`, `present`, `withdraw`, `book`, `whence`, `view`, `heads`,
+///   `sync` and `drift` name their verbs.
 /// - fails: [`UsageError::Command`] for any other word, carrying it.
 /// - panics: none.
 ///
@@ -966,6 +1230,9 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
         | Some("bind") => Ok(Verb::Bind),
         | Some("claim") => Ok(Verb::Claim),
         | Some("introduce") => Ok(Verb::Introduce),
+        | Some("present") => Ok(Verb::Present),
+        | Some("withdraw") => Ok(Verb::Withdraw),
+        | Some("book") => Ok(Verb::Book),
         | Some("whence") => Ok(Verb::Whence),
         | Some("view") => Ok(Verb::View),
         | Some("heads") => Ok(Verb::Heads),
@@ -1173,9 +1440,14 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///   endpoint id line, then the peer id line, and opens no store. `open` opens
 ///   the store, mints a tree key beneath the state directory, commits the
 ///   tree's Open proved by that key for this peer, and writes the tree's anchor
-///   line. `grant`, `note`, `bind`, `claim` and `introduce` commit their
-///   receipt, under a fresh operation fence, and write the new commit's id
-///   line. `whence` writes what the reference resolves to in the local views
+///   line. `grant`, `note`, `bind`, `claim`, `introduce` and `withdraw` commit
+///   their receipt, under a fresh operation fence, and write the new commit's
+///   id line. `present` binds the endpoint on its port, commits the presence of
+///   the endpoint ([`Node::present`]), closes the endpoint and writes the
+///   commit's id line. `book` writes the tree's book, one `<peer-id> <endpoint>
+///   <commit-id>` line per present peer in key order. `whence` reaches the
+///   trees the reference reads as [`resolve`] specifies, writes a `source` line
+///   for each tree reached at another peer, then what the reference resolves to
 ///   ([`Peer::whence`]), asking DNS for a DNS name's candidate trees unless
 ///   `--witness` named them: for a path the target bound to it (`anchor
 ///   <anchor>`, `endpoint <endpoint-id>` or `datum <text>`) or `unbound`; for a
@@ -1183,21 +1455,23 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///   commit `commit <commit-id> admitted`, `commit <commit-id> refused
 ///   <reason>`, or `unknown` when the tree holds none. `view` writes the tree's
 ///   view, one line per fact ([`domhringr_record_tree::View`]'s display).
-///   `heads` writes the tree's heads, one sorted hex line each. `sync` dials
-///   the remote, at its direct address when `--at` named one, writes the heads
-///   after the sync the same way, then `path <peer-id> <path>` for the path the
-///   connection took, having closed its endpoint. `serve` runs as [`serve`]
-///   specifies. `drift` folds the concepts tree in the local store, closes the
-///   store, and writes [`drift::check`]'s report of it against the two
-///   checkouts, one line per finding. Every command ends in
-///   [`Completion::Success`] but a `drift` whose report holds a finding, which
-///   ends in [`Completion::Drifted`].
+///   `heads` writes the tree's heads, one sorted hex line each. `sync` routes
+///   the dial ([`Peer::route`]), dials the remote at the route's endpoint, and
+///   writes the route's `source` line, the heads after the sync the same way,
+///   then `path <peer-id> <path>` for the path the connection took, having
+///   closed its endpoint. `serve` runs as [`serve`] specifies. `drift` folds
+///   the concepts tree in the local store, closes the store, and writes
+///   [`drift::check`]'s report of it against the two checkouts, one line per
+///   finding. Every command ends in [`Completion::Success`] but a `drift` whose
+///   report holds a finding, which ends in [`Completion::Drifted`].
 /// - fails: [`RunError::Identity`], [`RunError::Open`], [`RunError::Bind`],
 ///   [`RunError::Random`], [`RunError::Commit`], [`RunError::View`],
-///   [`RunError::Whence`], [`RunError::Heads`] and [`RunError::Sync`] as the
-///   record library reports them, [`RunError::Drift`] as [`drift::check`]
-///   reports it, and [`RunError::Output`] when standard output cannot be
-///   written. A failed sync still closes the endpoint.
+///   [`RunError::Present`], [`RunError::Route`], [`RunError::Whence`],
+///   [`RunError::Heads`] and [`RunError::Sync`] as the record library reports
+///   them, [`RunError::Itself`] for a `sync` aimed at this peer,
+///   [`RunError::Drift`] as [`drift::check`] reports it, and
+///   [`RunError::Output`] when standard output cannot be written. A failed sync
+///   or presence still closes the endpoint.
 /// - panics: none.
 ///
 /// # Errors
@@ -1208,6 +1482,10 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - [`RunError::Random`]: no operation fence can be drawn.
 /// - [`RunError::Commit`]: the commit cannot be appended.
 /// - [`RunError::View`]: the tree is unopened or its commits cannot be read.
+/// - [`RunError::Present`]: the presence cannot be committed.
+/// - [`RunError::Route`]: no remote can be named for the dial, as when the book
+///   holds no presence of the peer aimed at.
+/// - [`RunError::Itself`]: `sync` aims at this peer.
 /// - [`RunError::Whence`]: the reference does not resolve, as when its DNS name
 ///   is unclaimed, its label unintroduced or its commit prefix ambiguous.
 /// - [`RunError::Heads`]: the heads cannot be read.
@@ -1220,17 +1498,21 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - hypothesis: L3 — two processes exchange ids, open a tree and parse its
 ///   anchor, grant, write notes, bind paths, claim a DNS name, introduce a tree
 ///   by a label, resolve anchors in all three forms and commits whole and
-///   abbreviated, read heads and views, and sync at each other's direct address
-///   in both directions; views are compared byte for byte across processes and
+///   abbreviated, read heads and views, and sync at each other's endpoint in
+///   both directions; views are compared byte for byte across processes and
 ///   with the expected facts, resolutions with the commit bound, across forms
 ///   and with each commit's verdict, refusals by their diagnostic, and each
-///   sync's path line is parsed; `drift` over a fixture pair prints its four
-///   findings exactly and exits 3, then nothing and exits 0.
+///   sync's path line is parsed; a peer presents its endpoint, and the other,
+///   after one sync at it, lists it in the book and reaches it through the book
+///   alone for `whence` and `sync`, as their source lines say, until it
+///   withdraws; `drift` over a fixture pair prints its four findings exactly
+///   and exits 3, then nothing and exits 0.
 /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
 /// - witness: `sync::tests::two_peers_sync_one_tree_to_identical_heads`
 /// - witness: `sync::tests::an_anchor_resolves_alike_on_both_peers`
 /// - witness: `sync::tests::a_named_anchor_resolves_through_its_claim_or_introduction`
 /// - witness: `sync::tests::a_commit_resolves_to_its_verdict_on_both_peers`
+/// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
 /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
 async fn execute(invocation: Invocation) -> Result<Completion, RunError>
 {
@@ -1275,18 +1557,43 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             let peer = Peer::open(&state, identity)?;
             record(&peer, tree, Receipt::introduce(tree, label, introduced)?).await
         },
+        | Command::Present { tree, port } => {
+            let node = Peer::open(&state, identity)?.bind(port).await?;
+            let presented = node.present(tree).await;
+            node.close().await;
+            drop(node);
+            emit(&format_args!("{}\n", presented?))
+        },
+        | Command::Withdraw { tree, of } => {
+            let of = match of {
+                | Withdrawn::Own => identity.peer_key(),
+                | Withdrawn::Of(peer) => peer,
+            };
+            let peer = Peer::open(&state, identity)?;
+            record(&peer, tree, Receipt::withdraw(tree, of)?).await
+        },
+        | Command::Book { tree } => {
+            let view = Peer::open(&state, identity)?.view(tree).await?;
+            view.book()
+                .iter()
+                .try_for_each(|(peer, presence)| emit(&format_args!("{peer} {presence}\n")))
+        },
         | Command::Whence {
             reference,
             witnessing,
             scope,
+            reach,
         } => {
             let peer = Peer::open(&state, identity)?;
-            let resolution = match witnessing {
-                | Witnessing::Dns => peer.whence(&reference, &Dns::system(), scope).await?,
-                | Witnessing::ByHand(witness) => peer.whence(&reference, &witness, scope).await?,
+            let (sources, resolution) = match witnessing {
+                | Witnessing::Dns => {
+                    resolve(peer, &reference, &Dns::system(), scope, reach).await?
+                },
+                | Witnessing::ByHand(witness) => {
+                    resolve(peer, &reference, &witness, scope, reach).await?
+                },
             };
-            drop(peer);
-            emit(&format_args!("{resolution}\n"))
+            emit(&format_args!("{sources}{resolution}\n"))
         },
         | Command::View { tree } => {
             let view = Peer::open(&state, identity)?.view(tree).await?;
@@ -1296,16 +1603,24 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             let heads = Peer::open(&state, identity)?.heads(tree).await?;
             emit(&heads)
         },
-        | Command::Sync { remote, tree } => {
-            let node = Peer::open(&state, identity)?
-                .bind(BindPort::Ephemeral)
-                .await?;
+        | Command::Sync { tree, dial } => {
+            let peer = Peer::open(&state, identity)?;
+            let route = peer.route(tree, dial.aim, dial.at).await?;
+            let remote = match route {
+                | Route::Itself => {
+                    drop(peer);
+                    return Err(RunError::Itself);
+                },
+                | Route::Book { ref remote, .. } | Route::Given { ref remote } => remote.clone(),
+            };
+            let node = peer.bind(BindPort::Ephemeral).await?;
             let synced = node.sync(&remote, tree).await;
             node.close().await;
             drop(node);
             let synced = synced?;
             emit(&format_args!(
-                "{}path {} {}\n",
+                "{}{}path {} {}\n",
+                Reached { tree, route },
                 synced.heads(),
                 remote.peer(),
                 synced.path()
@@ -1328,6 +1643,140 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
         },
     };
     emitted.map(|()| Completion::Success)
+}
+
+/// Resolve `reference`, having first reached the trees it reads as `reach`
+/// says, and name where each was reached.
+///
+/// # Specification
+/// - ensures: for [`Reach::Local`], resolves from the local store alone and
+///   names nothing. For [`Reach::Dial`], routes each tree the resolution reads
+///   ([`Peer::reads`], [`Peer::route`]); when every route is this peer itself,
+///   resolves locally without binding an endpoint. Otherwise binds an ephemeral
+///   endpoint, syncs each tree with its remote in tree order, then for a label
+///   routes and syncs the tree the now-synced scope introduces if it was not
+///   read before, resolves, and closes the endpoint, success or not. Returns
+///   the `source` lines of the trees reached at another peer, in the order
+///   reached ([`Reached`]), and the resolution.
+/// - fails: [`RunError::Whence`] as [`Peer::reads`] and [`Peer::whence`]
+///   refuse, [`RunError::Route`] as [`Peer::route`] refuses, as when the book
+///   holds no presence of the peer aimed at, [`RunError::Bind`] when the
+///   endpoint cannot bind, and [`RunError::Sync`] when a sync fails.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError::Whence`]: the trees read cannot be named, or the reference
+///   does not resolve.
+/// - [`RunError::Route`]: a tree read has no remote to dial.
+/// - [`RunError::Bind`]: the endpoint cannot bind.
+/// - [`RunError::Sync`]: a sync fails.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process test resolves an anchor of another peer's
+///   tree through its presence in the book, reads the source line, and is
+///   refused once the presence is withdrawn, then resolves with `--at`; the
+///   owner resolves its own tree's anchor without a source line, and a label
+///   read in no tree is refused before any dial.
+/// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
+/// - witness: `sync::tests::a_named_anchor_resolves_through_its_claim_or_introduction`
+async fn resolve<W>(
+    peer: Peer,
+    reference: &Reference,
+    witness: &W,
+    scope: Scope,
+    reach: Reach,
+) -> Result<(String, Resolution), RunError>
+where
+    W: Witness + Sync,
+{
+    let Reach::Dial(dial) = reach
+    else {
+        let resolution = peer.whence(reference, witness, scope).await?;
+        return Ok((String::new(), resolution));
+    };
+    let mut routes = Vec::new();
+    for tree in peer.reads(reference, witness, scope).await? {
+        let route = peer.route(tree, dial.aim, dial.at.clone()).await?;
+        routes.push(Reached { tree, route });
+    }
+    if routes.iter().all(|reached| reached.route == Route::Itself) {
+        let resolution = peer.whence(reference, witness, scope).await?;
+        return Ok((String::new(), resolution));
+    }
+    let node = peer.bind(BindPort::Ephemeral).await?;
+    let resolved = reach_and_resolve(&node, reference, witness, scope, &dial, routes).await;
+    node.close().await;
+    drop(node);
+    resolved
+}
+
+/// Sync each of `routes` on `node`, then a label's introduced tree if the
+/// sync named a new one, and resolve `reference`.
+///
+/// # Specification
+/// - ensures: as [`resolve`] states for a dial, once the endpoint is bound; the
+///   endpoint is left open for the caller to close.
+/// - fails: as [`resolve`], but for [`RunError::Bind`].
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError::Whence`], [`RunError::Route`], [`RunError::Sync`]: as
+///   [`resolve`].
+async fn reach_and_resolve<W>(
+    node: &Node,
+    reference: &Reference,
+    witness: &W,
+    scope: Scope,
+    dial: &Dial,
+    routes: Vec<Reached>,
+) -> Result<(String, Resolution), RunError>
+where
+    W: Witness + Sync,
+{
+    let read: BTreeSet<TreeId> = routes.iter().map(|reached| reached.tree).collect();
+    let mut sources = String::new();
+    let mut pending = routes;
+    if matches!(reference.authority(), Authority::Label(_)) {
+        sources.push_str(&sync_routes(node, pending).await?);
+        pending = Vec::new();
+        let introduced = node.peer().reads(reference, witness, scope).await?;
+        for tree in introduced.difference(&read) {
+            let route = node.peer().route(*tree, dial.aim, dial.at.clone()).await?;
+            pending.push(Reached { tree: *tree, route });
+        }
+    }
+    sources.push_str(&sync_routes(node, pending).await?);
+    let resolution = node.peer().whence(reference, witness, scope).await?;
+    Ok((sources, resolution))
+}
+
+/// Sync each tree of `routes` with its remote on `node`, in order.
+///
+/// # Specification
+/// - ensures: a tree routed to this peer itself is not dialed; every other is
+///   synced ([`Node::sync`]). Returns the `source` lines of the trees synced,
+///   in order.
+/// - fails: [`RunError::Sync`] at the first sync that fails.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError::Sync`]: a sync fails.
+async fn sync_routes(
+    node: &Node,
+    routes: Vec<Reached>,
+) -> Result<String, RunError>
+{
+    let mut sources = String::new();
+    for reached in routes {
+        match reached.route {
+            | Route::Itself => {},
+            | Route::Book { ref remote, .. } | Route::Given { ref remote } => {
+                let _synced = node.sync(remote, reached.tree).await?;
+            },
+        }
+        sources.push_str(&reached.to_string());
+    }
+    Ok(sources)
 }
 
 /// Commit `receipt` to `tree` on `peer` and write the commit id line.
@@ -1484,11 +1933,14 @@ mod tests
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use domhringr_record_tree::Address;
+    use domhringr_record_tree::Aim;
     use domhringr_record_tree::Anchor;
+    use domhringr_record_tree::At;
     use domhringr_record_tree::Authority;
     use domhringr_record_tree::BindPort;
     use domhringr_record_tree::Domain;
+    use domhringr_record_tree::Endpoint;
+    use domhringr_record_tree::EndpointKey;
     use domhringr_record_tree::Identity;
     use domhringr_record_tree::Label;
     use domhringr_record_tree::ParseAnchorError;
@@ -1496,8 +1948,8 @@ mod tests
     use domhringr_record_tree::ParseIdError;
     use domhringr_record_tree::ParseLabelError;
     use domhringr_record_tree::Path;
+    use domhringr_record_tree::PeerKey;
     use domhringr_record_tree::Reference;
-    use domhringr_record_tree::RemotePeer;
     use domhringr_record_tree::Scope;
     use domhringr_record_tree::StateDir;
     use domhringr_record_tree::Static;
@@ -1507,10 +1959,13 @@ mod tests
     use domhringr_record_tree::UdpPort;
 
     use super::Command;
+    use super::Dial;
     use super::Invocation;
     use super::Operand;
+    use super::Reach;
     use super::UsageError;
     use super::Verb;
+    use super::Withdrawn;
     use super::Witnessing;
     use super::drift;
     use super::parse;
@@ -1548,21 +2003,29 @@ mod tests
             .tree()
     }
 
-    /// A real endpoint id and peer id, from an identity made for the test,
-    /// looked up by endpoint id.
+    /// A real endpoint id and peer id, from an identity made for the test.
     ///
     /// # Specification
     /// trivial.
-    fn remote() -> RemotePeer
+    fn ids() -> (EndpointKey, PeerKey)
     {
         let root = tempfile::tempdir().unwrap();
         let identity =
             Identity::load_or_create(&StateDir::from(root.path().to_path_buf())).unwrap();
-        RemotePeer::new(
-            identity.endpoint_key(),
-            identity.peer_key(),
-            Address::Lookup,
-        )
+        (identity.endpoint_key(), identity.peer_key())
+    }
+
+    /// The dial with no option given: the tree's owner, at its presence in
+    /// the book.
+    ///
+    /// # Specification
+    /// trivial.
+    const fn book() -> Dial
+    {
+        Dial {
+            aim: Aim::Owner,
+            at: At::Book,
+        }
     }
 
     #[test]
@@ -1581,6 +2044,7 @@ mod tests
             reference: Reference::from(anchor),
             witnessing: Witnessing::Dns,
             scope: Scope::Unscoped,
+            reach: Reach::Dial(book()),
         };
         let (anchor, path) = (
             PATH.parse::<Anchor>().unwrap(),
@@ -1589,13 +2053,17 @@ mod tests
         let commit_text = format!("{TREE}.commit/{COMMIT}");
         let commit = commit_text.parse::<Anchor>().unwrap();
         let state = StateDir::from(PathBuf::from("dir"));
-        let remote = remote();
-        let (endpoint, peer) = (remote.endpoint().to_string(), remote.peer().to_string());
-        let direct = RemotePeer::new(
-            remote.endpoint(),
-            remote.peer(),
-            Address::Direct(SocketAddr::from((Ipv4Addr::LOCALHOST, 49731))),
-        );
+        let (endpoint_key, peer_key) = ids();
+        let (endpoint, peer) = (endpoint_key.to_string(), peer_key.to_string());
+        let at_text = format!("{endpoint}@127.0.0.1:49731");
+        let (at_option, peer_option) = (format!("--at={at_text}"), format!("--peer={peer}"));
+        let other_at = format!("--at={endpoint}@[::1]:1");
+        let at =
+            Endpoint::new(endpoint_key).with_direct(SocketAddr::from((Ipv4Addr::LOCALHOST, 49731)));
+        let named = Dial {
+            aim: Aim::Peer(peer_key),
+            at: At::Given(at),
+        };
         let port = |text: &str| BindPort::Fixed(text.parse::<UdpPort>().unwrap());
         let bind = |target: Target| Command::Bind {
             tree,
@@ -1622,10 +2090,7 @@ mod tests
             (vec!["--state", "dir", "open"], Command::Open),
             (
                 vec!["--state", "dir", "grant", TREE, &peer],
-                Command::Grant {
-                    tree,
-                    to: remote.peer(),
-                },
+                Command::Grant { tree, to: peer_key },
             ),
             (
                 vec!["--state", "dir", "note", TREE, "--not-an-option"],
@@ -1651,7 +2116,7 @@ mod tests
             ),
             (
                 vec!["--state", "dir", "bind", PATH, "endpoint", &endpoint],
-                bind(Target::Endpoint(remote.endpoint())),
+                bind(Target::Endpoint(endpoint_key)),
             ),
             (
                 vec!["--state", "dir", "bind", PATH, "datum", "--not an option"],
@@ -1672,7 +2137,50 @@ mod tests
                     introduced: other,
                 },
             ),
-            (vec!["--state", "dir", "whence", PATH], whence(anchor)),
+            (vec!["--state", "dir", "present", TREE], Command::Present {
+                tree,
+                port: BindPort::Ephemeral,
+            }),
+            (
+                vec!["--state", "dir", "present", "--port", "49731", TREE],
+                Command::Present {
+                    tree,
+                    port: port("49731"),
+                },
+            ),
+            (
+                vec![
+                    "--state",
+                    "dir",
+                    "present",
+                    TREE,
+                    "--port=1",
+                    "--port=65535",
+                ],
+                Command::Present {
+                    tree,
+                    port: port("65535"),
+                },
+            ),
+            (
+                vec!["--state", "dir", "withdraw", TREE],
+                Command::Withdraw {
+                    tree,
+                    of: Withdrawn::Own,
+                },
+            ),
+            (
+                vec!["--state", "dir", "withdraw", TREE, &peer],
+                Command::Withdraw {
+                    tree,
+                    of: Withdrawn::Of(peer_key),
+                },
+            ),
+            (vec!["--state", "dir", "book", TREE], Command::Book { tree }),
+            (
+                vec!["--state", "dir", "whence", PATH],
+                whence(anchor.clone()),
+            ),
             (
                 vec!["--state", "dir", "whence", TREE],
                 whence(Anchor::key(tree)),
@@ -1680,6 +2188,26 @@ mod tests
             (
                 vec!["--state", "dir", "whence", &commit_text],
                 whence(commit),
+            ),
+            (
+                vec![
+                    "--state", "dir", "whence", PATH, "--peer", &peer, "--at", &at_text,
+                ],
+                Command::Whence {
+                    reference: Reference::from(anchor.clone()),
+                    witnessing: Witnessing::Dns,
+                    scope: Scope::Unscoped,
+                    reach: Reach::Dial(named.clone()),
+                },
+            ),
+            (
+                vec!["--state", "dir", "whence", "--local", PATH],
+                Command::Whence {
+                    reference: Reference::from(anchor),
+                    witnessing: Witnessing::Dns,
+                    scope: Scope::Unscoped,
+                    reach: Reach::Local,
+                },
             ),
             (
                 vec![
@@ -1702,6 +2230,7 @@ mod tests
                             .collect::<Static>(),
                     ),
                     scope: Scope::Unscoped,
+                    reach: Reach::Dial(book()),
                 },
             ),
             (
@@ -1718,6 +2247,7 @@ mod tests
                     reference: Reference::from(Anchor::Tree(Authority::Label(b))),
                     witnessing: Witnessing::Dns,
                     scope: Scope::In(other),
+                    reach: Reach::Dial(book()),
                 },
             ),
             (vec!["--state", "dir", "view", TREE], Command::View { tree }),
@@ -1725,24 +2255,17 @@ mod tests
                 vec!["--state", "elsewhere", "--state", "dir", "heads", TREE],
                 Command::Heads { tree },
             ),
-            (
-                vec!["--state", "dir", "sync", &endpoint, &peer, TREE],
-                Command::Sync { remote, tree },
-            ),
+            (vec!["--state", "dir", "sync", TREE], Command::Sync {
+                tree,
+                dial: book(),
+            }),
             (
                 vec![
-                    "--state",
-                    "dir",
-                    "sync",
-                    "--at",
-                    "127.0.0.1:49731",
-                    &endpoint,
-                    &peer,
-                    TREE,
+                    "--state", "dir", "sync", "--at", &at_text, TREE, "--peer", &peer,
                 ],
                 Command::Sync {
-                    remote: direct,
                     tree,
+                    dial: named.clone(),
                 },
             ),
             (
@@ -1750,16 +2273,12 @@ mod tests
                     "--state",
                     "dir",
                     "sync",
-                    &endpoint,
-                    &peer,
                     TREE,
-                    "--at=[::1]:1",
-                    "--at=127.0.0.1:49731",
+                    &other_at,
+                    &at_option,
+                    &peer_option,
                 ],
-                Command::Sync {
-                    remote: direct,
-                    tree,
-                },
+                Command::Sync { tree, dial: named },
             ),
             (
                 vec![
@@ -1817,6 +2336,10 @@ mod tests
                     },
                     witnessing: Witnessing::Dns,
                     scope: Scope::Unscoped,
+                    reach: Reach::Dial(Dial {
+                        aim: Aim::Owner,
+                        at: At::Book,
+                    }),
                 } if read == tree && prefix.to_string() == "07070707"
             ),
             "whence reads a commit id abbreviated to eight digits as a prefix"
@@ -1826,8 +2349,8 @@ mod tests
     #[test]
     fn a_malformed_command_line_is_refused()
     {
-        let remote = remote();
-        let (endpoint, peer) = (remote.endpoint().to_string(), remote.peer().to_string());
+        let (endpoint, peer) = ids();
+        let (endpoint, peer) = (endpoint.to_string(), peer.to_string());
         let refused = |line: Vec<OsString>| parse(lexopt::Parser::from_args(line)).unwrap_err();
         let line = |words: &[&str]| words.iter().map(OsString::from).collect::<Vec<_>>();
         let commit_text = format!("{TREE}.commit/{COMMIT}");
@@ -1889,50 +2412,88 @@ mod tests
             UsageError::NotTree
         ));
         assert!(matches!(
-            refused(line(&["--state", "dir", "sync", &endpoint, "nothex", TREE])),
+            refused(line(&["--state", "dir", "sync", TREE, "--peer", "nothex"])),
             UsageError::Operand {
                 operand: Operand::Peer,
                 ..
             }
         ));
         assert!(matches!(
-            refused(line(&["--state", "dir", "sync", "nothex", "nothex", TREE])),
+            refused(line(&["--state", "dir", "sync", TREE, "--at", "nothex"])),
             UsageError::Operand {
-                operand: Operand::Endpoint,
+                operand: Operand::At,
+                source: ParseIdError::Endpoint(_),
+            }
+        ));
+        let nowhere = format!("{endpoint}@nowhere");
+        assert!(matches!(
+            refused(line(&["--state", "dir", "sync", TREE, "--at", &nowhere])),
+            UsageError::Operand {
+                operand: Operand::At,
+                source: ParseIdError::Address(_),
+            }
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "sync", PATH])),
+            UsageError::NotTree
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "sync", "--peer", &peer])),
+            UsageError::Operands(Verb::Sync)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "sync", TREE, "x"])),
+            UsageError::Operands(Verb::Sync)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "sync", TREE, "--at"])),
+            UsageError::Arguments(_)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "sync", TREE, "-v"])),
+            UsageError::Arguments(_)
+        ));
+        for (option, value) in [("--at", endpoint.as_str()), ("--peer", peer.as_str())] {
+            assert!(
+                matches!(
+                    refused(line(&[
+                        "--state", "dir", "whence", "--local", PATH, option, value
+                    ])),
+                    UsageError::Local
+                ),
+                "--local reaches no one, so it takes no {option}"
+            );
+        }
+        assert!(matches!(
+            refused(line(&["--state", "dir", "present"])),
+            UsageError::Operands(Verb::Present)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "present", TREE, TREE])),
+            UsageError::Operands(Verb::Present)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "present", TREE, "--port", "0"])),
+            UsageError::Port(_)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "withdraw"])),
+            UsageError::Operands(Verb::Withdraw)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "withdraw", TREE, &peer, "x"])),
+            UsageError::Operands(Verb::Withdraw)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "withdraw", TREE, "nothex"])),
+            UsageError::Operand {
+                operand: Operand::Peer,
                 ..
             }
         ));
         assert!(matches!(
-            refused(line(&["--state", "dir", "sync", &endpoint, &peer, PATH])),
-            UsageError::NotTree
-        ));
-        assert!(matches!(
-            refused(line(&["--state", "dir", "sync", "nothex", &peer])),
-            UsageError::Operands(Verb::Sync)
-        ));
-        assert!(matches!(
-            refused(line(&[
-                "--state", "dir", "sync", &endpoint, &peer, TREE, "x"
-            ])),
-            UsageError::Operands(Verb::Sync)
-        ));
-        assert!(matches!(
-            refused(line(&[
-                "--state", "dir", "sync", &endpoint, &peer, TREE, "--at", "nowhere"
-            ])),
-            UsageError::At(_)
-        ));
-        assert!(matches!(
-            refused(line(&[
-                "--state", "dir", "sync", &endpoint, &peer, TREE, "--at"
-            ])),
-            UsageError::Arguments(_)
-        ));
-        assert!(matches!(
-            refused(line(&[
-                "--state", "dir", "sync", &endpoint, &peer, TREE, "-v"
-            ])),
-            UsageError::Arguments(_)
+            refused(line(&["--state", "dir", "book"])),
+            UsageError::Operands(Verb::Book)
         ));
         assert!(matches!(
             refused(line(&["--state", "dir", "grant", TREE])),

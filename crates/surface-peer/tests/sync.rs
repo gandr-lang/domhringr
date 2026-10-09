@@ -279,10 +279,12 @@ mod tests
     /// serving on this host at `port`.
     ///
     /// # Specification
-    /// - ensures: the sync names the remote's direct address, the loopback
-    ///   address at `port`; returns the heads the sync printed and its path
-    ///   line, read for `remote`'s peer id.
-    /// - panics: as [`finish`], or when no path line ends the output.
+    /// - ensures: the sync names the remote's peer id and its endpoint at its
+    ///   direct address, the loopback address at `port`, and prints that it
+    ///   reached the tree there; returns the heads the sync printed and its
+    ///   path line, read for `remote`'s peer id.
+    /// - panics: as [`finish`], when the first line is not the source line
+    ///   naming that endpoint, or when no path line ends the output.
     fn sync(
         state: &Path,
         remote: &Lines,
@@ -290,16 +292,23 @@ mod tests
         port: &Port,
     ) -> (Lines, PathLine)
     {
+        let at = format!("{}@127.0.0.1:{}", remote.endpoint(), port.0);
         let mut printed = finish(
             peer(state)
                 .arg("sync")
-                .arg(remote.endpoint())
-                .arg(remote.peer())
                 .arg(tree)
+                .arg("--peer")
+                .arg(remote.peer())
                 .arg("--at")
-                .arg(format!("127.0.0.1:{}", port.0)),
+                .arg(&at),
         );
         let path = printed.0.pop().expect("a sync prints its path");
+        let source = printed.0.remove(0);
+        assert_eq!(
+            source,
+            format!("source {} at {at}", tree.to_string_lossy()),
+            "the sync says it reached the tree at the endpoint named"
+        );
         (printed, PathLine::read(OsStr::new(&path), remote))
     }
 
@@ -666,7 +675,9 @@ mod tests
             id.only().clone()
         };
         let whence = |state: &Path, anchor: &str| {
-            finish(peer(state).args(["whence", anchor])).only().clone()
+            finish(peer(state).args(["whence", "--local", anchor]))
+                .only()
+                .clone()
         };
 
         let a1 = note(a, "a1");
@@ -761,10 +772,10 @@ mod tests
         let witnessed = |anchor: &str, witness: &str| {
             let witness = format!("example.test={}", tree_id(OsStr::new(witness)));
             let mut command = peer(b);
-            let _args = command.args(["whence", anchor, "--witness", witness.as_str()]);
+            let _args = command.args(["whence", "--local", anchor, "--witness", witness.as_str()]);
             command
         };
-        let by_key = finish(peer(b).args(["whence", x.as_str()]));
+        let by_key = finish(peer(b).args(["whence", "--local", x.as_str()]));
         assert_eq!(
             by_key.only(),
             &format!("anchor {commit}"),
@@ -797,7 +808,7 @@ mod tests
         introduced.assert_ids();
         let label = |scope: &str| {
             let mut command = peer(a);
-            let _args = command.args(["whence", "domhringr://b/", "--in", scope]);
+            let _args = command.args(["whence", "--local", "domhringr://b/", "--in", scope]);
             command
         };
         assert_eq!(
@@ -855,7 +866,7 @@ mod tests
         };
         let commit = |digits: &str| format!("{tree}.commit/{digits}");
         let whence = |state: &Path, reference: &str| {
-            finish(peer(state).args(["whence", reference]))
+            finish(peer(state).args(["whence", "--local", reference]))
                 .only()
                 .clone()
         };

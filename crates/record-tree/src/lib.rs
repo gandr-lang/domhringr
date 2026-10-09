@@ -14,9 +14,10 @@
 //! holding the same commits folds them into the same [`View`]
 //! ([`Peer::view`]): the tree's owner, the peers granted write authority, the
 //! admitted notes, the paths bound, the DNS names claimed, the trees
-//! introduced, the commits admitted, and the commits refused with their
-//! [`Refusal`]. A receipt is admitted only from an author with authority in
-//! its causal past, and a claim only from the owner.
+//! introduced, the book of who is reachable at which endpoint, the commits
+//! admitted, and the commits refused with their [`Refusal`]. A receipt is
+//! admitted only from an author with authority in its causal past, a claim
+//! only from the owner, and a presence only of the author's own endpoint.
 //!
 //! A tree, the paths in it and its commits are named by [`Anchor`]s,
 //! `domhringr://<authority>/<path>` and `domhringr://<authority>/.commit/<id>`,
@@ -33,10 +34,16 @@
 //! of the tree it is read in ([`Scope`]).
 //!
 //! Binding the peer to an iroh endpoint ([`Peer::bind`]) yields a [`Node`]
-//! reached by endpoint id, which accepts connections ([`Node::accept`]) and
-//! dials other peers to sync a tree ([`Node::sync`]) — by endpoint id alone or
-//! at a direct address ([`Address`]) — each reporting the network path iroh
-//! selected ([`SelectedPath`]).
+//! reached by endpoint id, which accepts connections ([`Node::accept`]),
+//! presents its endpoint in a tree ([`Node::present`]: a [`Presence`] in the
+//! tree's book, proved by the endpoint key for the peer's key
+//! ([`EndpointProof`])), and dials other peers to sync a tree
+//! ([`Node::sync`]) at an [`Endpoint`] — its id and any addresses
+//! ([`Address`]) — each reporting the network path iroh selected
+//! ([`SelectedPath`]). [`Peer::route`] names the remote a dial for a tree
+//! reaches ([`Route`]): the peer aimed at ([`Aim`]), at an endpoint named by
+//! hand or at its presence in the book ([`At`]); [`Peer::reads`] names the
+//! trees a resolution reads, so a caller syncs them before resolving.
 //!
 //! The substrate is subduction over iroh as published, and the value plane
 //! for the receipt's canonical form; this crate supplies the Tokio spawner and
@@ -68,6 +75,7 @@ mod identity;
 mod line;
 mod name;
 mod node;
+mod presence;
 mod receipt;
 mod runtime;
 mod store;
@@ -89,6 +97,7 @@ pub use fold::Verdict;
 pub use fold::View;
 pub use id::Address;
 pub use id::CommitPrefix;
+pub use id::Endpoint;
 pub use id::EndpointKey;
 pub use id::ParseIdError;
 pub use id::PeerKey;
@@ -108,10 +117,16 @@ pub use node::BindError;
 pub use node::BindPort;
 pub use node::Node;
 pub use node::ParsePortError;
+pub use node::PresentError;
 pub use node::SelectedPath;
 pub use node::SyncError;
 pub use node::Synced;
 pub use node::UdpPort;
+pub use presence::Aim;
+pub use presence::At;
+pub use presence::Presence;
+pub use presence::Route;
+pub use receipt::EndpointProof;
 pub use receipt::Kind;
 pub use receipt::OpenProof;
 pub use receipt::Operation;
@@ -122,6 +137,7 @@ pub use store::Heads;
 pub use store::HeadsError;
 pub use store::OpenError;
 pub use store::Peer;
+pub use store::RouteError;
 pub use store::ViewError;
 pub use store::WhenceError;
 pub use witness::Dns;
