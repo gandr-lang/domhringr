@@ -1,0 +1,67 @@
+#:tombi toml-version = "v1.0.0"
+
+# Rust a change adds carries its specifications, keeps every diagnostic
+# standing, says why a value is absent, converts numbers totally, names its
+# tests for what they witness, and declares its dependencies once.
+name = "code"
+state = ["change.diff"]
+
+[band]
+low = 0.2
+high = 0.8
+
+[questions.absence]
+instructions = """
+Read the signatures the change adds or rewrites. Where a value may be \
+absent, does the type say why, through an error that names the failure or an \
+absence that carries its reason, rather than an Option whose None says \
+nothing? A change that adds no such signature meets this."""
+criteria.true = "Every absence in a new signature carries its reason, or there is none."
+criteria.false = "A new signature returns or takes an Option where the absence has a reason."
+
+[questions.conversions]
+instructions = """
+Read the code the change adds. Does it convert and compute numbers only \
+through total or checked operations, such as from, try_from, and checked or \
+saturating arithmetic, and never through an as cast or arithmetic that can \
+overflow or wrap unchecked? A change that adds no such code meets this."""
+criteria.true = "Every conversion and arithmetic step is total or checked, or there is none."
+criteria.false = "An as cast or unchecked arithmetic can truncate, overflow or wrap."
+
+[questions.dependencies]
+instructions = """
+Read the manifests the change edits. Is every dependency it adds declared \
+once, in the root manifest's [workspace.dependencies], with default features \
+off, a comment saying what it is, a features list naming the use that needs \
+each feature it enables, and a consumers list naming every crate that uses \
+it, each member taking it with workspace = true? A change that adds no \
+dependency meets this."""
+criteria.true = "Each added dependency is declared once at the root, defaults off, its features and consumers listed, or none is added."
+criteria.false = "A dependency is declared in a member, keeps its default features, or lacks its features or consumers list."
+
+[questions.specifications]
+instructions = """
+Read the code the change adds or rewrites. Does every function and method \
+carry a one-line summary and a Specification section, either trivial. or its \
+clauses in the order requires, ensures, provides, fails, panics, with an \
+Errors section when it can fail? Test functions are exempt."""
+criteria.true = "Every added or rewritten function carries its summary and its specification."
+criteria.false = "An added or rewritten function lacks its summary, its specification or its errors."
+
+[questions.suppressions]
+instructions = """
+Read the code the change adds. Does it leave every diagnostic standing, with \
+no allow attribute and no crate-wide or file-wide suppression, and any \
+expect attribute placed on one item and naming its reason? A change that \
+adds no such attribute meets this."""
+criteria.true = "No diagnostic is silenced, and any expect names its lint and its reason on one item."
+criteria.false = "The change silences a diagnostic with allow, a blanket suppression, or an expect without a reason."
+
+[questions.test-names]
+instructions = """
+Read the tests the change adds. Is each named for the behaviour it \
+witnesses, as a sentence such as a_missing_state_file_is_refused_by_name, \
+rather than for the function it calls, a ticket or a number? A change that \
+adds no test meets this."""
+criteria.true = "Each added test is named for the behaviour it witnesses, or none is added."
+criteria.false = "A test is named for the function it calls, a ticket or a number, such as test_grade_2."

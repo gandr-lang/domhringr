@@ -2,7 +2,8 @@
 //! the documents validate or are refused by file and field, a playbook's
 //! verifiers run in the task's state directory and its questions are graded
 //! against the rubric's band, every receipt lands on the task's current
-//! dispatch, and the replay shows them.
+//! dispatch, and the replay shows them. The rubric set under `rubrics/` is
+//! graded the same way: every rubric validates and grades its fixture pair.
 
 #[cfg(test)]
 mod tests
@@ -10,12 +11,16 @@ mod tests
     use core::time::Duration;
     use std::io::BufRead as _;
     use std::path::Path;
+    use std::path::PathBuf;
     use std::process::Child;
     use std::process::Command;
     use std::process::Output;
     use std::process::Stdio;
     use std::sync::mpsc;
     use std::time::Instant;
+
+    use domhringr_strategy_document::Loaded;
+    use domhringr_strategy_document::Rubric;
 
     /// How long one command may run, or a running process may take to print a
     /// line.
@@ -26,6 +31,17 @@ mod tests
 
     /// The brief the task's dispatch names, by content hash.
     const BRIEF: &str = "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e";
+
+    /// The rubric set: the workspace's `rubrics/` directory.
+    const SET: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rubrics");
+
+    /// The ruling a table records for a criterion holding: above the rubric
+    /// set's band.
+    const HOLDS: &str = "read A A=0.9 B=0.1 outside=0";
+
+    /// The ruling a table records for a criterion failing: below the rubric
+    /// set's band.
+    const FAILS: &str = "read B A=0.1 B=0.9 outside=0";
 
     /// A rubric of three questions over one state file.
     const RUBRIC: &str = r#"name = "landing"
@@ -190,6 +206,167 @@ question = { rubric = "rubric.toml", question = "tested" }
     {
         let socket = std::net::UdpSocket::bind(("0.0.0.0", 0)).unwrap();
         socket.local_addr().unwrap().port().to_string()
+    }
+
+    /// The rubric files of the set: every `*.toml` directly in [`SET`], in
+    /// name order.
+    ///
+    /// # Specification
+    /// - ensures: at least one file, sorted by path.
+    /// - panics: when the set's directory cannot be read or holds no rubric.
+    fn rubric_files() -> Vec<PathBuf>
+    {
+        let mut files = std::fs::read_dir(SET)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "toml")
+            })
+            .collect::<Vec<_>>();
+        files.sort();
+        assert!(!files.is_empty(), "{SET} holds the rubric set");
+        files
+    }
+
+    /// A question of a rubric, as `rubric validate` prints it.
+    struct Asked
+    {
+        /// The question's name in its rubric.
+        name: String,
+        /// The hash a table names the question by.
+        hash: String,
+    }
+
+    /// A rubric file of the set, as `rubric validate` prints it.
+    struct Validated
+    {
+        /// The rubric's name, its file's stem.
+        name: String,
+        /// The hash of the rubric file's bytes.
+        hash: String,
+        /// Its questions, in the order printed.
+        questions: Vec<Asked>,
+    }
+
+    /// Validate the rubric `file` with the peer of state `state`.
+    ///
+    /// # Specification
+    /// - ensures: `rubric validate` exited 0 and printed `rubric <hash>
+    ///   <name>`, `<name>` the file's stem, then one `question <question>
+    ///   <hash>` line per question, at least one.
+    /// - provides: the rubric's name, its hash, and each question in the order
+    ///   printed.
+    /// - panics: when the command fails or prints other lines, or the rubric is
+    ///   not named for its file.
+    fn validate(
+        state: &Path,
+        file: &Path,
+    ) -> Validated
+    {
+        let name = file
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_else(|| panic!("a rubric file is named in UTF-8: {file:?}"))
+            .to_owned();
+        let lines = finish(peer(state).args(["rubric", "validate"]).arg(file));
+        let (first, listed) = lines
+            .split_first()
+            .unwrap_or_else(|| panic!("{name}: a rubric prints itself"));
+        let hash = first
+            .strip_prefix("rubric ")
+            .and_then(|rest| rest.strip_suffix(name.as_str()))
+            .and_then(|rest| rest.strip_suffix(' '))
+            .unwrap_or_else(|| panic!("{name}: the rubric is named for its file: {first:?}"))
+            .to_owned();
+        let questions = listed
+            .iter()
+            .map(|line| {
+                let fields = line.split(' ').collect::<Vec<_>>();
+                let ["question", question, hash] = *fields.as_slice()
+                else {
+                    panic!("{name}: a question line: {line:?}");
+                };
+                Asked {
+                    name: question.to_owned(),
+                    hash: hash.to_owned(),
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(!questions.is_empty(), "{name} holds questions");
+        Validated {
+            name,
+            hash,
+            questions,
+        }
+    }
+
+    /// The question a fixture pair isolates: the name its `isolates` file
+    /// holds.
+    ///
+    /// # Specification
+    /// - ensures: the file's text without its final line break.
+    /// - panics: when the file cannot be read.
+    fn isolated(pair: &Path) -> String
+    {
+        std::fs::read_to_string(pair.join("isolates"))
+            .unwrap_or_else(|error| panic!("{pair:?} names the question it isolates: {error}"))
+            .trim_end()
+            .to_owned()
+    }
+
+    /// A task opened by one peer and dispatched to another, for gradings to
+    /// land on.
+    struct Dispatched
+    {
+        /// The opening peer's id: the judge of every grading it commits.
+        judge: String,
+        /// The dispatched seat's peer id.
+        seat: String,
+        /// The task's tree.
+        tree: String,
+        /// The dispatch's commit id.
+        dispatch: String,
+    }
+
+    impl Dispatched
+    {
+        /// Open a task with the peer of state `o` and dispatch it to the peer
+        /// of state `s`.
+        ///
+        /// # Specification
+        /// - ensures: O owns a fresh tree whose current dispatch names S and
+        ///   the brief [`BRIEF`]; the dispatching process is gone once the
+        ///   dispatch is committed.
+        /// - panics: when a command fails or prints other than its contract.
+        fn open(
+            o: &Path,
+            s: &Path,
+        ) -> Self
+        {
+            let judge = finish(peer(o).arg("id"))[1].clone();
+            let s_id = finish(peer(s).arg("id"));
+            let (endpoint, seat) = (s_id[0].clone(), s_id[1].clone());
+            let tree = finish(peer(o).arg("open"))[0].clone();
+            let contact = format!("{endpoint}@127.0.0.1:{}", free_port());
+            let dialing = Running::spawn(peer(o).args([
+                "dispatch",
+                tree.as_str(),
+                seat.as_str(),
+                "content",
+                BRIEF,
+                "--at",
+                contact.as_str(),
+            ]));
+            let dispatch = dialing.line();
+            drop(dialing);
+            Self {
+                judge,
+                seat,
+                tree,
+                dispatch,
+            }
+        }
     }
 
     /// A running process and its standard output, read as it arrives.
@@ -615,5 +792,227 @@ question = { rubric = "rubric.toml", question = "tested" }
             replayed,
             "the replay shows every verification and grading on the dispatch"
         );
+    }
+
+    /// Every rubric of the set validates and grades its fixture pair: met
+    /// over its `met` state, and unmet over its `unmet` state with the
+    /// question the pair isolates unmet; the replay holds each grading naming
+    /// the rubric and every question.
+    ///
+    /// # Specification
+    /// - ensures: for each `<name>.toml` in [`SET`], in name order, `rubric
+    ///   validate` prints `rubric r <name>` and its questions; the transcripts
+    ///   of the state directories `fixtures/<name>/met` and
+    ///   `fixtures/<name>/unmet` differ, and `fixtures/<name>/isolates` names
+    ///   one of the questions. From a table reading every question [`HOLDS`]
+    ///   about the `met` transcript, and about the `unmet` one the isolated
+    ///   question [`FAILS`] and every other [`HOLDS`], O's grading over `met`
+    ///   prints the rubric, the transcript t, each ruling, the verdict V, every
+    ///   grade `met` and `graded G met`; over `unmet` it prints the isolated
+    ///   question's grade `unmet`, every other `met`, and `graded G unmet`. O's
+    ///   local replay prints the dispatch D; per grading, the verdict naming D,
+    ///   O, r and t with each question's ruling, and the grading naming D, V, r
+    ///   and the composition with each question's grade; then `dispatched D S`.
+    /// - panics: on any contract violation.
+    #[test]
+    fn every_rubric_in_the_set_grades_its_fixture_pair()
+    {
+        let (o, s, files) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let (o, s, files) = (o.path(), s.path(), files.path());
+        let task = Dispatched::open(o, s);
+        let mut replayed = vec![format!(
+            "dispatch {} {} content {BRIEF}",
+            task.dispatch, task.seat
+        )];
+        for file in rubric_files() {
+            let Validated {
+                name,
+                hash: rubric,
+                questions,
+            } = validate(o, &file);
+            let pair = Path::new(SET).join("fixtures").join(&name);
+            let isolated = isolated(&pair);
+            assert!(
+                questions.iter().any(|asked| asked.name == isolated),
+                "{name}: its pair isolates a question it holds, not {isolated:?}"
+            );
+            let loaded = Loaded::<Rubric>::read(&file).unwrap();
+            let transcript = |member: &str| {
+                loaded
+                    .document()
+                    .transcript(&pair.join(member))
+                    .unwrap_or_else(|error| panic!("{name}: its {member} state reads: {error}"))
+                    .hash()
+                    .to_string()
+            };
+            let (met, unmet) = (transcript("met"), transcript("unmet"));
+            assert_ne!(met, unmet, "{name}: the members of its pair differ");
+            let members = [("met", met, "met"), ("unmet", unmet, "unmet")];
+            // Each question's ruling and grade over a member: every criterion
+            // holds over `met`, and over `unmet` all but the isolated one.
+            let answer = |member: &str, question: &str| {
+                if member == "unmet" && question == isolated {
+                    (FAILS, "unmet")
+                }
+                else {
+                    (HOLDS, "met")
+                }
+            };
+            let table = members
+                .iter()
+                .flat_map(|&(member, ref transcript, _)| {
+                    questions.iter().map(move |asked| {
+                        let (ruling, _) = answer(member, &asked.name);
+                        format!("{} {transcript} {ruling}\n", asked.hash)
+                    })
+                })
+                .collect::<String>();
+            let answers = files.join(&name);
+            std::fs::write(&answers, table).unwrap();
+
+            for &(member, ref transcript, composed) in &members {
+                let answered = questions
+                    .iter()
+                    .map(|asked| (asked.hash.as_str(), answer(member, &asked.name)))
+                    .collect::<Vec<_>>();
+                let graded = finish(
+                    peer(o)
+                        .args(["rubric", "grade"])
+                        .arg(&file)
+                        .arg(&task.tree)
+                        .arg("--task-state")
+                        .arg(pair.join(member))
+                        .arg("--static")
+                        .arg(&answers),
+                );
+                let verdict = graded
+                    .get(questions.len().saturating_add(2))
+                    .and_then(|line| line.strip_prefix("verdict "))
+                    .unwrap_or_else(|| {
+                        panic!("{name} over its {member} state commits a verdict: {graded:?}")
+                    })
+                    .to_owned();
+                let grading = graded
+                    .last()
+                    .and_then(|line| line.strip_prefix("graded "))
+                    .and_then(|rest| rest.split(' ').next())
+                    .unwrap_or_else(|| {
+                        panic!("{name} is graded over its {member} state: {graded:?}")
+                    })
+                    .to_owned();
+                let mut expected = vec![
+                    format!("rubric {rubric} {name}"),
+                    format!("transcript {transcript}"),
+                ];
+                expected.extend(
+                    answered
+                        .iter()
+                        .map(|&(hash, (ruling, _))| format!("ruling {hash} {ruling}")),
+                );
+                expected.push(format!("verdict {verdict}"));
+                expected.extend(
+                    answered
+                        .iter()
+                        .map(|&(hash, (_, grade))| format!("grade {hash} {grade}")),
+                );
+                expected.push(format!("graded {grading} {composed}"));
+                assert_eq!(
+                    graded, expected,
+                    "{name} grades {composed} over its {member} state"
+                );
+
+                replayed.push(format!(
+                    "verdict {verdict} {} {} {rubric} {transcript}",
+                    task.dispatch, task.judge
+                ));
+                replayed.extend(
+                    answered
+                        .iter()
+                        .map(|&(hash, (ruling, _))| format!("ruling {verdict} {hash} {ruling}")),
+                );
+                replayed.push(format!(
+                    "graded {grading} {} {verdict} {rubric} {composed}",
+                    task.dispatch
+                ));
+                replayed.extend(
+                    answered
+                        .iter()
+                        .map(|&(hash, (_, grade))| format!("grade {grading} {hash} {grade}")),
+                );
+            }
+        }
+        replayed.push(format!("dispatched {} {}", task.dispatch, task.seat));
+        assert_eq!(
+            finish(peer(o).args(["replay", task.tree.as_str(), "--local"])),
+            replayed,
+            "the replay holds every grading, naming its rubric and every question"
+        );
+    }
+
+    /// A fixture pair of the set graded by the judge the environment
+    /// configures: `stable-refs` is met over its `met` state, and unmet over
+    /// its `unmet` state on the question the pair isolates.
+    ///
+    /// # Specification
+    /// - ensures: O, having dispatched S, grades `stable-refs` over its `met`
+    ///   state to `graded G met`, and over its `unmet` state to `graded G
+    ///   unmet` with the isolated question's grade `unmet`.
+    /// - panics: on any contract violation, a judge the environment does not
+    ///   configure among them.
+    #[test]
+    #[ignore = "asks the judge the environment configures: run with --ignored where \
+                DOMHRINGR_JUDGE_ENDPOINT and DOMHRINGR_JUDGE_MODEL name one"]
+    fn a_configured_judge_grades_a_fixture_pair_of_the_set()
+    {
+        let (o, s) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (o, s) = (o.path(), s.path());
+        let task = Dispatched::open(o, s);
+        let (file, pair) = (
+            Path::new(SET).join("stable-refs.toml"),
+            Path::new(SET).join("fixtures").join("stable-refs"),
+        );
+        let Validated { questions, .. } = validate(o, &file);
+        let isolated = isolated(&pair);
+        let hash = questions
+            .iter()
+            .find(|asked| asked.name == isolated)
+            .map_or_else(
+                || panic!("the pair isolates a question the rubric holds"),
+                |asked| asked.hash.clone(),
+            );
+        for (member, composed) in [("met", "met"), ("unmet", "unmet")] {
+            // A model may take longer than the deadline to answer, so the
+            // command runs to its end.
+            let output = peer(o)
+                .args(["rubric", "grade"])
+                .arg(&file)
+                .arg(&task.tree)
+                .arg("--task-state")
+                .arg(pair.join(member))
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "the grading runs: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let graded = printed(&output);
+            assert!(
+                graded
+                    .last()
+                    .is_some_and(|line| line.starts_with("graded ")
+                        && line.ends_with(&format!(" {composed}"))),
+                "the judge grades stable-refs {composed} over its {member} state: {graded:?}"
+            );
+            assert!(
+                member == "met" || graded.contains(&format!("grade {hash} unmet")),
+                "the judge fails the question the pair isolates: {graded:?}"
+            );
+        }
     }
 }

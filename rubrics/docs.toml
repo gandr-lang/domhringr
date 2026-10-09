@@ -1,0 +1,56 @@
+#:tombi toml-version = "v1.0.0"
+
+# A README states what its package is, why and how, the decisions it rests
+# on and what it needs, as present fact.
+name = "docs"
+state = ["README.md"]
+
+[band]
+low = 0.2
+high = 0.8
+
+[questions.decisions]
+instructions = """
+Read the README's sections on its decisions. Does each decision state the \
+choice and its reason, the alternatives it was chosen over with why each \
+lost, and the condition that would reverse it?"""
+criteria.true = "Each decision states its choice and reason, its alternatives and why they lost, and its reversal."
+criteria.false = "A decision lacks its reason, its alternatives or the condition that would reverse it."
+
+[questions.examples]
+instructions = """
+Read the README's examples. Do they give runnable usage and the command \
+that runs the package's tests?"""
+criteria.true = "The README gives runnable usage and the test command."
+criteria.false = "The README gives no runnable usage, or no test command."
+
+[questions.expected-features]
+instructions = """
+Read the README's expected features. Do they name only what a consumer or \
+the environment must supply for the package to be useful, such as a \
+runtime, a store, a target or a variable, and nothing the package lacks or \
+plans?"""
+criteria.true = "Expected features name only what a consumer or the environment supplies."
+criteria.false = "Expected features list work the package lacks or plans."
+
+[questions.present-tense]
+instructions = """
+Read the whole README. Is it written as present fact, stating what is, with \
+no history: no earlier designs, no account of what changed, no dates of \
+decisions, and no notes that revise earlier text?"""
+criteria.true = "The README states the current design as present fact."
+criteria.false = "The README narrates history, revisions or earlier designs."
+
+[questions.purpose]
+instructions = """
+Read the README's opening. Does its title name the package, and does one \
+sentence after the title state what the package is?"""
+criteria.true = "The title names the package and one sentence states what it is."
+criteria.false = "The title does not name the package, or no sentence states what it is."
+
+[questions.synopsis]
+instructions = """
+Read the README's synopsis. Does it state what the package is, the need it \
+answers and the mechanism it answers it by, each concretely?"""
+criteria.true = "The synopsis states what, why and how, each concretely."
+criteria.false = "The synopsis misses what, why or how, or states one only in general terms."

@@ -1,0 +1,59 @@
+#:tombi toml-version = "v1.0.0"
+
+# A change to a public tree carries only what any clone needs: no secret, no
+# fact about a particular machine or installation, no private source, and no
+# contributor's own concerns.
+name = "public-private-stance"
+state = ["change.diff", "commits.txt"]
+
+[band]
+low = 0.2
+high = 0.8
+
+[questions.configuration]
+instructions = """
+Read the change and its commit messages. Do they keep the settings of a \
+particular installation out of the tree, reading them from the environment \
+or a configuration directory instead? Such settings are endpoints, model \
+names, registrations, identity keys and options for one machine; a default \
+that every clone needs to build and test is not one of them."""
+criteria.true = "Every installation setting is read from the environment or a configuration directory, or the change has none."
+criteria.false = "The change commits an endpoint, a model name, a registration or another setting of one installation."
+
+[questions.contributor-concerns]
+instructions = """
+Read the change and its commit messages. Do they record only what the \
+project needs, keeping out which tool or session produced the change, a \
+contributor's own configuration, and notes on a contributor's way of \
+working? The Co-authored-by and Assisted-by trailers are the project's \
+record of authorship and meet this."""
+criteria.true = "The change records only what the project needs."
+criteria.false = "The change records the tool or session that produced it, or a contributor's own configuration or notes."
+
+[questions.machine-facts]
+instructions = """
+Read the change and its commit messages. Do they keep out facts about \
+particular machines and people: host names, private network addresses, user \
+names, home directories, and absolute paths on someone's machine? A \
+loopback address, a placeholder such as <model>, and a path relative to the \
+repository meet this."""
+criteria.true = "The change names no particular host, private address, user or absolute local path."
+criteria.false = "The change names a host, a private address, a user, or an absolute path on someone's machine."
+
+[questions.public-sources]
+instructions = """
+Read the change and its commit messages. Does every source they name or \
+link, whether a repository, a document, an issue or a discussion, reach \
+something any reader can open, such as a public repository, a published \
+crate or a paper? A change that names no source meets this."""
+criteria.true = "Every source named is public, or none is named."
+criteria.false = "The change names or links a private repository, document, tracker or conversation."
+
+[questions.secrets]
+instructions = """
+Read the change and its commit messages. Do they hold no secret: no key, \
+token, password, private key or other credential, in code, configuration, a \
+test or a message? Naming the environment variable a secret is read from is \
+not holding it."""
+criteria.true = "The change holds no secret."
+criteria.false = "The change holds a key, a token, a password or another credential."

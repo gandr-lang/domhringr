@@ -1,0 +1,40 @@
+#:tombi toml-version = "v1.0.0"
+
+# An issue asks one question that a reader can check and a test can close.
+name = "issues"
+state = ["issue.md"]
+
+[band]
+low = 0.2
+high = 0.8
+
+[questions.acceptance-test]
+instructions = """
+Read the issue. Does it name its acceptance as a test: the behaviour to \
+observe, the input or state it is observed on, and the result that closes \
+the issue?"""
+criteria.true = "The issue names the test whose passing closes it."
+criteria.false = "The issue names no test, or closes on a judgement such as works well or reads better."
+
+[questions.evidence]
+instructions = """
+Read the issue. Does it state the current behaviour with evidence a reader \
+can reproduce: the command run and its output, the file and the anchor or \
+commit it is read at, or the steps that reach the state?"""
+criteria.true = "The issue shows what happens now, with evidence a reader can reproduce."
+criteria.false = "The issue asserts a problem or a need without evidence a reader can reproduce."
+
+[questions.one-question]
+instructions = """
+Read the issue. Does it ask one question or propose one change, so that one \
+answer or one change closes it?"""
+criteria.true = "The issue asks one question or proposes one change."
+criteria.false = "The issue bundles questions or changes that could each be closed on their own."
+
+[questions.self-contained]
+instructions = """
+Read the issue. Can a reader who holds only the issue and the public sources \
+it links understand what is asked, every term defined or linked and nothing \
+resting on a conversation or a document the issue does not name?"""
+criteria.true = "The issue reads on its own and through the public sources it links."
+criteria.false = "The issue rests on context it does not give, such as an earlier conversation."

@@ -59,6 +59,7 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 - For `drift`, the `git` binary on `PATH`, both checkouts local, each a directory in a git working tree, and the concepts tree in the local store; a `sync` brings it there, since `drift` dials no one.
 - For `judge` without `--static`, an OpenAI-compatible endpoint reporting log-probabilities, configured as [`domhringr-judge-oracle`](../judge-oracle/README.md#configuration) reads it from the environment; for `judge verdict`, the task in the local store with a dispatch.
 - For `playbook run` and `rubric grade`, the task in the local store with a dispatch, the task's state directory holding each state file its rubrics read, each verifier's command on `PATH` or named by path, and the judge as `judge` expects it.
+- For the ignored test `strategy::tests::a_configured_judge_grades_a_fixture_pair_of_the_set`, a judge endpoint configured as `judge` expects it; the test fails naming the missing variable when none is, and CI does not run it.
 
 ## Examples
 
@@ -122,7 +123,7 @@ domhringr-peer --state <dir> rubric validate <file>                # the rubric'
 domhringr-peer --state <dir> rubric grade <file> <tree> [--task-state <dir>] [--static <file>]  # the rubric's rulings, verdict, grades and grading
 ```
 
-Run the crate's tests, including two-process synchronization, reaching a peer through its presence, a seat dispatched, woken and reporting across restarts of both sides, a judge ruling on a task from a table file, a playbook running its verifiers and grading its questions on a task, and a drift check over throwaway git repositories:
+Run the crate's tests, including two-process synchronization, reaching a peer through its presence, a seat dispatched, woken and reporting across restarts of both sides, a judge ruling on a task from a table file, a playbook running its verifiers and grading its questions on a task, every rubric of the [rubric set](../../rubrics/README.md#tests) grading its fixture pair, and a drift check over throwaway git repositories:
 
 ```sh
 mise exec -- cargo nextest run -p domhringr-surface-peer

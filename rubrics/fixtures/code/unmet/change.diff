@@ -1,0 +1,46 @@
+diff --git a/crates/strategy-document/src/rubric.rs b/crates/strategy-document/src/rubric.rs
+--- a/crates/strategy-document/src/rubric.rs
++++ b/crates/strategy-document/src/rubric.rs
+@@ -372,6 +372,24 @@ pub fn compose(grades: &[Grade]) -> Grade
+     }
+ }
+ 
++/// Whether `grade` settles a rubric's composition whatever the other grades
++/// are.
++///
++/// # Specification
++/// - ensures: true for [`Grade::Unmet`] alone: the one grade a conjunction
++///   cannot outweigh.
++/// - panics: none.
++///
++/// # Adequacy
++/// - hypothesis: L3 — each of the four grades is asked once.
++/// - witness: `rubric::tests::test_settles_1`
++#[inline]
++#[must_use]
++pub const fn settles(grade: Grade) -> bool
++{
++    matches!(grade, Grade::Unmet)
++}
++
+ /// A file a rubric reads from the task's state directory: a relative path of
+ /// segments joined by `/`, each of ASCII letters, digits, `.`, `_` and `-`,
+ /// none empty, `.` or `..`.
+@@ -722,4 +740,17 @@ mod tests
+             assert_eq!(compose(grades), composed, "{grades:?}");
+         }
+     }
++
++    #[test]
++    fn test_settles_1()
++    {
++        for (grade, settled) in [
++            (Grade::Met, false),
++            (Grade::Undecided, false),
++            (Grade::Refused, false),
++            (Grade::Unmet, true),
++        ] {
++            assert_eq!(settles(grade), settled, "{grade}");
++        }
++    }
+ }

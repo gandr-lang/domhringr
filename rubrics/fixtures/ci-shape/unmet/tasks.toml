@@ -1,0 +1,35 @@
+# The wall. Every `check:*` task is one gate; `check` fans out to all of them.
+[check]
+description = "Every gate"
+depends = ["check:*"]
+
+["check:format"]
+description = "Every formatter in check mode: fails on any file it would change"
+run = "treefmt --ci"
+
+["check:clippy"]
+description = "The clippy half of the lint wall, every target, warnings denied"
+run = "cargo clippy --workspace --all-targets --locked -- --deny warnings"
+
+["check:dylint"]
+description = "The compiler plugin's policy over every target, warnings denied"
+env.DYLINT_RUSTFLAGS = "--deny warnings"
+run = "cargo dylint --lib quenchant_dylints --no-deps -- --workspace --all-targets"
+
+["check:doc"]
+description = "Private-item rustdoc with every rustdoc warning denied"
+env.RUSTDOCFLAGS = "-D warnings"
+run = "cargo doc --workspace --locked --no-deps --document-private-items"
+
+["check:tests"]
+description = "Unit and integration tests over every target"
+run = "cargo nextest run --workspace --locked"
+
+["check:typos"]
+description = "Spelling"
+run = "typos"
+
+# The committed workflow, run on a workstation: the same jobs CI runs.
+["ci:act"]
+description = "Run the committed CI workflow locally"
+run = "act workflow_dispatch --workflows .github/workflows/ci.yml"

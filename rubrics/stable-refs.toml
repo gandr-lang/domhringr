@@ -1,0 +1,48 @@
+#:tombi toml-version = "v1.0.0"
+
+# Every reference a change adds resolves for a reader who holds only the text
+# and the public sources it names.
+name = "stable-refs"
+state = ["change.diff", "commits.txt"]
+
+[band]
+low = 0.2
+high = 0.8
+
+[questions.citations]
+instructions = """
+Read the lines the change adds. Wherever they cite a paper or a book, does \
+the citation give its full title, its authors, its venue, its date and a \
+stable identifier such as a DOI, an ISBN, an arXiv id or a HAL id? A change \
+that cites no paper or book meets this."""
+criteria.true = "Every paper or book cited carries its title, authors, venue, date and a stable identifier, or none is cited."
+criteria.false = "A paper or book is cited by a nickname, by its author and year alone, or by a bare link."
+
+[questions.commit-hashes]
+instructions = """
+Read the lines the change adds and its commit messages. Wherever they name \
+a commit, do they name it by its full hash: forty hexadecimal digits for a \
+git commit, sixty-four for a commit of a record? A change that names no \
+commit meets this."""
+criteria.true = "Every commit named is named by its full hash, or none is named."
+criteria.false = "A commit is named by an abbreviated hash, a branch name, or a phrase such as the last commit."
+
+[questions.document-anchors]
+instructions = """
+Read the lines the change adds and its commit messages. Wherever they point \
+into a document, do they name the place by a heading anchor, such as \
+crates/README.md#layering, by another identifier that survives edits to the \
+document, or by a line at a named full revision? A pointer to a whole \
+document meets this, as does a change with no pointer into a document."""
+criteria.true = "Every pointer into a document names a heading anchor, a stable identifier, or a line at a named full revision."
+criteria.false = "A pointer names its place by a bare line number or by position, such as the third section."
+
+[questions.self-contained-ids]
+instructions = """
+Read the lines the change adds and its commit messages. Does every \
+identifier they use resolve from the text itself or from a public source it \
+names? A short code such as M1 or D11, a step or item number of a list the \
+text does not name, and an issue number without its repository resolve only \
+where they were written, and fail this."""
+criteria.true = "Every identifier is defined in the text or resolves in a public source the text names."
+criteria.false = "An identifier such as M1, step 3 or #12 resolves only in a list or tracker the text does not name."

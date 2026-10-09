@@ -173,7 +173,7 @@ Reversal: rubrics whose questions are not a conjunction, such as alternatives of
 
 ## The rubric set
 
-The example rubric grades two questions about a checkout of this repository. The rubric set that grades a repository's conformance adds seven rubrics: `stable-refs`, `public-private-stance`, `issues`, `pull-requests`, `ci-shape`, `docs` and `code`. Each is graded on a fixture pair, one tree that meets it and one that does not, so a rubric that cannot tell the two apart is caught before it grades real work.
+The example rubric grades two questions about a checkout of this repository. The [rubric set](../../rubrics/README.md) grades a change to a repository of this workspace's shape with seven rubrics: `stable-refs`, `public-private-stance`, `issues`, `pull-requests`, `ci-shape`, `docs` and `code`. Each reads the artifacts a task's record supplies, such as a diff, its commit messages, an issue, a review, a workflow or a README, and each has a fixture pair: one state that meets it and one that fails exactly one of its questions. The peer binary's process tests grade every pair from a table, and one pair by a real judge when the environment configures one.
 
 ## Dependencies
 

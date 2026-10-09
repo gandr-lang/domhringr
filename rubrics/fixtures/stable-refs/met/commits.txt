@@ -1,0 +1,6 @@
+commit 3f2a9c4d7e1b8a6f5c0d2e4b9a7c1f3e5d8b6a20
+
+docs(strategy): cite the conjunction a rubric's grades compose by
+
+The composition section names the logic it follows and where the
+grader that implements it landed, so a reader can check both.

@@ -1,0 +1,61 @@
+#:tombi toml-version = "v1.0.0"
+
+# CI runs every gate over the whole workspace, from actions pinned by hash,
+# and the same workflow runs on a workstation as committed.
+name = "ci-shape"
+state = ["ci.yml", "tasks.toml"]
+
+[band]
+low = 0.2
+high = 0.8
+
+[questions.every-target]
+instructions = """
+Read the workflow and the tasks. Does a job build and test every target of \
+the workspace, the libraries, binaries, examples and tests of every member, \
+rather than a chosen subset?"""
+criteria.true = "A job builds and tests every target of every workspace member."
+criteria.false = "The tests run on some members or targets and skip others."
+
+[questions.format]
+instructions = """
+Read the workflow and the tasks. Does a job run the formatters in check mode \
+over the whole tree, failing when a file is not formatted?"""
+criteria.true = "A job checks every file's formatting and fails on any difference."
+criteria.false = "No job checks formatting, or one rewrites files without failing."
+
+[questions.lint-wall]
+instructions = """
+Read the workflow and the tasks. Does a job lint every target with warnings \
+denied, through clippy and, where the tasks define one, the compiler plugin's \
+policy, so that any warning fails the run?"""
+criteria.true = "A job lints every target with every warning denied."
+criteria.false = "No job lints, one lints part of the workspace, or a warning passes."
+
+[questions.local-run]
+instructions = """
+Read the tasks. Does a task run the committed workflow itself on a \
+workstation, so that a local gate runs the jobs CI runs rather than a list \
+of commands kept beside them?"""
+criteria.true = "A task runs the committed workflow locally."
+criteria.false = "Local gates are a separate list of commands that can drift from the workflow."
+
+[questions.pinned-actions]
+instructions = """
+Read the workflow. Is every action it uses pinned to a full commit hash?"""
+criteria.true = "Every action is named by a full commit hash."
+criteria.false = "An action is named by a tag or a branch."
+
+[questions.private-rustdoc]
+instructions = """
+Read the workflow and the tasks. Does a job build the documentation with \
+private items included and every rustdoc warning denied?"""
+criteria.true = "A job builds rustdoc over private items with every warning denied."
+criteria.false = "Rustdoc is not built, covers public items alone, or lets a warning pass."
+
+[questions.spelling]
+instructions = """
+Read the workflow and the tasks. Does a job check the spelling of the tree, \
+directly or through a task it runs?"""
+criteria.true = "A job checks spelling."
+criteria.false = "No job checks spelling."

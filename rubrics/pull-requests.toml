@@ -1,0 +1,48 @@
+#:tombi toml-version = "v1.0.0"
+
+# A review of a pull request holds the change to the record's own words, line
+# by line, and decides by its findings.
+name = "pull-requests"
+state = ["change.diff", "review.md"]
+
+[band]
+low = 0.2
+high = 0.8
+
+[questions.cites-line]
+instructions = """
+Read the review. Does each finding name the line of the change it is about, \
+by its file and line in the change or by quoting the changed line? A review \
+with no findings meets this."""
+criteria.true = "Every finding names the changed line it is about, or there is none."
+criteria.false = "A finding names no line of the change."
+
+[questions.cites-record]
+instructions = """
+Read the review. Does each finding hold the change to the record's own \
+words, quoting the specification, the documented decision or the rule it \
+applies, and name where those words live by path and anchor? A review with \
+no findings meets this."""
+criteria.true = "Every finding quotes the record's words and names where they live, or there is none."
+criteria.false = "A finding rests on preference or memory, without the record's words or where they live."
+
+[questions.one-defect]
+instructions = """
+Read the review. Does each finding state one defect, so that it can be fixed \
+and checked on its own? A review with no findings meets this."""
+criteria.true = "Each finding states one defect, or there is none."
+criteria.false = "A finding bundles defects that would each be fixed on their own."
+
+[questions.reads-the-line]
+instructions = """
+Read each finding of the review against the change. Does the line it names \
+say what the finding says it says? A review with no findings meets this."""
+criteria.true = "Every finding describes its line as the change has it, or there is none."
+criteria.false = "A finding misreads or misquotes its line, or names a line the change does not have."
+
+[questions.verdict-follows]
+instructions = """
+Read the review. Does it end in a verdict, either approving the change or \
+requesting the changes its findings name, that follows from those findings?"""
+criteria.true = "The verdict follows from the findings: approval when none blocks, changes requested when one does."
+criteria.false = "The review has no verdict, or one its findings contradict."

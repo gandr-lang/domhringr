@@ -1,0 +1,7 @@
+commit 9b1e4f7a2c6d0e8b3a5f1c9d7e2b4a6c8f0d1e35
+
+docs(judge): show how the ignored test reaches a real endpoint
+
+The README names the variables the test reads and the server it needs,
+so the test runs by hand against any endpoint without a setting in the
+tree.

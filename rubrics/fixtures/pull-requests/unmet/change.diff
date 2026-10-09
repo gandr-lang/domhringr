@@ -1,0 +1,12 @@
+diff --git a/crates/strategy-document/src/rubric.rs b/crates/strategy-document/src/rubric.rs
+--- a/crates/strategy-document/src/rubric.rs
++++ b/crates/strategy-document/src/rubric.rs
+@@ -328,7 +328,7 @@ impl Band
+         else {
+             return Grade::Refused;
+         };
+-        if holds >= self.high {
++        if holds > self.high {
+             Grade::Met
+         }
+         else if holds <= self.low {
