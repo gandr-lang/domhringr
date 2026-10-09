@@ -90,17 +90,22 @@ run = "typos"
 # Unset, the executables run as built; CI and Linux never set it.
 ["check:tests"]
 description = "Unit and integration tests over every target"
+depends = ["test"]
+
+[test]
+description = "Build, sign, and run tests with nextest arguments"
+raw_args = true
 tools.jq = "1.8.1"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
-cargo nextest run --workspace --locked --no-run
+cargo nextest run --workspace --locked --no-run "$@"
 if [[ -n "${CODESIGN_IDENTITY:-}" && "$(uname -s)" == "Darwin" ]]; then
   target=$(cargo metadata --manifest-path Cargo.toml --locked --no-deps --format-version 1 | jq -r '.target_directory')
   find "$target/debug" "$target/debug/deps" -maxdepth 1 -type f -perm -u+x ! -name '*.*' \
     -exec codesign --force --sign "$CODESIGN_IDENTITY" --identifier org.gandr-lang.domhringr.test {} +
 fi
-cargo nextest run --workspace --locked
+cargo nextest run --workspace --locked "$@"
 '''
 
 # Git writes conflict markers as EXACTLY seven marker characters followed by

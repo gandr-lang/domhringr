@@ -17,6 +17,8 @@ cargo build-dist       # the shipped binary: fat LTO, size-optimized std
 
 `cargo build --release` is the everyday optimized build; `cargo build-dist` (`.cargo/config.toml`) is the whole-program one.
 
+Use `mise run test -- <nextest args>` for test runs; on macOS, setting `CODESIGN_IDENTITY` signs rebuilt executables before they run.
+
 `mise run ci:act` runs the committed Linux CI workflow in a disposable checkout. Each invocation uses distinct container names, so gates can run concurrently across repositories and worktrees. Cached actions run without GitHub fetches; missing actions download on first use.
 
 Each gate snapshots the shared action cache. Successful gates publish only new cache entries under a directory lock; a 30-second lock timeout fails the gate.
