@@ -699,10 +699,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "domhringr-seat-slot"
+version = "0.0.0"
+dependencies = [
+ "domhringr-record-tree",
+ "iroh",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "domhringr-surface-peer"
 version = "0.0.0"
 dependencies = [
  "domhringr-record-tree",
+ "domhringr-seat-slot",
  "lexopt",
  "tempfile",
  "thiserror 2.0.21",

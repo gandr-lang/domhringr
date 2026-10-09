@@ -749,6 +749,35 @@ impl Peer
             .map_err(HeadsError)?;
         Ok(Heads(heads.into_iter().flatten().collect()))
     }
+
+    /// The trees this peer's store holds commits of, in id order.
+    ///
+    /// # Specification
+    /// - ensures: every tree with a commit in the store, each once. A stored
+    ///   sedimentree whose id is no ed25519 verifying key is no tree this crate
+    ///   names, and is left out.
+    /// - fails: [`TreesError`] when the store cannot be read.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`TreesError`]: the storage read fails.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a fresh store lists no tree, and one holding commits
+    ///   of two trees lists exactly both.
+    /// - witness: `store::tests::a_peer_lists_the_trees_it_holds`
+    #[inline]
+    pub async fn trees(&self) -> Result<BTreeSet<TreeId>, TreesError>
+    {
+        let stored = Storage::<Sendable>::load_all_sedimentree_ids(&self.storage)
+            .await
+            .map_err(TreesError)?;
+        Ok(stored
+            .into_iter()
+            .filter_map(|stored| iroh::PublicKey::from_bytes(stored.as_bytes()).ok())
+            .map(TreeId::new)
+            .collect())
+    }
 }
 
 /// What `within`, named in a tree, resolves to in that tree's `view`.
@@ -949,6 +978,12 @@ pub enum RouteError
 #[error("cannot read the tree's heads")]
 #[repr(transparent)]
 pub struct HeadsError(#[source] RedbStorageError);
+
+/// Why the trees a store holds cannot be listed.
+#[derive(Debug, thiserror::Error)]
+#[error("cannot list the trees the store holds")]
+#[repr(transparent)]
+pub struct TreesError(#[source] RedbStorageError);
 
 #[cfg(test)]
 mod tests
@@ -1248,6 +1283,32 @@ mod tests
                 "a label read in no tree is refused"
             );
             drop(peer);
+        });
+    }
+
+    #[test]
+    fn a_peer_lists_the_trees_it_holds()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let (mine, theirs) = (tree(), elsewhere_key().tree());
+        runtime().block_on(async {
+            let peer = open(&state);
+            assert!(
+                peer.trees().await.unwrap().is_empty(),
+                "a fresh store holds no tree"
+            );
+            for tree in [mine, theirs] {
+                let receipt = Receipt::note(tree, String::from("held")).unwrap();
+                let _held = peer.commit(tree, receipt).await.unwrap();
+            }
+            let held = peer.trees().await.unwrap();
+            drop(peer);
+            assert_eq!(
+                held,
+                BTreeSet::from([mine, theirs]),
+                "a store lists each tree it holds commits of"
+            );
         });
     }
 

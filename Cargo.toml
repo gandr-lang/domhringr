@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/record-tree", "crates/surface-driver", "crates/surface-peer"]
+members = [
+  "crates/record-tree",
+  "crates/seat-slot",
+  "crates/surface-driver",
+  "crates/surface-peer",
+]
 # Gitignored sibling checkouts that path dependencies reach (`mise run
 # sibling:sync`); never members.
 exclude = ["vendor"]
@@ -19,9 +24,11 @@ publish = false
 # on only because a build or a test failed without it.
 [workspace.dependencies]
 
-# The reference BLAKE3: the tests' independent oracle for commit ids.
+# The reference BLAKE3: a report's content hash, the name iroh-blobs gives the
+# same bytes, and the tests' independent oracle for commit ids. Already in the
+# graph under sedimentree's commit ids, so it adds no build.
 # consumers:
-# - record-tree (dev)
+# - record-tree
 [workspace.dependencies.blake3]
 version = "1.8"
 default-features = false
@@ -35,9 +42,16 @@ default-features = false
 
 # The record library: the tree store, the endpoint, sync.
 # consumers:
+# - seat-slot
 # - surface-peer
 [workspace.dependencies.domhringr-record-tree]
 path = "crates/record-tree"
+
+# The seat: the wake protocol, acting through a surface, reporting.
+# consumers:
+# - surface-peer
+[workspace.dependencies.domhringr-seat-slot]
+path = "crates/seat-slot"
 
 # The `Sendable` future form subduction's runtime glue is generic over.
 # consumers:
@@ -80,6 +94,7 @@ default-features = false
 #   directly reachable across networks
 # consumers:
 # - record-tree
+# - seat-slot
 [workspace.dependencies.iroh]
 version = "1.3"
 default-features = false
@@ -121,15 +136,14 @@ default-features = false
 version = "0.10"
 default-features = false
 
-# Subduction over iroh: the dialing and accepting handshakes, the transport.
-# features:
-# - server: `accept_one`, the accepting side of the handshake
+# Subduction over iroh: the dialing handshake, the handshake adapter and the
+# transport tasks the accepting side runs; the accept loop is this
+# workspace's, so `server` stays off.
 # consumers:
 # - record-tree
 [workspace.dependencies.subduction_iroh]
 version = "0.11"
 default-features = false
-features = ["server"]
 
 # Durable tree storage: one redb file per peer.
 # consumers:
@@ -141,14 +155,17 @@ default-features = false
 # Throwaway state directories for the process-level and library tests.
 # consumers:
 # - surface-peer (dev)
+# - seat-slot (dev)
 # - record-tree (dev)
 [workspace.dependencies.tempfile]
 version = "3.27"
 default-features = false
 
-# `derive(Error)` for the record library's and the peer binary's error enums.
+# `derive(Error)` for the record library's, the seat's and the peer binary's
+# error enums.
 # consumers:
 # - surface-peer
+# - seat-slot
 # - record-tree
 [workspace.dependencies.thiserror]
 version = "2.0"
@@ -158,13 +175,15 @@ default-features = false
 # features:
 # - rt-multi-thread: the peer binary's and the tests' multi-threaded runtime
 # - time: `tokio::time::timeout` behind subduction's call deadlines
+# - sync: the seat's event channel and its lock on the dispatches it acts on
 # consumers:
 # - surface-peer
+# - seat-slot
 # - record-tree
 [workspace.dependencies.tokio]
 version = "1"
 default-features = false
-features = ["rt-multi-thread", "time"]
+features = ["rt-multi-thread", "sync", "time"]
 
 # The lint wall. Every group is denied at priority -1 so an individual `allow`
 # below it wins; every allow states the class it exempts. A lint leaves this

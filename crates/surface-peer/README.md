@@ -1,6 +1,6 @@
 # domhringr-surface-peer
 
-The `domhringr-peer` binary manages and synchronizes a record-plane peer over a state directory, and checks a concepts tree against the checkouts that cite it and hold its pages.
+The `domhringr-peer` binary manages and synchronizes a record-plane peer over a state directory, dispatches seats to tasks and serves as one, and checks a concepts tree against the checkouts that cite it and hold its pages.
 
 - [Synopsis](#synopsis)
 - [References](#references)
@@ -10,12 +10,13 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 - [Identifiers and state](#identifiers-and-state)
 - [Output](#output)
 - [Networking](#networking)
+- [Tasks](#tasks)
 - [Drift](#drift)
 - [License](#license)
 
 ## Synopsis
 
-**What.** `domhringr-surface-peer` provides the `domhringr-peer` command-line binary. It opens sedimentrees, delegates write authority, writes notes, binds paths, claims DNS names for a tree, introduces other trees by label, presents the peer's endpoint in a tree and withdraws presences, resolves anchors and commits by key, by DNS name, or by label, reads views, books, and heads, synchronizes a tree with another peer reached through the tree's book or at an endpoint named by hand, and reports where a concepts tree has drifted from a public checkout and a vault.
+**What.** `domhringr-surface-peer` provides the `domhringr-peer` command-line binary. It opens sedimentrees, delegates write authority, writes notes, binds paths, claims DNS names for a tree, introduces other trees by label, presents the peer's endpoint in a tree and withdraws presences, resolves anchors and commits by key, by DNS name, or by label, reads views, books, and heads, synchronizes a tree with another peer reached through the tree's book or at an endpoint named by hand, dispatches a seat to a task and wakes it, reports, hands off and retires as a seat, replays a task, serves as a seat acting through a program, and reports where a concepts tree has drifted from a public checkout and a vault.
 
 **Why.** A peer needs a persistent identity and a command-line surface for operating its trees and inspecting their interpretation. Separate state directories let peers retain independent keys and stores while exchanging the same signed commits. Public text that cites private pages by anchor stays in step with them only if something checks each citation against its binding and each binding against its page.
 
@@ -24,6 +25,7 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 ## References
 
 - `domhringr-record-tree`, [crate documentation](../record-tree/README.md): the persistent peer, receipt fold, and synchronization operation.
+- `domhringr-seat-slot`, [crate documentation](../seat-slot/README.md): the wake and the serving seat.
 - `iroh`, [crate documentation](https://docs.rs/iroh): endpoint discovery and direct or relayed network paths.
 - `lexopt`, [crate documentation](https://docs.rs/lexopt): command-line options and operands.
 
@@ -31,9 +33,10 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 
 - Identity inspection and persistent state creation.
 - Tree opening under a freshly minted tree key, printing the tree's anchor.
-- `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, and `Withdraw` receipt submission; `present` commits the endpoint at the addresses it binds.
+- `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, and `Retire` receipt submission; `present` commits the endpoint at the addresses it binds, and the seat verbs answer the task's current dispatch.
 - Resolution of a tree, a path, or a commit in the key, DNS, and label forms, a commit by its whole id or a unique prefix of it, with DNS witnesses or witnesses supplied by hand; canonical views; and sorted tree heads.
-- Serving on an ephemeral or fixed UDP port.
+- Serving on an ephemeral or fixed UDP port, as a seat that holds its slots or acts through a program.
+- Dispatching a seat and waking it at its presence in the task's book or at an endpoint named by hand, and replaying a task through its seat.
 - A tree's book: each present peer, the endpoint it is reached at, and the commit that presented it.
 - Single-tree synchronization with the tree's owner or a named peer, at its presence in the book or at an endpoint named by hand, reporting where the endpoint came from and the selected path; `whence` reaches each tree it reads the same way, or resolves from the local store alone.
 - A drift check of a concepts tree against a public and a vault checkout: unbound citations, drifted, missing and orphaned bindings, and malformed data and citations, one line each in anchor order, with an exit status a gate can read.
@@ -44,6 +47,7 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 - A native target with an operating-system random source for identities and receipts.
 - For synchronization and for `whence` without `--local`, a serving remote: the tree's owner, or a peer named by `--peer`, present in the tree's book; at first contact, or when the book holds no presence of it, its endpoint named by `--at`, with its loopback or direct address on one host.
 - Network access for iroh discovery and transport; a fixed port must be available for binding.
+- For `serve --surface <program>`, an executable as [`domhringr-seat-slot`](../seat-slot/README.md#expected-features) expects it; `dispatch` needs the seat serving, reached at `--at` the first time and through its presence after.
 - For a DNS-form anchor, DNS resolvers reaching the name's `_domhringr.<domain>` TXT records, unless `--witness` names its trees; and in the local store, the witnessed tree whose root claims the name.
 - For a label-form anchor, the tree that introduced the label, named by `--in` and held in the local store.
 - For `drift`, the `git` binary on `PATH`, both checkouts local, each a directory in a git working tree, and the concepts tree in the local store; a `sync` brings it there, since `drift` dials no one.
@@ -79,7 +83,7 @@ With `domhringr-peer` on `PATH`, the complete invocation set is:
 
 ```text
 domhringr-peer --state <dir> id                                    # endpoint id, then peer id
-domhringr-peer --state <dir> serve [--port <port>]                 # ids, listening, accepted peers and paths
+domhringr-peer --state <dir> serve [--port <port>] [--surface <program>]  # ids, listening, then what the peer and the seat do
 domhringr-peer --state <dir> present <tree> [--port <port>]        # the presence's commit id
 domhringr-peer --state <dir> withdraw <tree> [<peer-id>]           # the withdrawal's commit id
 domhringr-peer --state <dir> book <tree>                           # one line per present peer
@@ -95,10 +99,16 @@ domhringr-peer --state <dir> whence <name> [--witness <domain>=<tree-id>]... [--
 domhringr-peer --state <dir> view <tree>                           # the view, one line per fact
 domhringr-peer --state <dir> heads <tree>                          # the heads, one sorted hex line each
 domhringr-peer --state <dir> sync <tree> [--peer <peer-id>] [--at <endpoint>]  # where the endpoint came from, the heads after sync, then its path
+domhringr-peer --state <dir> dispatch <tree> <peer-id> anchor <anchor> [--at <endpoint>]  # the dispatch's commit id, where the seat was reached, woken
+domhringr-peer --state <dir> dispatch <tree> <peer-id> content <hash> [--at <endpoint>]   # the same, for a brief named by content hash
+domhringr-peer --state <dir> report <tree> <hash> <summary>        # the report's commit id
+domhringr-peer --state <dir> handoff <tree> <peer-id>              # the handoff's commit id
+domhringr-peer --state <dir> retire <tree>                         # the retirement's commit id
+domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]  # where the task was reached, then one line per step and its standing
 domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>  # one line per finding, nothing when consistent
 ```
 
-Run the crate's tests, including two-process synchronization, reaching a peer through its presence, and a drift check over throwaway git repositories:
+Run the crate's tests, including two-process synchronization, reaching a peer through its presence, a seat dispatched, woken and reporting across restarts of both sides, and a drift check over throwaway git repositories:
 
 ```sh
 mise exec -- cargo nextest run -p domhringr-surface-peer
@@ -142,7 +152,7 @@ The exit status is 0 on success, 1 when the command fails, 2 for a command line 
 
 `serve` reports the path selected when it admits a peer. `sync` reports the path once its round ends, giving iroh up to five seconds to move a relayed connection to a direct path. iroh does not promise that move, even between two peers on one host, so a sync can end relayed.
 
-**`present` runs before `serve`, at the port `serve` binds.** A command holds the store exclusively, so a running `serve` cannot commit; `present` binds at the fixed port first, commits the addresses that port is reached at, and exits, and `serve --port` binds the same port after it. An ephemeral port is presented too, but no later `serve` binds it, so only the relay in such a presence reaches the peer.
+**`present` runs before `serve`, at the port `serve` binds.** A command holds the store exclusively, so no other command commits while `serve` runs; `present` binds at the fixed port first, commits the addresses that port is reached at, and exits, and `serve --port` binds the same port after it. An ephemeral port is presented too, but no later `serve` binds it, so only the relay in such a presence reaches the peer. `serve` commits on its own only as a seat: its presence in a task whose book lacks it, and its reports.
 
 - `serve` presenting itself as it starts: a commit for every start, whether or not the addresses changed.
 - a control channel to a running `serve`: a second interface to the store for one verb.
@@ -160,6 +170,23 @@ Reversal: a book that cannot go stale, as when a dial that fails at a presence f
 - resolving from the local store unless asked to sync: a stale binding read as current, with nothing in the output saying where it came from.
 
 Reversal: a resolution that needs no remote, as one served from a published snapshot.
+
+## Tasks
+
+An operator dispatches a seat with `dispatch <tree> <peer-id> <brief>`, the brief an anchor or a content hash. The command routes to the seat first, at `--at` or its presence in the task's book, so a seat no endpoint names gets no dispatch. It then commits the dispatch, prints its commit id, wakes the seat, and prints `source <tree> at <endpoint>` or `source <tree> book <commit-id>` and `woken`. A seat that declines fails the command as `the seat declined the wake: <reason>`, and a seat that cannot be reached fails it after the dispatch's id is printed: the dispatch stays committed, to be sent again. A woken operator holds the seat's presence, so the next dispatch, a `replay` or a `sync` reaches the seat through the book.
+
+`serve --surface <program>` serves as a seat. It prints `accepted` and `path` lines for each link, `woken <tree> <dispatch-id>` for a wake it answers, `declined <reason>` for one it declines, `reported <tree> <commit-id>` for a report it commits, and `unreported <tree> <dispatch-id>` for an act that committed none, with its cause on standard error. Without `--surface` the seat holds the slots it is dispatched to and never reports. `report <tree> <hash> <summary>`, `handoff <tree> <peer-id>` and `retire <tree>` commit their receipt on the task's current dispatch, and fail as `the task has no dispatch: nothing to report on, hand off or retire from` when there is none; the fold admits them from the slot's holder alone.
+
+`replay <tree>` reaches the current attempt's seat, the owner when nothing is dispatched, or the peer `--peer` names, syncs the task as `sync` does, and prints the source line and the task. The task is one line per admitted seat receipt in canonical order: `dispatch <commit-id> <peer-id> <brief>`, `report <commit-id> <dispatch-id> <peer-id> <hash> <summary>`, `handoff <commit-id> <dispatch-id> <from> <to>` and `retire <commit-id> <dispatch-id> <peer-id>`. Then one line says where the task stands: `undispatched`, `dispatched <dispatch-id> <holder>`, `reported <dispatch-id> <report-id>` or `stalled <dispatch-id> <retirement-id>`. `--local` prints the local store's task and dials no one.
+
+**A dispatch to the seat already holding the current attempt's slot, for the same brief, is sent again, not committed again.** The command prints the same commit id and wakes the seat once more. An operator whose wake failed, or that was killed while it dialed, repeats the command and reaches the same dispatch, and a seat that already reported answers `woken` without acting again.
+
+- a dispatch per invocation: a second dispatch supersedes the first, and a report the seat is writing to the first is then refused as not current.
+- a separate `wake` verb for an existing dispatch: a second command for what repeating the first already says.
+
+Reversal: a task that dispatches one seat to one brief twice on purpose, which needs the new commit asked for.
+
+**The seat acts through a program and reports its standard output.** The design and its alternatives are the seat's, in [`domhringr-seat-slot`](../seat-slot/README.md#the-command-surface); the binary adds only the `--surface` option and the event lines.
 
 ## Drift
 

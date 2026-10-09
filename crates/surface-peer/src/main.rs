@@ -5,12 +5,14 @@
 //! reached at, resolves an anchor or a commit to what it names, prints the
 //! view every peer holding the same commits folds them to and the book of
 //! who is reachable where, reads the tree's heads, syncs the tree with
-//! another peer over iroh, and checks a concepts tree's bindings against a
-//! public and a vault checkout.
+//! another peer over iroh, dispatches a seat to a tree read as a task and
+//! wakes it, reports on, hands off or retires from the dispatch it holds,
+//! replays the task, and checks a concepts tree's bindings against a public
+//! and a vault checkout.
 //!
 //! ```text
 //! domhringr-peer --state <dir> id
-//! domhringr-peer --state <dir> serve [--port <port>]
+//! domhringr-peer --state <dir> serve [--port <port>] [--surface <program>]
 //! domhringr-peer --state <dir> open
 //! domhringr-peer --state <dir> grant <tree> <peer-id>
 //! domhringr-peer --state <dir> note <tree> <text>
@@ -25,6 +27,11 @@
 //! domhringr-peer --state <dir> view <tree>
 //! domhringr-peer --state <dir> heads <tree>
 //! domhringr-peer --state <dir> sync <tree> [--peer <peer-id>] [--at <endpoint>]
+//! domhringr-peer --state <dir> dispatch <tree> <peer-id> <brief> [--at <endpoint>]
+//! domhringr-peer --state <dir> report <tree> <content-hash> <summary>
+//! domhringr-peer --state <dir> handoff <tree> <peer-id>
+//! domhringr-peer --state <dir> retire <tree>
+//! domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]
 //! domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
 //! ```
 //!
@@ -69,6 +76,33 @@
 //! presence in the book and no `--at` is unreachable; first contact names the
 //! endpoint by hand, and one sync carries the book.
 //!
+//! A tree is also a task. `dispatch` puts the seat its peer id names in the
+//! task's slot to work from a brief — `anchor <anchor>`, or `content
+//! <content-hash>`, 64 hex digits of BLAKE3 — and wakes it: it commits the
+//! dispatch, or re-sends the current one when it already puts that seat to
+//! that brief, prints the dispatch's commit id at once, then reaches the seat
+//! at `--at` or at its presence in the task's book, names the dispatch on the
+//! seat protocol's one stream, and prints the `source` line and `woken` when
+//! the seat holds the slot. `serve` answers such wakes: it pulls the task from
+//! the operator, presents itself in the task's book when the book lacks it,
+//! prints `woken <tree> <dispatch-id>`, and acts through `--surface`: it runs
+//! the program with `anchor <anchor>` or `content <hash>` as its arguments and
+//! the task's and the dispatch's anchors in `DOMHRINGR_TASK` and
+//! `DOMHRINGR_DISPATCH`, and when the program exits 0 commits a report — the
+//! BLAKE3 hash of its standard output and the output's first line as the
+//! summary — and prints `reported <tree> <commit-id>`; a program that fails
+//! prints `unreported <tree> <dispatch-id>` and the slot stays held. A seat
+//! serving without `--surface` holds its slots and never reports; on start it
+//! acts on every dispatch it holds unreported. `report`, `handoff` and
+//! `retire` commit their receipt on the task's current dispatch from the
+//! store alone, the summary taken verbatim. `replay` reaches the current
+//! attempt's seat, or `--peer`, as `sync` does — the task's owner when no
+//! dispatch is admitted — syncs the task, and prints the `source` line, one
+//! line per seat receipt the fold admitted and where the task stands:
+//! `undispatched`, `dispatched <dispatch-id> <holder>`, `reported
+//! <dispatch-id> <report-id>`, or `stalled <dispatch-id> <retirement-id>`;
+//! `--local` prints the local store's task alone.
+//!
 //! The state directory holds the peer's two keys, the key of each tree it
 //! opened, and its tree store, all created on first use. A command holds the
 //! store exclusively while it runs, so every command but `id` fails while
@@ -102,6 +136,7 @@ extern crate alloc;
 mod drift;
 
 use alloc::collections::BTreeSet;
+use alloc::sync::Arc;
 use core::error::Error;
 use core::fmt;
 use core::str::FromStr;
@@ -111,14 +146,17 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use domhringr_record_tree::AcceptError;
 use domhringr_record_tree::Aim;
 use domhringr_record_tree::Anchor;
 use domhringr_record_tree::At;
 use domhringr_record_tree::Authority;
 use domhringr_record_tree::BindError;
 use domhringr_record_tree::BindPort;
+use domhringr_record_tree::Brief;
 use domhringr_record_tree::CommitError;
+use domhringr_record_tree::CommitId;
+use domhringr_record_tree::ContentHash;
+use domhringr_record_tree::Current;
 use domhringr_record_tree::Dns;
 use domhringr_record_tree::Domain;
 use domhringr_record_tree::HeadsError;
@@ -132,6 +170,7 @@ use domhringr_record_tree::ParseDomainError;
 use domhringr_record_tree::ParseIdError;
 use domhringr_record_tree::ParseLabelError;
 use domhringr_record_tree::ParsePortError;
+use domhringr_record_tree::ParseSummaryError;
 use domhringr_record_tree::Path;
 use domhringr_record_tree::Peer;
 use domhringr_record_tree::PeerKey;
@@ -143,8 +182,10 @@ use domhringr_record_tree::Resolution;
 use domhringr_record_tree::Route;
 use domhringr_record_tree::RouteError;
 use domhringr_record_tree::Scope;
+use domhringr_record_tree::Slot;
 use domhringr_record_tree::StateDir;
 use domhringr_record_tree::Static;
+use domhringr_record_tree::Summary;
 use domhringr_record_tree::SyncError;
 use domhringr_record_tree::Target;
 use domhringr_record_tree::TreeId;
@@ -153,11 +194,15 @@ use domhringr_record_tree::UdpPort;
 use domhringr_record_tree::ViewError;
 use domhringr_record_tree::WhenceError;
 use domhringr_record_tree::Witness;
+use domhringr_seat_slot::Event;
+use domhringr_seat_slot::Surface;
+use domhringr_seat_slot::Wake;
+use domhringr_seat_slot::WakeError;
 
 /// The synopsis written after a usage error.
 const USAGE: &str = "\
 usage: domhringr-peer --state <dir> id
-       domhringr-peer --state <dir> serve [--port <port>]
+       domhringr-peer --state <dir> serve [--port <port>] [--surface <program>]
        domhringr-peer --state <dir> open
        domhringr-peer --state <dir> grant <tree> <peer-id>
        domhringr-peer --state <dir> note <tree> <text>
@@ -172,6 +217,11 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> view <tree>
        domhringr-peer --state <dir> heads <tree>
        domhringr-peer --state <dir> sync <tree> [--peer <peer-id>] [--at <endpoint>]
+       domhringr-peer --state <dir> dispatch <tree> <peer-id> <brief> [--at <endpoint>]
+       domhringr-peer --state <dir> report <tree> <content-hash> <summary>
+       domhringr-peer --state <dir> handoff <tree> <peer-id>
+       domhringr-peer --state <dir> retire <tree>
+       domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]
        domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
 where  <tree>   is domhringr://<tree-id>/
        <anchor> is domhringr://<tree-id>/<segment>/.../<segment>
@@ -182,9 +232,13 @@ where  <tree>   is domhringr://<tree-id>/
                 resolved through its witness and the tree's claim; or by label, <label>
                 in place of <tree-id>: a name without a dot, resolved in the --in tree
        <target> is anchor <name> | endpoint <endpoint-id> | datum <text>
+       <brief>  is anchor <anchor> | content <content-hash>, 64 hex digits of BLAKE3
        <endpoint> is <endpoint-id>, then @<ip:port> or @<relay-url> for each address
                 it is reached at; sync and whence reach the tree's owner, or --peer,
-                at --at, or else at its presence in the tree's book
+                dispatch the seat and replay the current dispatch's seat, at --at,
+                or else at its presence in the tree's book
+       <program> runs as <program> anchor <anchor> | content <hash>; exiting 0, its
+                standard output is the report: its hash, and its first line the summary
        <checkout> is a directory in a git working tree, read as its whole repository
 A segment beginning with . is reserved for the forms above: no path holds one.
 ";
@@ -201,7 +255,7 @@ enum Verb
 {
     /// Print the peer's ids.
     Id,
-    /// Accept peers until killed.
+    /// Accept peers and answer wakes until killed.
     Serve,
     /// Open a tree.
     Open,
@@ -229,6 +283,16 @@ enum Verb
     Heads,
     /// Sync a tree with a remote peer.
     Sync,
+    /// Dispatch a seat to a brief in a task and wake it.
+    Dispatch,
+    /// Report on the task's current dispatch.
+    Report,
+    /// Hand the task's current slot to another seat.
+    Handoff,
+    /// Retire from the task's current slot.
+    Retire,
+    /// Print a task's seat receipts and where it stands.
+    Replay,
     /// Check a concepts tree against a public and a vault checkout.
     Drift,
 }
@@ -246,7 +310,7 @@ impl fmt::Display for Verb
     {
         f.write_str(match *self {
             | Self::Id => "id",
-            | Self::Serve => "serve [--port <port>]",
+            | Self::Serve => "serve [--port <port>] [--surface <program>]",
             | Self::Open => "open",
             | Self::Grant => "grant <tree> <peer-id>",
             | Self::Note => "note <tree> <text>",
@@ -263,6 +327,13 @@ impl fmt::Display for Verb
             | Self::View => "view <tree>",
             | Self::Heads => "heads <tree>",
             | Self::Sync => "sync <tree> [--peer <peer-id>] [--at <endpoint>]",
+            | Self::Dispatch => {
+                "dispatch <tree> <peer-id> anchor|content <brief> [--at <endpoint>]"
+            },
+            | Self::Report => "report <tree> <content-hash> <summary>",
+            | Self::Handoff => "handoff <tree> <peer-id>",
+            | Self::Retire => "retire <tree>",
+            | Self::Replay => "replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]",
             | Self::Drift => "drift --public <checkout> --vault <checkout> <tree>",
         })
     }
@@ -273,7 +344,8 @@ impl fmt::Display for Verb
 enum Operand
 {
     /// The tree to grant on, write to, claim for, introduce in, present in,
-    /// withdraw from, read, sync, or read a label in, or the tree introduced.
+    /// withdraw from, read, sync, dispatch in, report on, or read a label in,
+    /// or the tree introduced.
     Tree,
     /// The anchor to bind or resolve.
     Anchor,
@@ -283,11 +355,15 @@ enum Operand
     Endpoint,
     /// The endpoint `--at` names: the remote's endpoint id and addresses.
     At,
-    /// The grantee's, the remote's or the withdrawn presence's subduction
-    /// peer id.
+    /// The grantee's, the remote's, the withdrawn presence's, the seat's or
+    /// the handoff's recipient's subduction peer id.
     Peer,
     /// The tree a witness supplied by hand names.
     Witness,
+    /// A dispatch's brief anchor.
+    Brief,
+    /// A content's hash: a brief's or a report's.
+    Content,
 }
 
 impl fmt::Display for Operand
@@ -309,6 +385,8 @@ impl fmt::Display for Operand
             | Self::At => "endpoint",
             | Self::Peer => "peer id",
             | Self::Witness => "witness's tree id",
+            | Self::Brief => "brief anchor",
+            | Self::Content => "content hash",
         })
     }
 }
@@ -319,12 +397,14 @@ enum Command
 {
     /// Print the endpoint id, then the peer id.
     Id,
-    /// Bind on `port`, print the ids and `listening`, then accept peers until
-    /// killed.
+    /// Bind on `port`, print the ids and `listening`, then accept peers and
+    /// answer wakes as a seat acting through `surface` until killed.
     Serve
     {
         /// The UDP port the endpoint binds.
         port: BindPort,
+        /// What the seat acts through.
+        surface: Surface,
     },
     /// Mint a tree key, commit the tree's Open proved by it, and print the
     /// tree's anchor.
@@ -434,6 +514,57 @@ enum Command
         /// Whom to dial, and at which endpoint.
         dial: Dial,
     },
+    /// Route to `seat` for `tree` as `at` says, commit a dispatch of it to
+    /// `brief` unless the current attempt already puts it to that brief,
+    /// print the dispatch's commit id, wake the seat, and print where its
+    /// endpoint came from and `woken`.
+    Dispatch
+    {
+        /// The task.
+        tree: TreeId,
+        /// The seat dispatched to.
+        seat: PeerKey,
+        /// What the seat works from.
+        brief: Brief,
+        /// The seat's endpoint: `--at`, or the book's.
+        at: At,
+    },
+    /// Commit a report on `tree`'s current dispatch, of the content hashed
+    /// `content` with `summary`, and print the commit id.
+    Report
+    {
+        /// The task.
+        tree: TreeId,
+        /// The content's hash.
+        content: ContentHash,
+        /// The report's summary.
+        summary: Summary,
+    },
+    /// Commit a handoff of `tree`'s current slot to `to` and print the commit
+    /// id.
+    Handoff
+    {
+        /// The task.
+        tree: TreeId,
+        /// The seat the slot passes to.
+        to: PeerKey,
+    },
+    /// Commit a retirement from `tree`'s current slot and print the commit
+    /// id.
+    Retire
+    {
+        /// The task.
+        tree: TreeId,
+    },
+    /// Reach the peer `replaying` says for `tree`, sync, and print where its
+    /// endpoint came from, the task's steps and where it stands.
+    Replay
+    {
+        /// The task.
+        tree: TreeId,
+        /// Whether, and whom, the task is reached at.
+        replaying: Replaying,
+    },
     /// Check `tree`'s bindings against the checkouts at `public` and `vault`,
     /// and print one line per finding.
     Drift
@@ -485,6 +616,33 @@ enum Reach
     Local,
     /// Reach each tree read as the dial says, then resolve.
     Dial(Dial),
+}
+
+/// Whom `replay` reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Toward
+{
+    /// The current attempt's seat — the slot's holder, or the seat that
+    /// retired from it — or the task's owner when no dispatch is admitted.
+    Seat,
+    /// The peer `--peer` names.
+    Peer(PeerKey),
+}
+
+/// Whether `replay` reaches the task before printing it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Replaying
+{
+    /// `--local`: print the local store's task alone.
+    Local,
+    /// Reach the peer `toward` names, at `at`, and sync first.
+    Dial
+    {
+        /// Whom.
+        toward: Toward,
+        /// The endpoint: `--at`, or the book's.
+        at: At,
+    },
 }
 
 /// A tree a command reached, and the route it reached it by.
@@ -605,9 +763,15 @@ enum UsageError
     /// A bind's target kind is not one this binary has.
     #[error("unknown target kind {0:?}: expected anchor, endpoint or datum")]
     Target(OsString),
-    /// A note's text, a datum, a DNS name or a label is not UTF-8.
+    /// A dispatch's brief kind is not one this binary has.
+    #[error("unknown brief kind {0:?}: expected anchor or content")]
+    Brief(OsString),
+    /// A note's text, a datum, a DNS name, a label or a summary is not UTF-8.
     #[error("the text is not UTF-8: {0:?}")]
     Text(OsString),
+    /// A report's summary is not one line of at most 256 bytes.
+    #[error("cannot read the summary")]
+    Summary(#[source] ParseSummaryError),
     /// `--port`'s value is not a UDP port.
     #[error("cannot read the port")]
     Port(#[source] ParsePortError),
@@ -654,6 +818,12 @@ enum RunError
     /// The peer the dial aims at is this peer.
     #[error("no one to reach: the peer aimed at is this peer")]
     Itself,
+    /// The task has no dispatch to report on, hand off or retire from.
+    #[error("the task has no dispatch: nothing to report on, hand off or retire from")]
+    Undispatched,
+    /// The seat was not woken.
+    #[error(transparent)]
+    Wake(#[from] WakeError),
     /// The anchor does not resolve.
     #[error(transparent)]
     Whence(#[from] WhenceError),
@@ -679,31 +849,36 @@ enum RunError
 /// # Specification
 /// - ensures: accepts `--state <dir>` (or `--state=<dir>`; the last one given
 ///   wins) followed by a verb and exactly the operands that verb takes, or, for
-///   `serve`, the options [`serve_port`] reads, or, for `present`, `sync`,
-///   `whence` and `drift`, what [`present_command`], [`sync_command`],
-///   [`whence_command`] and [`drift_command`] read. Other verbs' operands are
-///   taken verbatim, so a note's text or a datum beginning with `-` is a text,
-///   not an option. A tree operand is a bare anchor in the key form, `bind`'s
-///   anchor names a path in the key form, `claim`'s DNS name and `introduce`'s
-///   label are read as [`read_name`] reads them, `bind`'s target is read as
-///   [`read_target`] reads it, and `withdraw` withdraws this peer's own
-///   presence unless a peer id follows the tree.
+///   `serve`, `present`, `sync`, `whence`, `dispatch`, `replay` and `drift`,
+///   what [`serve_command`], [`present_command`], [`sync_command`],
+///   [`whence_command`], [`dispatch_command`], [`replay_command`] and
+///   [`drift_command`] read. Other verbs' operands are taken verbatim, so a
+///   note's text, a datum or a summary beginning with `-` is a text, not an
+///   option. A tree operand is a bare anchor in the key form, `bind`'s anchor
+///   names a path in the key form, `claim`'s DNS name and `introduce`'s label
+///   are read as [`read_name`] reads them, `bind`'s target is read as
+///   [`read_target`] reads it, `withdraw` withdraws this peer's own presence
+///   unless a peer id follows the tree, `report`'s content hash is 64 hex
+///   digits and its summary one line [`Summary`] admits, and `handoff`'s
+///   recipient is a peer id.
 /// - fails: [`UsageError::Arguments`] for any option but `--state` or for
 ///   `--state` without a value, [`UsageError::NoCommand`] when no verb follows
 ///   the options, [`UsageError::Command`] for an unknown verb,
 ///   [`UsageError::State`] when `--state` is absent, [`UsageError::Operands`]
 ///   for too few or too many operands, checked before any operand is read,
-///   [`UsageError::Operand`] for an id that does not parse,
+///   [`UsageError::Operand`] for an id or a content hash that does not parse,
 ///   [`UsageError::Anchor`] for an anchor that does not parse,
 ///   [`UsageError::NotTree`] for a tree operand naming a path or a commit,
 ///   [`UsageError::NotKey`] for a tree operand or an anchor to bind naming its
 ///   tree by a DNS name or a label, [`UsageError::NoPath`] for an anchor to
 ///   bind that is bare or names a commit, [`UsageError::Text`] for a note's
-///   text, a DNS name or a label that is not UTF-8, [`UsageError::Domain`] and
-///   [`UsageError::Label`] for a DNS name or a label that does not parse, as
-///   [`read_target`] for `bind`'s target, as [`serve_port`] for `serve`, and as
-///   [`present_command`], [`sync_command`], [`whence_command`] and
-///   [`drift_command`] for `present`, `sync`, `whence` and `drift`.
+///   text, a DNS name, a label or a summary that is not UTF-8,
+///   [`UsageError::Domain`] and [`UsageError::Label`] for a DNS name or a label
+///   that does not parse, [`UsageError::Summary`] for a summary [`Summary`]
+///   refuses, as [`read_target`] for `bind`'s target, and as [`serve_command`],
+///   [`present_command`], [`sync_command`], [`whence_command`],
+///   [`dispatch_command`], [`replay_command`] and [`drift_command`] for their
+///   verbs.
 /// - panics: none.
 ///
 /// # Errors
@@ -723,23 +898,27 @@ enum RunError
 /// - [`UsageError::Label`]: the label to introduce does not parse.
 /// - [`UsageError::Witness`]: a `--witness` value has no `=`.
 /// - [`UsageError::Target`]: the bind's target kind is unknown.
-/// - [`UsageError::Text`]: the note's text, a datum, a DNS name or a label is
-///   not UTF-8.
+/// - [`UsageError::Brief`]: the dispatch's brief kind is unknown.
+/// - [`UsageError::Text`]: the note's text, a datum, a DNS name, a label or a
+///   summary is not UTF-8.
+/// - [`UsageError::Summary`]: the summary is empty, too long or not one line.
 /// - [`UsageError::Port`]: `serve`'s or `present`'s port is not a UDP port.
-/// - [`UsageError::Local`]: `whence`'s `--local` stands beside `--peer` or
-///   `--at`.
+/// - [`UsageError::Local`]: `whence`'s or `replay`'s `--local` stands beside
+///   `--peer` or `--at`.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — each verb with its operands, every bind target kind, a
 ///   bare, a path and a commit anchor to resolve in each of the three forms and
 ///   an abbreviated commit, both `--state` spellings, `serve` and `present`
-///   with and without a port, `withdraw` with and without a peer, `sync` with
-///   and without a peer and an endpoint, `whence` with and without witnesses, a
-///   scope, a peer, an endpoint and `--local`, `drift` with its options before
-///   and after its operand, and a dash-leading note and datum separate the
-///   accepted lines, and one line per refusal pins which refusal each
-///   malformation gets, including an arity error that wins over a malformed
-///   operand.
+///   with and without a port, `serve` with a surface, `withdraw` with and
+///   without a peer, `sync` with and without a peer and an endpoint, `whence`
+///   with and without witnesses, a scope, a peer, an endpoint and `--local`,
+///   `dispatch` by anchor and by content with and without `--at`, `report`,
+///   `handoff`, `retire`, `replay` toward the seat, a peer and `--local`,
+///   `drift` with its options before and after its operand, and a dash-leading
+///   note, datum and summary separate the accepted lines, and one line per
+///   refusal pins which refusal each malformation gets, including an arity
+///   error that wins over a malformed operand.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
@@ -756,8 +935,15 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     let verb = verb(word)?;
     let state = StateDir::from(PathBuf::from(state.ok_or(UsageError::State)?));
     if verb == Verb::Serve {
-        let port = serve_port(&mut arguments)?;
-        let command = Command::Serve { port };
+        let command = serve_command(&mut arguments)?;
+        return Ok(Invocation { state, command });
+    }
+    if verb == Verb::Dispatch {
+        let command = dispatch_command(&mut arguments)?;
+        return Ok(Invocation { state, command });
+    }
+    if verb == Verb::Replay {
+        let command = replay_command(&mut arguments)?;
         return Ok(Invocation { state, command });
     }
     if verb == Verb::Sync {
@@ -835,6 +1021,25 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
             tree: read_tree(&tree)?,
         },
         | (Verb::Heads, (Some(tree), None, None, None)) => Command::Heads {
+            tree: read_tree(&tree)?,
+        },
+        | (Verb::Report, (Some(tree), Some(content), Some(summary), None)) => {
+            let tree = read_tree(&tree)?;
+            let content = read_id(&content, Operand::Content)?;
+            Command::Report {
+                tree,
+                content,
+                summary: read_name(summary, UsageError::Summary)?,
+            }
+        },
+        | (Verb::Handoff, (Some(tree), Some(to), None, None)) => {
+            let tree = read_tree(&tree)?;
+            Command::Handoff {
+                tree,
+                to: read_id(&to, Operand::Peer)?,
+            }
+        },
+        | (Verb::Retire, (Some(tree), None, None, None)) => Command::Retire {
             tree: read_tree(&tree)?,
         },
         | (verb, _) => return Err(UsageError::Operands(verb)),
@@ -1165,27 +1370,31 @@ fn read_witness(value: OsString) -> Result<(Domain, TreeId), UsageError>
 /// Read `serve`'s options from what follows the verb.
 ///
 /// # Specification
-/// - ensures: accepts nothing, which leaves the port ephemeral, or `--port
-///   <port>` (or `--port=<port>`; the last one given wins), which fixes it.
-/// - fails: [`UsageError::Arguments`] for any other option or for `--port`
+/// - ensures: accepts nothing, which leaves the port ephemeral and the seat
+///   holding without a surface, `--port <port>` (or `--port=<port>`), which
+///   fixes the port, and `--surface <program>` (or `--surface=<program>`),
+///   which names the program the seat acts through; the last one given of each
+///   wins.
+/// - fails: [`UsageError::Arguments`] for any other option or for an option
 ///   without a value, [`UsageError::Operands`] for an operand, and
 ///   [`UsageError::Port`] for a value that is not a port from 1 through 65535.
 /// - panics: none.
 ///
 /// # Errors
-/// - [`UsageError::Arguments`]: an unknown option, or `--port` lacks a value.
+/// - [`UsageError::Arguments`]: an unknown option, or an option lacks a value.
 /// - [`UsageError::Operands`]: an operand follows `serve`.
 /// - [`UsageError::Port`]: the value is not a UDP port.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — no option, both `--port` spellings and a repeated
-///   `--port` are read to their ports, and a stray operand, an unknown option,
-///   a missing value and port 0 each meet their own refusal.
+/// - hypothesis: L3 — no option, both `--port` spellings, a repeated `--port`
+///   and `--surface` are read to their command, and a stray operand, an unknown
+///   option, a missing value and port 0 each meet their own refusal.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
-fn serve_port(arguments: &mut lexopt::Parser) -> Result<BindPort, UsageError>
+fn serve_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 {
     let mut port = BindPort::Ephemeral;
+    let mut surface = Surface::Hold;
     while let Some(argument) = arguments.next()? {
         match argument {
             | lexopt::Arg::Long("port") => {
@@ -1193,13 +1402,156 @@ fn serve_port(arguments: &mut lexopt::Parser) -> Result<BindPort, UsageError>
                 let fixed = value.to_string_lossy().parse::<UdpPort>();
                 port = BindPort::Fixed(fixed.map_err(UsageError::Port)?);
             },
+            | lexopt::Arg::Long("surface") => {
+                surface = Surface::Program(PathBuf::from(arguments.value()?));
+            },
             | lexopt::Arg::Value(_) => return Err(UsageError::Operands(Verb::Serve)),
             | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
             },
         }
     }
-    Ok(port)
+    Ok(Command::Serve { port, surface })
+}
+
+/// Read `dispatch`'s operands and option from what follows the verb.
+///
+/// # Specification
+/// - ensures: accepts a tree anchor in the key form, the seat's peer id, and a
+///   brief read as [`read_brief`] reads it, with `--at <endpoint>` (or
+///   `--at=<endpoint>`; the last one given wins) anywhere around them: the seat
+///   is reached at the endpoint `--at` names, or else at its presence in the
+///   task's book.
+/// - fails: [`UsageError::Arguments`] for any other option or for `--at`
+///   without a value, [`UsageError::Operand`] for an endpoint that does not
+///   parse, [`UsageError::Operands`] for other than four operands, checked
+///   before any operand is read, as [`read_tree`] for the tree,
+///   [`UsageError::Operand`] for a seat's peer id that does not parse, and as
+///   [`read_brief`] for the brief.
+/// - panics: none.
+///
+/// # Errors
+/// - [`UsageError::Arguments`]: an unknown option, or `--at` lacks a value.
+/// - [`UsageError::Operand`]: the endpoint or the peer id does not parse.
+/// - [`UsageError::Operands`]: there are not four operands.
+/// - [`UsageError::Anchor`], [`UsageError::NotTree`], [`UsageError::NotKey`]:
+///   as [`read_tree`] for the tree.
+/// - [`UsageError::Brief`], [`UsageError::Anchor`], [`UsageError::Operand`]: as
+///   [`read_brief`] for the brief.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a brief by anchor and by content, with and without
+///   `--at`, are read to their command, and an unknown brief kind, a short
+///   content hash, a short peer id, a missing operand and a surplus one each
+///   meet their own refusal.
+/// - witness: `tests::every_verb_reads_its_operands`
+/// - witness: `tests::a_malformed_command_line_is_refused`
+fn dispatch_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
+{
+    let mut at = At::Book;
+    let mut operands = Vec::new();
+    while let Some(argument) = arguments.next()? {
+        match argument {
+            | lexopt::Arg::Long("at") => {
+                let value = arguments.value()?;
+                at = At::Given(read_id(&value, Operand::At)?);
+            },
+            | lexopt::Arg::Value(operand) => operands.push(operand),
+            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+                return Err(UsageError::from(other.unexpected()));
+            },
+        }
+    }
+    let mut operands = operands.into_iter();
+    let (Some(tree), Some(seat), Some(kind), Some(value), None) = (
+        operands.next(),
+        operands.next(),
+        operands.next(),
+        operands.next(),
+        operands.next(),
+    )
+    else {
+        return Err(UsageError::Operands(Verb::Dispatch));
+    };
+    let tree = read_tree(&tree)?;
+    let seat = read_id(&seat, Operand::Peer)?;
+    let brief = read_brief(&kind, &value)?;
+    Ok(Command::Dispatch {
+        tree,
+        seat,
+        brief,
+        at,
+    })
+}
+
+/// Read `replay`'s operand and options from what follows the verb.
+///
+/// # Specification
+/// - ensures: accepts one tree anchor in the key form, with `--peer <peer-id>`,
+///   `--at <endpoint>` (or `--peer=<peer-id>` and `--at=<endpoint>`; the last
+///   one given of each wins) and `--local` anywhere around it. Without
+///   `--local` the task is reached at the peer `--peer` names, or else at the
+///   current attempt's seat, at the endpoint `--at` names, or else at the
+///   book's; with it, the local store alone is read.
+/// - fails: [`UsageError::Arguments`] for any other option or for an option
+///   without a value, [`UsageError::Operand`] for a peer id or an endpoint that
+///   does not parse, [`UsageError::Local`] for `--local` beside `--peer` or
+///   `--at`, [`UsageError::Operands`] for other than one operand, checked
+///   before the operand is read, and as [`read_tree`] for an operand that is no
+///   key-form tree anchor.
+/// - panics: none.
+///
+/// # Errors
+/// - [`UsageError::Arguments`]: an unknown option, or an option lacks a value.
+/// - [`UsageError::Operand`]: the peer id or the endpoint does not parse.
+/// - [`UsageError::Local`]: `--local` stands beside `--peer` or `--at`.
+/// - [`UsageError::Operands`]: there is not one operand.
+/// - [`UsageError::Anchor`], [`UsageError::NotTree`], [`UsageError::NotKey`]:
+///   as [`read_tree`] for the tree.
+///
+/// # Adequacy
+/// - hypothesis: L3 — no option, `--peer` with `--at`, and `--local` are read
+///   to their command, and `--local` beside `--peer` and a surplus operand each
+///   meet their own refusal.
+/// - witness: `tests::every_verb_reads_its_operands`
+/// - witness: `tests::a_malformed_command_line_is_refused`
+fn replay_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
+{
+    let (mut toward, mut at) = (Toward::Seat, At::Book);
+    let (mut named, mut local) = (false, false);
+    let mut operands = Vec::new();
+    while let Some(argument) = arguments.next()? {
+        match argument {
+            | lexopt::Arg::Long("peer") => {
+                let value = arguments.value()?;
+                toward = Toward::Peer(read_id(&value, Operand::Peer)?);
+                named = true;
+            },
+            | lexopt::Arg::Long("at") => {
+                let value = arguments.value()?;
+                at = At::Given(read_id(&value, Operand::At)?);
+                named = true;
+            },
+            | lexopt::Arg::Long("local") => local = true,
+            | lexopt::Arg::Value(operand) => operands.push(operand),
+            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+                return Err(UsageError::from(other.unexpected()));
+            },
+        }
+    }
+    let replaying = match (local, named) {
+        | (false, _) => Replaying::Dial { toward, at },
+        | (true, false) => Replaying::Local,
+        | (true, true) => return Err(UsageError::Local),
+    };
+    let mut operands = operands.into_iter();
+    match (operands.next(), operands.next()) {
+        | (Some(tree), None) => Ok(Command::Replay {
+            tree: read_tree(&tree)?,
+            replaying,
+        }),
+        | _ => Err(UsageError::Operands(Verb::Replay)),
+    }
 }
 
 /// Name the verb `word` spells.
@@ -1207,7 +1559,8 @@ fn serve_port(arguments: &mut lexopt::Parser) -> Result<BindPort, UsageError>
 /// # Specification
 /// - ensures: `id`, `serve`, `open`, `grant`, `note`, `bind`, `claim`,
 ///   `introduce`, `present`, `withdraw`, `book`, `whence`, `view`, `heads`,
-///   `sync` and `drift` name their verbs.
+///   `sync`, `dispatch`, `report`, `handoff`, `retire`, `replay` and `drift`
+///   name their verbs.
 /// - fails: [`UsageError::Command`] for any other word, carrying it.
 /// - panics: none.
 ///
@@ -1237,6 +1590,11 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
         | Some("view") => Ok(Verb::View),
         | Some("heads") => Ok(Verb::Heads),
         | Some("sync") => Ok(Verb::Sync),
+        | Some("dispatch") => Ok(Verb::Dispatch),
+        | Some("report") => Ok(Verb::Report),
+        | Some("handoff") => Ok(Verb::Handoff),
+        | Some("retire") => Ok(Verb::Retire),
+        | Some("replay") => Ok(Verb::Replay),
         | Some("drift") => Ok(Verb::Drift),
         | Some(_) | None => Err(UsageError::Command(word)),
     }
@@ -1404,6 +1762,40 @@ fn read_target(
     }
 }
 
+/// Read a dispatch's brief from its kind and its value.
+///
+/// # Specification
+/// - ensures: `anchor` reads the value as an anchor — a tree, a path or a
+///   commit by its whole id, in any of the three forms — and `content` as a
+///   content hash, 64 hex digits.
+/// - fails: [`UsageError::Brief`] for any other kind, carrying it,
+///   [`UsageError::Anchor`] naming the brief anchor for an anchor that does not
+///   parse, and [`UsageError::Operand`] naming the content hash for one that
+///   does not parse.
+/// - panics: none.
+///
+/// # Errors
+/// - [`UsageError::Brief`]: the kind is unknown.
+/// - [`UsageError::Anchor`]: the anchor does not parse.
+/// - [`UsageError::Operand`]: the content hash does not parse.
+///
+/// # Adequacy
+/// - hypothesis: L3 — each kind is read to its brief, and an unknown kind and a
+///   short content hash each meet their own refusal.
+/// - witness: `tests::every_verb_reads_its_operands`
+/// - witness: `tests::a_malformed_command_line_is_refused`
+fn read_brief(
+    kind: &OsStr,
+    value: &OsStr,
+) -> Result<Brief, UsageError>
+{
+    match kind.to_str() {
+        | Some("anchor") => read_anchor(value, Operand::Brief).map(Brief::Anchor),
+        | Some("content") => read_id(value, Operand::Content).map(Brief::Content),
+        | Some(_) | None => Err(UsageError::Brief(kind.to_os_string())),
+    }
+}
+
 /// Run `invocation` to completion on a fresh multi-threaded runtime.
 ///
 /// # Specification
@@ -1459,19 +1851,24 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///   the dial ([`Peer::route`]), dials the remote at the route's endpoint, and
 ///   writes the route's `source` line, the heads after the sync the same way,
 ///   then `path <peer-id> <path>` for the path the connection took, having
-///   closed its endpoint. `serve` runs as [`serve`] specifies. `drift` folds
-///   the concepts tree in the local store, closes the store, and writes
-///   [`drift::check`]'s report of it against the two checkouts, one line per
-///   finding. Every command ends in [`Completion::Success`] but a `drift` whose
-///   report holds a finding, which ends in [`Completion::Drifted`].
+///   closed its endpoint. `dispatch` runs as [`dispatch`] specifies, and
+///   `replay` as [`replay`]. `report`, `handoff` and `retire` commit their
+///   receipt on the task's current dispatch, under a fresh operation fence, and
+///   write the new commit's id line. `serve` runs as [`serve`] specifies.
+///   `drift` folds the concepts tree in the local store, closes the store, and
+///   writes [`drift::check`]'s report of it against the two checkouts, one line
+///   per finding. Every command ends in [`Completion::Success`] but a `drift`
+///   whose report holds a finding, which ends in [`Completion::Drifted`].
 /// - fails: [`RunError::Identity`], [`RunError::Open`], [`RunError::Bind`],
 ///   [`RunError::Random`], [`RunError::Commit`], [`RunError::View`],
 ///   [`RunError::Present`], [`RunError::Route`], [`RunError::Whence`],
 ///   [`RunError::Heads`] and [`RunError::Sync`] as the record library reports
-///   them, [`RunError::Itself`] for a `sync` aimed at this peer,
+///   them, [`RunError::Itself`] for a `sync` or a `dispatch` aimed at this
+///   peer, [`RunError::Undispatched`] for a `report`, `handoff` or `retire` on
+///   a task with no dispatch, [`RunError::Wake`] as [`dispatch`] reports it,
 ///   [`RunError::Drift`] as [`drift::check`] reports it, and
-///   [`RunError::Output`] when standard output cannot be written. A failed sync
-///   or presence still closes the endpoint.
+///   [`RunError::Output`] when standard output cannot be written. A failed
+///   sync, presence or wake still closes the endpoint.
 /// - panics: none.
 ///
 /// # Errors
@@ -1485,7 +1882,9 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - [`RunError::Present`]: the presence cannot be committed.
 /// - [`RunError::Route`]: no remote can be named for the dial, as when the book
 ///   holds no presence of the peer aimed at.
-/// - [`RunError::Itself`]: `sync` aims at this peer.
+/// - [`RunError::Itself`]: `sync` or `dispatch` aims at this peer.
+/// - [`RunError::Undispatched`]: the task has no dispatch to answer.
+/// - [`RunError::Wake`]: the seat was not woken.
 /// - [`RunError::Whence`]: the reference does not resolve, as when its DNS name
 ///   is unclaimed, its label unintroduced or its commit prefix ambiguous.
 /// - [`RunError::Heads`]: the heads cannot be read.
@@ -1506,13 +1905,16 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///   after one sync at it, lists it in the book and reaches it through the book
 ///   alone for `whence` and `sync`, as their source lines say, until it
 ///   withdraws; `drift` over a fixture pair prints its four findings exactly
-///   and exits 3, then nothing and exits 0.
+///   and exits 3, then nothing and exits 0; an operator dispatches a seat that
+///   is down, then up, and replays the task through the seat's presence as the
+///   seat reports across a restart of each.
 /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
 /// - witness: `sync::tests::two_peers_sync_one_tree_to_identical_heads`
 /// - witness: `sync::tests::an_anchor_resolves_alike_on_both_peers`
 /// - witness: `sync::tests::a_named_anchor_resolves_through_its_claim_or_introduction`
 /// - witness: `sync::tests::a_commit_resolves_to_its_verdict_on_both_peers`
 /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
+/// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
 /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
 async fn execute(invocation: Invocation) -> Result<Completion, RunError>
 {
@@ -1524,7 +1926,9 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             identity.endpoint_key(),
             identity.peer_key()
         )),
-        | Command::Serve { port } => serve(Peer::open(&state, identity)?, port).await,
+        | Command::Serve { port, surface } => {
+            serve(Peer::open(&state, identity)?, port, surface).await
+        },
         | Command::Open => {
             let owner = identity.peer_key();
             let peer = Peer::open(&state, identity)?;
@@ -1558,7 +1962,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             record(&peer, tree, Receipt::introduce(tree, label, introduced)?).await
         },
         | Command::Present { tree, port } => {
-            let node = Peer::open(&state, identity)?.bind(port).await?;
+            let node = Peer::open(&state, identity)?.bind(port, &[]).await?;
             let presented = node.present(tree).await;
             node.close().await;
             drop(node);
@@ -1613,7 +2017,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
                 },
                 | Route::Book { ref remote, .. } | Route::Given { ref remote } => remote.clone(),
             };
-            let node = peer.bind(BindPort::Ephemeral).await?;
+            let node = peer.bind(BindPort::Ephemeral, &[]).await?;
             let synced = node.sync(&remote, tree).await;
             node.close().await;
             drop(node);
@@ -1625,6 +2029,38 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
                 remote.peer(),
                 synced.path()
             ))
+        },
+        | Command::Dispatch {
+            tree,
+            seat,
+            brief,
+            at,
+        } => {
+            let operator = identity.peer_key();
+            let peer = Peer::open(&state, identity)?;
+            dispatch(peer, operator, tree, seat, brief, at).await
+        },
+        | Command::Report {
+            tree,
+            content,
+            summary,
+        } => {
+            let peer = Peer::open(&state, identity)?;
+            on_current(peer, tree, |dispatch| {
+                Receipt::report(tree, dispatch, content, summary)
+            })
+            .await
+        },
+        | Command::Handoff { tree, to } => {
+            let peer = Peer::open(&state, identity)?;
+            on_current(peer, tree, |dispatch| Receipt::handoff(tree, dispatch, to)).await
+        },
+        | Command::Retire { tree } => {
+            let peer = Peer::open(&state, identity)?;
+            on_current(peer, tree, |dispatch| Receipt::retire(tree, dispatch)).await
+        },
+        | Command::Replay { tree, replaying } => {
+            replay(Peer::open(&state, identity)?, tree, replaying).await
         },
         | Command::Drift {
             public,
@@ -1703,7 +2139,7 @@ where
         let resolution = peer.whence(reference, witness, scope).await?;
         return Ok((String::new(), resolution));
     }
-    let node = peer.bind(BindPort::Ephemeral).await?;
+    let node = peer.bind(BindPort::Ephemeral, &[]).await?;
     let resolved = reach_and_resolve(&node, reference, witness, scope, &dial, routes).await;
     node.close().await;
     drop(node);
@@ -1805,15 +2241,179 @@ async fn record(
     emit(&format_args!("{id}\n"))
 }
 
-/// Bind `peer` on `port`, announce it, and accept peers until the process is
-/// killed.
+/// Commit in `tree` the receipt `answer` makes on the task's current
+/// dispatch, and write the new commit's id line.
 ///
 /// # Specification
-/// - ensures: once the endpoint is bound, writes the endpoint id line, the peer
-///   id line and `listening`; then, for each peer admitted, writes `accepted
-///   <peer-id>` and `path <peer-id> <path>` for the path its connection took
-///   when admitted. A connection that fails its handshake is reported on
-///   standard error and serving continues.
+/// - ensures: `answer` is given the commit of the admitted dispatch last in
+///   canonical order, and its receipt is committed as [`record`] commits it.
+/// - fails: [`RunError::View`] when the tree cannot be folded,
+///   [`RunError::Undispatched`] when no dispatch is admitted, and as `answer`
+///   and [`record`] fail.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError::View`]: the tree cannot be folded.
+/// - [`RunError::Undispatched`]: the task has no dispatch.
+/// - [`RunError::Random`]: no operation fence can be drawn.
+/// - [`RunError::Commit`], [`RunError::Output`]: as [`record`].
+async fn on_current(
+    peer: Peer,
+    tree: TreeId,
+    answer: impl FnOnce(CommitId) -> Result<Receipt, RandomError>,
+) -> Result<(), RunError>
+{
+    let dispatch = match *peer.view(tree).await?.task().current() {
+        | Current::Attempt(ref attempt) => attempt.dispatch(),
+        | Current::Undispatched => return Err(RunError::Undispatched),
+    };
+    record(&peer, tree, answer(dispatch)?).await
+}
+
+/// Dispatch `seat` to `brief` in `tree`, as `operator`, and wake it at the
+/// endpoint `at` names.
+///
+/// # Specification
+/// - ensures: routes to `seat` for `tree` first ([`Peer::route`]), so a seat no
+///   endpoint names gets no dispatch. When the task's current attempt puts
+///   `seat` in its slot, held, to `brief`, that dispatch is re-sent; otherwise
+///   a dispatch of `seat` to `brief` is committed under a fresh operation
+///   fence. Writes the dispatch's commit id line at once, binds an ephemeral
+///   endpoint, wakes the seat ([`domhringr_seat_slot::wake`]), closes the
+///   endpoint, and writes the route's `source` line and `woken`.
+/// - fails: [`RunError::Route`] when no endpoint names the seat,
+///   [`RunError::Itself`] when `seat` is this peer, [`RunError::View`] when the
+///   task cannot be folded, [`RunError::Random`] and [`RunError::Commit`] when
+///   the dispatch cannot be committed, [`RunError::Bind`] when the endpoint
+///   cannot bind, [`RunError::Wake`] when the seat is not woken — the dispatch
+///   stays committed, to be re-sent — and [`RunError::Output`] when standard
+///   output cannot be written.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process test dispatches a seat that is down, reads
+///   the dispatch id before the wake fails, then re-sends the same dispatch to
+///   the seat at an endpoint named by hand and later through its presence in
+///   the book, reading the same id, the source line and `woken` each time.
+/// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
+async fn dispatch(
+    peer: Peer,
+    operator: PeerKey,
+    tree: TreeId,
+    seat: PeerKey,
+    brief: Brief,
+    at: At,
+) -> Result<(), RunError>
+{
+    let route = peer.route(tree, Aim::Peer(seat), at).await?;
+    let remote = match route {
+        | Route::Itself => return Err(RunError::Itself),
+        | Route::Book { ref remote, .. } | Route::Given { ref remote } => remote.clone(),
+    };
+    let view = peer.view(tree).await?;
+    let resent = match *view.task().current() {
+        | Current::Attempt(ref attempt)
+            if attempt.slot() == Slot::Held(seat) && *attempt.brief() == brief =>
+        {
+            Some(attempt.dispatch())
+        },
+        | Current::Attempt(_) | Current::Undispatched => None,
+    };
+    let dispatch = match resent {
+        | Some(dispatch) => dispatch,
+        | None => {
+            let receipt = Receipt::dispatch(tree, seat, brief)?;
+            peer.commit(tree, receipt).await?
+        },
+    };
+    emit(&format_args!("{dispatch}\n"))?;
+    let node = peer.bind(BindPort::Ephemeral, &[]).await?;
+    let woken =
+        domhringr_seat_slot::wake(&node, &remote, &Wake::new(tree, dispatch, operator)).await;
+    node.close().await;
+    drop(node);
+    woken?;
+    emit(&format_args!("{}woken\n", Reached { tree, route }))
+}
+
+/// Print `tree` read as a task, reached first as `replaying` says.
+///
+/// # Specification
+/// - ensures: for [`Replaying::Local`], writes the local store's task. For
+///   [`Replaying::Dial`], aims at the peer `--peer` named, or else at the local
+///   task's current attempt's seat, or at the task's owner when no dispatch is
+///   admitted; routes ([`Peer::route`]), and unless the route is this peer
+///   itself, binds an ephemeral endpoint, syncs the task ([`Node::sync`]) and
+///   closes the endpoint; then writes the route's `source` line and the task:
+///   one line per admitted seat receipt in canonical order and the line saying
+///   where it stands ([`domhringr_record_tree::Task`]'s display).
+/// - fails: [`RunError::View`] when the task cannot be folded, as when the
+///   local store holds none of it and no `--peer` names whom to reach,
+///   [`RunError::Route`] when no endpoint names the peer aimed at,
+///   [`RunError::Bind`] when the endpoint cannot bind, [`RunError::Sync`] when
+///   the sync fails, and [`RunError::Output`] when standard output cannot be
+///   written.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process test replays the task from the local store
+///   while the seat is down, then through the seat's presence in the book
+///   before and after the seat reports, reading each line.
+/// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
+async fn replay(
+    peer: Peer,
+    tree: TreeId,
+    replaying: Replaying,
+) -> Result<(), RunError>
+{
+    let Replaying::Dial { toward, at } = replaying
+    else {
+        let view = peer.view(tree).await?;
+        return emit(view.task());
+    };
+    let aim = match toward {
+        | Toward::Peer(named) => Aim::Peer(named),
+        | Toward::Seat => match *peer.view(tree).await?.task().current() {
+            | Current::Attempt(ref attempt) => Aim::Peer(attempt.seat()),
+            | Current::Undispatched => Aim::Owner,
+        },
+    };
+    let route = peer.route(tree, aim, at).await?;
+    let view = match route {
+        | Route::Itself => peer.view(tree).await?,
+        | Route::Book { ref remote, .. } | Route::Given { ref remote } => {
+            let node = peer.bind(BindPort::Ephemeral, &[]).await?;
+            let synced = node.sync(remote, tree).await;
+            let view = node.peer().view(tree).await;
+            node.close().await;
+            drop(node);
+            let _synced = synced?;
+            view?
+        },
+    };
+    emit(&format_args!("{}{}", Reached { tree, route }, view.task()))
+}
+
+/// Bind `peer` on `port`, announce it, and serve as a seat acting through
+/// `surface` until the process is killed.
+///
+/// # Specification
+/// - ensures: once the endpoint is bound, accepting the seat protocol, writes
+///   the endpoint id line, the peer id line and `listening`; then writes the
+///   seat's events ([`domhringr_seat_slot::serve`]) as they come: for each peer
+///   admitted `accepted <peer-id>` and `path <peer-id> <path>` for the path its
+///   connection took when admitted, `woken <tree> <dispatch-id>` for a wake
+///   answered, `declined <reason>` for one declined, `reported <tree>
+///   <commit-id>` for a report committed, and `unreported <tree> <dispatch-id>`
+///   for an act that committed none. A connection that fails its handshake, a
+///   declined wake's, a failed act's and a failed resume's cause are reported
+///   on standard error and serving continues.
 /// - fails: [`RunError::Bind`] when the endpoint cannot bind,
 ///   [`RunError::Closed`] if the endpoint closes, [`RunError::Output`] and
 ///   [`RunError::Diagnostics`] when standard output or standard error cannot be
@@ -1827,33 +2427,69 @@ async fn record(
 /// - [`RunError::Diagnostics`]: standard error cannot be written.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — the process test serves on a fixed port, reads the
-///   announced ids and `listening`, syncs against the server repeatedly, and
-///   reads an `accepted` line and a parseable `path` line per sync.
+/// - hypothesis: L3 — the process tests serve on a fixed port, read the
+///   announced ids and `listening`, sync against the server repeatedly, and
+///   read an `accepted` line and a parseable `path` line per sync; a seat is
+///   woken, fails to act through a failing program, and once restarted with
+///   another program resumes and reports, each read from its lines.
 /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
 /// - witness: `sync::tests::two_peers_sync_one_tree_to_identical_heads`
+/// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
 async fn serve(
     peer: Peer,
     port: BindPort,
+    surface: Surface,
 ) -> Result<(), RunError>
 {
-    let node = peer.bind(port).await?;
+    let node = Arc::new(peer.bind(port, &[domhringr_seat_slot::PROTOCOL]).await?);
+    let mut events = domhringr_seat_slot::serve(Arc::clone(&node), surface);
     emit(&format_args!(
         "{}\n{}\nlistening\n",
         node.endpoint_key(),
         node.peer().identity().peer_key()
     ))?;
-    loop {
-        match node.accept().await {
-            | Ok(accepted) => emit(&format_args!(
-                "accepted {peer}\npath {peer} {path}\n",
-                peer = accepted.peer(),
-                path = accepted.path()
-            ))?,
-            | Err(AcceptError::Closed) => return Err(RunError::Closed),
-            | Err(failure) => report(&failure).map_err(RunError::Diagnostics)?,
-        }
+    drop(node);
+    while let Some(event) = events.recv().await {
+        let diagnosed = match event {
+            | Event::Accepted(accepted) => {
+                emit(&format_args!(
+                    "accepted {peer}\npath {peer} {path}\n",
+                    peer = accepted.peer(),
+                    path = accepted.path()
+                ))?;
+                Ok(())
+            },
+            | Event::Woken { tree, dispatch } => {
+                emit(&format_args!("woken {} {dispatch}\n", Anchor::key(tree)))?;
+                Ok(())
+            },
+            | Event::Declined(declined) => {
+                emit(&format_args!("declined {}\n", declined.decline()))?;
+                report(&declined)
+            },
+            | Event::Reported { tree, report } => {
+                emit(&format_args!("reported {} {report}\n", Anchor::key(tree)))?;
+                Ok(())
+            },
+            | Event::Unreported {
+                tree,
+                dispatch,
+                failure,
+            } => {
+                emit(&format_args!(
+                    "unreported {} {dispatch}\n",
+                    Anchor::key(tree)
+                ))?;
+                report(&failure)
+            },
+            | Event::Unaccepted(failure) => report(&failure),
+            | Event::Unanswered(failure) => report(&failure),
+            | Event::Unresumed(failure) => report(&failure),
+            | Event::Closed => return Err(RunError::Closed),
+        };
+        diagnosed.map_err(RunError::Diagnostics)?;
     }
+    Err(RunError::Closed)
 }
 
 /// Write `lines` to standard output and flush it.
@@ -1938,6 +2574,8 @@ mod tests
     use domhringr_record_tree::At;
     use domhringr_record_tree::Authority;
     use domhringr_record_tree::BindPort;
+    use domhringr_record_tree::Brief;
+    use domhringr_record_tree::ContentHash;
     use domhringr_record_tree::Domain;
     use domhringr_record_tree::Endpoint;
     use domhringr_record_tree::EndpointKey;
@@ -1947,6 +2585,7 @@ mod tests
     use domhringr_record_tree::ParseDomainError;
     use domhringr_record_tree::ParseIdError;
     use domhringr_record_tree::ParseLabelError;
+    use domhringr_record_tree::ParseSummaryError;
     use domhringr_record_tree::Path;
     use domhringr_record_tree::PeerKey;
     use domhringr_record_tree::Reference;
@@ -1957,12 +2596,15 @@ mod tests
     use domhringr_record_tree::TreeId;
     use domhringr_record_tree::TreeKey;
     use domhringr_record_tree::UdpPort;
+    use domhringr_seat_slot::Surface;
 
     use super::Command;
     use super::Dial;
     use super::Invocation;
     use super::Operand;
     use super::Reach;
+    use super::Replaying;
+    use super::Toward;
     use super::UsageError;
     use super::Verb;
     use super::Withdrawn;
@@ -1981,6 +2623,9 @@ mod tests
 
     /// A commit id: 64 hex digits, which no anchor reads where a tree stands.
     const COMMIT: &str = "0707070707070707070707070707070707070707070707070707070707070707";
+
+    /// A content hash: 64 hex digits.
+    const CONTENT: &str = "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e";
 
     /// The DNS name the command lines claim and witness.
     ///
@@ -2065,6 +2710,7 @@ mod tests
             at: At::Given(at),
         };
         let port = |text: &str| BindPort::Fixed(text.parse::<UdpPort>().unwrap());
+        let content = CONTENT.parse::<ContentHash>().unwrap();
         let bind = |target: Target| Command::Bind {
             tree,
             path: path.clone(),
@@ -2074,17 +2720,100 @@ mod tests
             (vec!["--state", "dir", "id"], Command::Id),
             (vec!["--state=dir", "serve"], Command::Serve {
                 port: BindPort::Ephemeral,
+                surface: Surface::Hold,
             }),
             (
                 vec!["--state", "dir", "serve", "--port", "49731"],
                 Command::Serve {
                     port: port("49731"),
+                    surface: Surface::Hold,
                 },
             ),
             (
                 vec!["--state", "dir", "serve", "--port=1", "--port=65535"],
                 Command::Serve {
                     port: port("65535"),
+                    surface: Surface::Hold,
+                },
+            ),
+            (
+                vec![
+                    "--state",
+                    "dir",
+                    "serve",
+                    "--surface",
+                    "echo",
+                    "--port=49731",
+                ],
+                Command::Serve {
+                    port: port("49731"),
+                    surface: Surface::Program(PathBuf::from("echo")),
+                },
+            ),
+            (
+                vec!["--state", "dir", "dispatch", TREE, &peer, "anchor", PATH],
+                Command::Dispatch {
+                    tree,
+                    seat: peer_key,
+                    brief: Brief::Anchor(anchor.clone()),
+                    at: At::Book,
+                },
+            ),
+            (
+                vec![
+                    "--state", "dir", "dispatch", &at_option, TREE, &peer, "content", CONTENT,
+                ],
+                Command::Dispatch {
+                    tree,
+                    seat: peer_key,
+                    brief: Brief::Content(content),
+                    at: named.at.clone(),
+                },
+            ),
+            (
+                vec![
+                    "--state",
+                    "dir",
+                    "report",
+                    TREE,
+                    CONTENT,
+                    "-done: all green",
+                ],
+                Command::Report {
+                    tree,
+                    content,
+                    summary: "-done: all green".parse().unwrap(),
+                },
+            ),
+            (
+                vec!["--state", "dir", "handoff", TREE, &peer],
+                Command::Handoff { tree, to: peer_key },
+            ),
+            (vec!["--state", "dir", "retire", TREE], Command::Retire {
+                tree,
+            }),
+            (vec!["--state", "dir", "replay", TREE], Command::Replay {
+                tree,
+                replaying: Replaying::Dial {
+                    toward: Toward::Seat,
+                    at: At::Book,
+                },
+            }),
+            (
+                vec!["--state", "dir", "replay", &peer_option, TREE, &at_option],
+                Command::Replay {
+                    tree,
+                    replaying: Replaying::Dial {
+                        toward: Toward::Peer(peer_key),
+                        at: named.at.clone(),
+                    },
+                },
+            ),
+            (
+                vec!["--state", "dir", "replay", "--local", TREE],
+                Command::Replay {
+                    tree,
+                    replaying: Replaying::Local,
                 },
             ),
             (vec!["--state", "dir", "open"], Command::Open),
@@ -2819,6 +3548,93 @@ mod tests
             ),
             "drift has no other option"
         );
+        assert!(
+            matches!(
+                refused(line(&["--state", "dir", "dispatch", TREE, &peer, "note", "text"])),
+                UsageError::Brief(kind) if kind == "note"
+            ),
+            "a brief is an anchor or a content hash"
+        );
+        assert!(matches!(
+            refused(line(&[
+                "--state", "dir", "dispatch", TREE, &peer, "content", "0e0e"
+            ])),
+            UsageError::Operand {
+                operand: Operand::Content,
+                ..
+            }
+        ));
+        assert!(matches!(
+            refused(line(&[
+                "--state", "dir", "dispatch", TREE, &peer, "anchor", "nothex"
+            ])),
+            UsageError::Anchor {
+                operand: Operand::Brief,
+                source: ParseAnchorError::Scheme,
+            }
+        ));
+        assert!(matches!(
+            refused(line(&[
+                "--state", "dir", "dispatch", TREE, "nothex", "content", CONTENT
+            ])),
+            UsageError::Operand {
+                operand: Operand::Peer,
+                ..
+            }
+        ));
+        assert!(matches!(
+            refused(line(&[
+                "--state", "dir", "dispatch", TREE, &peer, "content"
+            ])),
+            UsageError::Operands(Verb::Dispatch)
+        ));
+        assert!(matches!(
+            refused(line(&[
+                "--state", "dir", "dispatch", TREE, &peer, "content", CONTENT, "extra"
+            ])),
+            UsageError::Operands(Verb::Dispatch)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "report", TREE, CONTENT, ""])),
+            UsageError::Summary(ParseSummaryError::Empty)
+        ));
+        assert!(matches!(
+            refused(line(&[
+                "--state",
+                "dir",
+                "report",
+                TREE,
+                CONTENT,
+                "two\nlines"
+            ])),
+            UsageError::Summary(ParseSummaryError::Control)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "report", TREE, COMMIT])),
+            UsageError::Operands(Verb::Report)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "handoff", TREE])),
+            UsageError::Operands(Verb::Handoff)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "retire", TREE, &peer])),
+            UsageError::Operands(Verb::Retire)
+        ));
+        assert!(matches!(
+            refused(line(&[
+                "--state", "dir", "replay", "--local", "--peer", &peer, TREE
+            ])),
+            UsageError::Local
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "replay", TREE, TREE])),
+            UsageError::Operands(Verb::Replay)
+        ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "serve", "--surface"])),
+            UsageError::Arguments(_)
+        ));
         let not_utf8 = || std::os::unix::ffi::OsStringExt::from_vec(vec![0xff]);
         let mut invalid = line(&["--state", "dir", "note", TREE]);
         invalid.push(not_utf8());
@@ -2833,6 +3649,9 @@ mod tests
         invalid.extend([not_utf8(), OsString::from(TREE)]);
         assert!(matches!(refused(invalid), UsageError::Text(_)));
         let mut invalid = line(&["--state", "dir", "whence", PATH, "--witness"]);
+        invalid.push(not_utf8());
+        assert!(matches!(refused(invalid), UsageError::Text(_)));
+        let mut invalid = line(&["--state", "dir", "report", TREE, CONTENT]);
         invalid.push(not_utf8());
         assert!(matches!(refused(invalid), UsageError::Text(_)));
     }

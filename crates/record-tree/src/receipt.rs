@@ -20,9 +20,16 @@
 //!            | open 0x06 · bytes tree (32) · bytes label (UTF-8) · close  Introduce
 //!            | open 0x07 · endpoint · bytes proof (64) · close            Present
 //!            | open 0x08 · bytes peer (32) · close                        Withdraw
+//!            | open 0x09 · bytes seat (32) · brief · close                Dispatch
+//!            | open 0x0a · bytes dispatch (32) · bytes content (32)
+//!                        · bytes summary (UTF-8) · close                  Report
+//!            | open 0x0b · bytes dispatch (32) · bytes peer (32) · close  Handoff
+//!            | open 0x0c · bytes dispatch (32) · close                    Retire
 //! target    := open 0x01 · anchor · close                                 Anchor
 //!            | open 0x02 · bytes endpoint (32) · close                    Endpoint
 //!            | open 0x03 · bytes datum (UTF-8) · close                    Datum
+//! brief     := open 0x01 · anchor · close                                 Anchor
+//!            | open 0x02 · bytes content (32) · close                     Content
 //! anchor    := open 0x01 · authority · close                              Tree
 //!            | open 0x02 · authority · bytes path (UTF-8) · close         Path
 //!            | open 0x03 · authority · bytes commit (32) · close          Commit
@@ -35,27 +42,30 @@
 //! ```
 //!
 //! A tree, in the receipt's header, as an authority or as the tree
-//! introduced, and an endpoint are ed25519 verifying keys; a grantee and a
-//! withdrawn peer are 32-byte peer ids; a commit is its whole 32-byte id,
-//! never a prefix; a path is its segments joined by `/`, none empty or
-//! beginning with `.`; a domain is a DNS name as [`Domain`] admits it, and a
-//! label one as [`Label`] admits it. An anchor is written as its typed parts,
-//! so each part takes the record and the refusal it takes elsewhere in a
-//! receipt. A presented endpoint lists its addresses in their order, each
-//! once: direct addresses first, IPv4 before IPv6, by address and then port,
-//! an IPv6 address without flow label or scope id; then relays by the URL's
-//! text, each an `http` or `https` URL written as it parses back and holding
-//! no `@`. A presence carries no time: its commit is when it holds since.
+//! introduced, and an endpoint are ed25519 verifying keys; a grantee, a
+//! withdrawn peer, a seat and a handoff's recipient are 32-byte peer ids; a
+//! commit, an anchor's or the dispatch a report, a handoff or a retirement
+//! names, is its whole 32-byte id, never a prefix; a content is its 32-byte
+//! BLAKE3 hash; a path is its segments joined by `/`, none empty or beginning
+//! with `.`; a domain is a DNS name as [`Domain`] admits it, a label one as
+//! [`Label`] admits it, and a summary one as [`Summary`] admits it. An anchor
+//! is written as its typed parts, so each part takes the record and the
+//! refusal it takes elsewhere in a receipt. A presented endpoint lists its
+//! addresses in their order, each once: direct addresses first, IPv4 before
+//! IPv6, by address and then port, an IPv6 address without flow label or
+//! scope id; then relays by the URL's text, each an `http` or `https` URL
+//! written as it parses back and holding no `@`. A presence carries no time:
+//! its commit is when it holds since.
 //!
 //! The decoder admits exactly what the encoder writes, so a receipt has one
 //! blob. A constructor whose tag or payload it does not admit — another
-//! receipt tag or version, an unknown kind, target, anchor, authority or
-//! address, an id of the wrong length (an abbreviated commit id among them), a
-//! tree or endpoint that is not a verifying key, text that is not UTF-8, a
-//! path with an empty or reserved segment, a malformed domain or label, an IP
-//! address of another length, a port beyond 65535, a relay that is no
-//! canonical `http` or `https` URL or holds `@`, addresses out of order or
-//! repeated — is refused as that constructor
+//! receipt tag or version, an unknown kind, target, brief, anchor, authority
+//! or address, an id or hash of the wrong length (an abbreviated commit id
+//! among them), a tree or endpoint that is not a verifying key, text that is
+//! not UTF-8, a path with an empty or reserved segment, a malformed domain,
+//! label or summary, an IP address of another length, a port beyond 65535, a
+//! relay that is no canonical `http` or `https` URL or holds `@`, addresses
+//! out of order or repeated — is refused as that constructor
 //! ([`ValueError::UnexpectedConstructor`] at its open record): the value
 //! plane's refusals name token shapes, and this is the one that names the
 //! constructor a codec turns away.
@@ -88,6 +98,7 @@ use crate::anchor::Authority;
 use crate::anchor::Path;
 use crate::anchor::Target;
 use crate::id::Address;
+use crate::id::ContentHash;
 use crate::id::Endpoint;
 use crate::id::EndpointKey;
 use crate::id::PeerKey;
@@ -95,6 +106,8 @@ use crate::id::TreeId;
 use crate::identity::TreeKey;
 use crate::name::Domain;
 use crate::name::Label;
+use crate::task::Brief;
+use crate::task::Summary;
 
 /// The receipt format this crate writes, and the only one it reads.
 const VERSION: u64 = 2;
@@ -126,6 +139,18 @@ const PRESENT: u8 = 0x07;
 /// The constructor tag of [`Kind::Withdraw`].
 const WITHDRAW: u8 = 0x08;
 
+/// The constructor tag of [`Kind::Dispatch`].
+const DISPATCH: u8 = 0x09;
+
+/// The constructor tag of [`Kind::Report`].
+const REPORT: u8 = 0x0a;
+
+/// The constructor tag of [`Kind::Handoff`].
+const HANDOFF: u8 = 0x0b;
+
+/// The constructor tag of [`Kind::Retire`].
+const RETIRE: u8 = 0x0c;
+
 /// The constructor tag of [`Target::Anchor`].
 const ANCHOR: u8 = 0x01;
 
@@ -134,6 +159,12 @@ const ENDPOINT: u8 = 0x02;
 
 /// The constructor tag of [`Target::Datum`].
 const DATUM: u8 = 0x03;
+
+/// The constructor tag of [`Brief::Anchor`].
+const BRIEF_ANCHOR: u8 = 0x01;
+
+/// The constructor tag of [`Brief::Content`].
+const BRIEF_CONTENT: u8 = 0x02;
 
 /// The constructor tag of [`Anchor::Tree`].
 const TREE: u8 = 0x01;
@@ -380,6 +411,39 @@ pub enum Kind
         /// The member whose presence is withdrawn.
         of: PeerKey,
     },
+    /// The author, the operator, puts `seat` in the task's slot to work from
+    /// `brief`: a new attempt at the task.
+    Dispatch
+    {
+        /// The seat dispatched to.
+        seat: PeerKey,
+        /// What the seat works from.
+        brief: Brief,
+    },
+    /// The author, the slot's holder, reports on `dispatch`.
+    Report
+    {
+        /// The dispatch reported on.
+        dispatch: CommitId,
+        /// The hash of the report's content.
+        content: ContentHash,
+        /// The report's one-line summary.
+        summary: Summary,
+    },
+    /// The author, the slot's holder, passes the slot of `dispatch` to `to`.
+    Handoff
+    {
+        /// The dispatch whose slot passes.
+        dispatch: CommitId,
+        /// The seat the slot passes to.
+        to: PeerKey,
+    },
+    /// The author, the slot's holder, retires from the slot of `dispatch`.
+    Retire
+    {
+        /// The dispatch whose slot is retired from.
+        dispatch: CommitId,
+    },
 }
 
 /// The payload of a commit: which tree it belongs to, the operation it is,
@@ -551,8 +615,8 @@ impl Receipt
     /// # Specification
     /// - ensures: the receipt names `tree`, records the presence of `endpoint`
     ///   proved by `proof`, and carries a fresh fence ([`Operation::random`]);
-    ///   the fold admits it only from a member whose key `proof` names under
-    ///   the endpoint's key.
+    ///   the fold admits it only from a member or a seat of the task whose key
+    ///   `proof` names under the endpoint's key.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
     ///
@@ -569,6 +633,100 @@ impl Receipt
             endpoint,
             proof,
         }))
+    }
+
+    /// A fresh [`Kind::Dispatch`] in `tree` of `seat` to `brief`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the dispatch of `seat` to
+    ///   `brief`, and carries a fresh fence ([`Operation::random`]); the fold
+    ///   admits it from the owner or a member, the operator role.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn dispatch(
+        tree: TreeId,
+        seat: PeerKey,
+        brief: Brief,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Dispatch { seat, brief }))
+    }
+
+    /// A fresh [`Kind::Report`] in `tree` on `dispatch`, naming `content` by
+    /// its hash with `summary`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the report on `dispatch`,
+    ///   and carries a fresh fence ([`Operation::random`]); the fold admits it
+    ///   only from the holder of the slot of `dispatch`, current in the
+    ///   report's causal past.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn report(
+        tree: TreeId,
+        dispatch: CommitId,
+        content: ContentHash,
+        summary: Summary,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Report {
+            dispatch,
+            content,
+            summary,
+        }))
+    }
+
+    /// A fresh [`Kind::Handoff`] in `tree` of the slot of `dispatch` to `to`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the handoff, and carries a
+    ///   fresh fence ([`Operation::random`]); the fold admits it only from the
+    ///   holder of the slot.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn handoff(
+        tree: TreeId,
+        dispatch: CommitId,
+        to: PeerKey,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Handoff { dispatch, to }))
+    }
+
+    /// A fresh [`Kind::Retire`] in `tree` from the slot of `dispatch`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the retirement, and carries
+    ///   a fresh fence ([`Operation::random`]); the fold admits it only from
+    ///   the holder of the slot.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn retire(
+        tree: TreeId,
+        dispatch: CommitId,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Retire { dispatch }))
     }
 
     /// A fresh [`Kind::Withdraw`] in `tree` of the presence of `of`.
@@ -715,12 +873,14 @@ impl CanonicalValue for Receipt
     ///
     /// # Adequacy
     /// - hypothesis: L3 — the flat forms of a note, a bind, a claim, an
-    ///   introduction, a presence and a withdrawal are compared byte for byte
-    ///   with records written independently, and every kind round-trips.
+    ///   introduction, a presence, a withdrawal, a dispatch by anchor and by
+    ///   content, a report, a handoff and a retirement are compared byte for
+    ///   byte with records written independently, and every kind round-trips.
     /// - witness: `receipt::tests::a_note_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_bind_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_claim_and_an_introduction_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::a_presence_and_a_withdrawal_encode_to_their_fixed_layouts`
+    /// - witness: `receipt::tests::the_seat_receipts_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::every_kind_round_trips`
     #[inline]
     fn emit_tokens<Sink>(
@@ -779,6 +939,31 @@ impl CanonicalValue for Receipt
                 sink.open(ConstructorTag::from(WITHDRAW))?;
                 sink.bytes(TokenBytes::from(of.peer_id().as_bytes().as_slice()))?;
             },
+            | Kind::Dispatch { seat, ref brief } => {
+                sink.open(ConstructorTag::from(DISPATCH))?;
+                sink.bytes(TokenBytes::from(seat.peer_id().as_bytes().as_slice()))?;
+                brief.emit_tokens(sink)?;
+            },
+            | Kind::Report {
+                dispatch,
+                content,
+                ref summary,
+            } => {
+                sink.open(ConstructorTag::from(REPORT))?;
+                sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(content.digest().as_bytes().as_slice()))?;
+                let summary: &str = summary.as_ref();
+                sink.bytes(TokenBytes::from(summary.as_bytes()))?;
+            },
+            | Kind::Handoff { dispatch, to } => {
+                sink.open(ConstructorTag::from(HANDOFF))?;
+                sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(to.peer_id().as_bytes().as_slice()))?;
+            },
+            | Kind::Retire { dispatch } => {
+                sink.open(ConstructorTag::from(RETIRE))?;
+                sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
+            },
         }
         sink.close()?;
         sink.close()
@@ -797,10 +982,13 @@ impl CanonicalValue for Receipt
     ///   has an empty or reserved segment, a domain that is not a DNS name
     ///   [`Domain`] admits, an introduced tree of the wrong length or that is
     ///   not a verifying key, a label that is not UTF-8 or not one [`Label`]
-    ///   admits, a presence's proof or a withdrawn peer of the wrong length; as
-    ///   [`Target`]'s decoder refuses for a bind's target and [`Endpoint`]'s
-    ///   for a presented endpoint; and the reader's own refusals for a record
-    ///   of the wrong kind, a truncated stream or an exhausted budget.
+    ///   admits, a presence's proof or a withdrawn peer of the wrong length, a
+    ///   seat, a dispatch, a content hash or a handoff's recipient of the wrong
+    ///   length, a summary that is not UTF-8 or not one [`Summary`] admits; as
+    ///   [`Target`]'s decoder refuses for a bind's target, [`Endpoint`]'s for a
+    ///   presented endpoint and [`Brief`]'s for a dispatch's brief; and the
+    ///   reader's own refusals for a record of the wrong kind, a truncated
+    ///   stream or an exhausted budget.
     /// - panics: none.
     ///
     /// # Errors
@@ -877,6 +1065,30 @@ impl CanonicalValue for Receipt
                 Kind::Withdraw {
                     of: PeerKey::new(PeerId::new(of)),
                 }
+            },
+            | DISPATCH => {
+                let seat = opened.peer(reader)?;
+                let brief = Brief::decode_tokens(reader)?;
+                Kind::Dispatch { seat, brief }
+            },
+            | REPORT => {
+                let dispatch = opened.commit(reader)?;
+                let content = opened.content(reader)?;
+                let summary = opened.summary(reader)?;
+                Kind::Report {
+                    dispatch,
+                    content,
+                    summary,
+                }
+            },
+            | HANDOFF => {
+                let dispatch = opened.commit(reader)?;
+                let to = opened.peer(reader)?;
+                Kind::Handoff { dispatch, to }
+            },
+            | RETIRE => {
+                let dispatch = opened.commit(reader)?;
+                Kind::Retire { dispatch }
             },
             | _unknown => return Err(opened.refused()),
         };
@@ -976,6 +1188,86 @@ impl CanonicalValue for Target
         };
         reader.read_close()?;
         Ok(target)
+    }
+}
+
+impl CanonicalValue for Brief
+{
+    /// Walk the brief into `sink` in the module grammar's order.
+    ///
+    /// # Specification
+    /// - ensures: on success `sink` received exactly one balanced value: the
+    ///   brief's constructor holding the anchor's value or the content hash's
+    ///   one bytes record.
+    /// - fails: propagates the sink's refusal unchanged.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: the sink refused a record.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — dispatches to an anchor and to a content are compared
+    ///   byte for byte with records written independently, and both round-trip.
+    /// - witness: `receipt::tests::the_seat_receipts_encode_to_their_fixed_layouts`
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    #[inline]
+    fn emit_tokens<Sink>(
+        &self,
+        sink: &mut Sink,
+    ) -> Result<(), ValueError>
+    where
+        Sink: TokenSink + ?Sized,
+    {
+        match *self {
+            | Self::Anchor(ref anchor) => {
+                sink.open(ConstructorTag::from(BRIEF_ANCHOR))?;
+                anchor.emit_tokens(sink)?;
+            },
+            | Self::Content(content) => {
+                sink.open(ConstructorTag::from(BRIEF_CONTENT))?;
+                sink.bytes(TokenBytes::from(content.digest().as_bytes().as_slice()))?;
+            },
+        }
+        sink.close()
+    }
+
+    /// Read one brief from `reader`.
+    ///
+    /// # Specification
+    /// - ensures: on success the brief whose emission the records are, and the
+    ///   reader stands after the brief's close.
+    /// - fails: [`ValueError::UnexpectedConstructor`] at the brief's open
+    ///   record for an unknown brief or a content hash of the wrong length; as
+    ///   [`Anchor`]'s decoder refuses for an anchor; and the reader's own
+    ///   refusals otherwise.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — witnessed through the receipt decoder, which reads a
+    ///   dispatch's brief with it: both briefs round-trip and each refusal is
+    ///   met by a body built record by record.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    #[inline]
+    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    {
+        let opened = Opened::read(reader)?;
+        let brief = match u8::from(opened.tag) {
+            | BRIEF_ANCHOR => {
+                let anchor = Anchor::decode_tokens(reader)?;
+                Self::Anchor(anchor)
+            },
+            | BRIEF_CONTENT => {
+                let content = opened.content(reader)?;
+                Self::Content(content)
+            },
+            | _unknown => return Err(opened.refused()),
+        };
+        reader.read_close()?;
+        Ok(brief)
     }
 }
 
@@ -1507,6 +1799,72 @@ impl Opened
             .map_err(|_not_a_label| self.refused())
     }
 
+    /// Read the next record as a 32-byte peer id in this constructor.
+    ///
+    /// # Specification
+    /// - ensures: on success the peer key the bytes record spells.
+    /// - fails: this constructor's refusal ([`Opened::refused`]) for bytes of
+    ///   another length, and the reader's refusals for any other record or
+    ///   none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    fn peer(
+        self,
+        reader: &mut TokenReader<'_>,
+    ) -> Result<PeerKey, ValueError>
+    {
+        let peer = <&[u8]>::from(reader.read_bytes()?);
+        let peer = <[u8; 32]>::try_from(peer).map_err(|_wrong_length| self.refused())?;
+        Ok(PeerKey::new(PeerId::new(peer)))
+    }
+
+    /// Read the next record as a content's 32-byte hash in this constructor.
+    ///
+    /// # Specification
+    /// - ensures: on success the content hash the bytes record spells.
+    /// - fails: this constructor's refusal ([`Opened::refused`]) for bytes of
+    ///   another length, and the reader's refusals for any other record or
+    ///   none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    fn content(
+        self,
+        reader: &mut TokenReader<'_>,
+    ) -> Result<ContentHash, ValueError>
+    {
+        let content = <&[u8]>::from(reader.read_bytes()?);
+        let content = <[u8; 32]>::try_from(content).map_err(|_wrong_length| self.refused())?;
+        Ok(ContentHash::from(blake3::Hash::from_bytes(content)))
+    }
+
+    /// Read the next record as a report's summary in this constructor.
+    ///
+    /// # Specification
+    /// - ensures: on success the summary the bytes record spells.
+    /// - fails: this constructor's refusal ([`Opened::refused`]) for bytes that
+    ///   are not UTF-8 or not a summary [`Summary`] admits — empty, longer than
+    ///   256 bytes, or holding a control character — and the reader's refusals
+    ///   for any other record or none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    fn summary(
+        self,
+        reader: &mut TokenReader<'_>,
+    ) -> Result<Summary, ValueError>
+    {
+        let summary = <&[u8]>::from(reader.read_bytes()?);
+        let summary = core::str::from_utf8(summary).map_err(|_not_utf8| self.refused())?;
+        summary
+            .parse::<Summary>()
+            .map_err(|_not_a_summary| self.refused())
+    }
+
     /// The refusal of this constructor: its tag or its payload is not one the
     /// receipt grammar admits.
     ///
@@ -1550,10 +1908,12 @@ mod tests
     use crate::anchor::Anchor;
     use crate::anchor::Authority;
     use crate::anchor::Target;
+    use crate::id::ContentHash;
     use crate::id::Endpoint;
     use crate::id::EndpointKey;
     use crate::id::PeerKey;
     use crate::id::TreeId;
+    use crate::task::Brief;
     use crate::testing::elsewhere_key;
     use crate::testing::tree_key;
 
@@ -1562,6 +1922,9 @@ mod tests
 
     /// The z-base-32 spelling of the all-zero key, which no label may be.
     const ZERO: &str = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
+
+    /// A content hash whose bytes are all `0x0e`.
+    const CONTENT: &str = "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e";
 
     /// The tree the receipts name.
     ///
@@ -1612,6 +1975,19 @@ mod tests
             .unwrap(),
             Receipt::withdraw(tree(), peer).unwrap(),
         ];
+        let dispatch = CommitId::new([0x0d; 32]);
+        let content = CONTENT.parse::<ContentHash>().unwrap();
+        let briefed = Brief::Anchor(Anchor::Path {
+            authority: Authority::Key(elsewhere_key().tree()),
+            path: "briefs/größe".parse().unwrap(),
+        });
+        receipts.extend([
+            Receipt::dispatch(tree(), peer, briefed).unwrap(),
+            Receipt::dispatch(tree(), peer, Brief::Content(content)).unwrap(),
+            Receipt::report(tree(), dispatch, content, "done: größer".parse().unwrap()).unwrap(),
+            Receipt::handoff(tree(), dispatch, peer).unwrap(),
+            Receipt::retire(tree(), dispatch).unwrap(),
+        ]);
         let secret = iroh::SecretKey::from_bytes(&[7; 32]);
         let proof = EndpointProof::sign(&secret, peer);
         for presented in [
@@ -1867,6 +2243,107 @@ mod tests
     }
 
     #[test]
+    fn the_seat_receipts_encode_to_their_fixed_layouts()
+    {
+        let bytes = |payload: &[u8]| {
+            let length = u64::try_from(payload.len()).unwrap().to_le_bytes();
+            [&[0x03_u8][..], &length, payload].concat()
+        };
+        let word = |value: u64| [&[0x02_u8][..], &value.to_le_bytes()].concat();
+        let encoded = |kind: Kind| {
+            Receipt::new(tree(), Operation([0x0f; 16]), kind)
+                .encode()
+                .unwrap()
+                .as_slice()
+                .to_vec()
+        };
+        let header = [
+            vec![0x01_u8, 0x01],
+            word(2),
+            bytes(tree().key().as_bytes()),
+            bytes(&[0x0f; 16]),
+        ]
+        .concat();
+        let peer = PEER.parse::<PeerKey>().unwrap();
+        let elsewhere = elsewhere_key().tree();
+        let content = CONTENT.parse::<ContentHash>().unwrap();
+        let dispatch = CommitId::new([0x0d; 32]);
+        let layouts = [
+            (
+                Kind::Dispatch {
+                    seat: peer,
+                    brief: Brief::Anchor(Anchor::commit(elsewhere, CommitId::new([0x09; 32]))),
+                },
+                [
+                    vec![0x01, 0x09],
+                    bytes(peer.peer_id().as_bytes()),
+                    vec![0x01, 0x01, 0x01, 0x03, 0x01, 0x01],
+                    bytes(elsewhere.key().as_bytes()),
+                    vec![0x05],
+                    bytes(&[0x09; 32]),
+                    vec![0x05, 0x05],
+                ]
+                .concat(),
+                "open dispatch, seat, open anchor brief, open commit, open key, tree, close, \
+                 commit, two closes",
+            ),
+            (
+                Kind::Dispatch {
+                    seat: peer,
+                    brief: Brief::Content(content),
+                },
+                [
+                    vec![0x01, 0x09],
+                    bytes(peer.peer_id().as_bytes()),
+                    vec![0x01, 0x02],
+                    bytes(&[0x0e; 32]),
+                    vec![0x05],
+                ]
+                .concat(),
+                "open dispatch, seat, open content brief, hash, close",
+            ),
+            (
+                Kind::Report {
+                    dispatch,
+                    content,
+                    summary: "done".parse().unwrap(),
+                },
+                [
+                    vec![0x01, 0x0a],
+                    bytes(&[0x0d; 32]),
+                    bytes(&[0x0e; 32]),
+                    bytes(b"done"),
+                ]
+                .concat(),
+                "open report, dispatch, content hash, summary",
+            ),
+            (
+                Kind::Handoff { dispatch, to: peer },
+                [
+                    vec![0x01, 0x0b],
+                    bytes(&[0x0d; 32]),
+                    bytes(peer.peer_id().as_bytes()),
+                ]
+                .concat(),
+                "open handoff, dispatch, recipient",
+            ),
+            (
+                Kind::Retire { dispatch },
+                [vec![0x01, 0x0c], bytes(&[0x0d; 32])].concat(),
+                "open retire, dispatch",
+            ),
+        ];
+        for (kind, records, layout) in layouts {
+            let expected = [header.clone(), records, vec![0x05, 0x05]].concat();
+            assert_eq!(
+                encoded(kind),
+                expected,
+                "open receipt, version word, tree, fence, {layout}, two closes"
+            );
+        }
+    }
+
+    #[test]
     fn a_malformed_blob_is_refused_by_name()
     {
         let open = |tag: u8| vec![0x01_u8, tag];
@@ -2013,8 +2490,12 @@ mod tests
         receipt[3] = bytes(&[0x0f; 17]);
         assert_eq!(refused(&receipt), Err(constructor(1, 0)), "a long fence");
         let mut receipt = note(b"hi");
-        receipt[4] = open(9);
-        assert_eq!(refused(&receipt), Err(constructor(9, 4)), "an unknown kind");
+        receipt[4] = open(13);
+        assert_eq!(
+            refused(&receipt),
+            Err(constructor(13, 4)),
+            "an unknown kind"
+        );
         let mut receipt = note(b"hi");
         receipt[4] = open(1);
         receipt[5] = bytes(&[0x70; 63]);
@@ -2294,6 +2775,100 @@ mod tests
             ]),
             Err(constructor(8, 4)),
             "a short withdrawn peer"
+        );
+        let seated = |tag: u8, payload: Vec<Vec<u8>>| {
+            let mut records = vec![open(1), word(2), bytes(&tree), bytes(&fence), open(tag)];
+            records.extend(payload);
+            records.extend([close(), close()]);
+            records
+        };
+        let peer = [0x70_u8; 32];
+        let dispatch =
+            |seat: &[u8], brief: Vec<Vec<u8>>| seated(9, [vec![bytes(seat)], brief].concat());
+        let report = |dispatched: &[u8], content: &[u8], summary: &[u8]| {
+            seated(10, vec![bytes(dispatched), bytes(content), bytes(summary)])
+        };
+        for (records, case) in [
+            (
+                dispatch(&peer, target(2, &[0x0e; 32])),
+                "the well-formed dispatch by content",
+            ),
+            (
+                dispatch(&peer, commit(&[9; 32])),
+                "the well-formed dispatch by anchor",
+            ),
+            (
+                report(&[0x0d; 32], &[0x0e; 32], b"done"),
+                "the well-formed report",
+            ),
+            (
+                seated(11, vec![bytes(&[0x0d; 32]), bytes(&peer)]),
+                "the well-formed handoff",
+            ),
+            (
+                seated(12, vec![bytes(&[0x0d; 32])]),
+                "the well-formed retirement",
+            ),
+        ] {
+            assert!(refused(&records).is_ok(), "{case} decodes");
+        }
+        assert_eq!(
+            refused(&dispatch(&peer[.. 31], target(2, &[0x0e; 32]))),
+            Err(constructor(9, 4)),
+            "a short seat"
+        );
+        assert_eq!(
+            refused(&dispatch(&peer, target(3, &[0x0e; 32]))),
+            Err(constructor(3, 6)),
+            "an unknown brief"
+        );
+        assert_eq!(
+            refused(&dispatch(&peer, target(2, &[0x0e; 31]))),
+            Err(constructor(2, 6)),
+            "a short content hash in a brief"
+        );
+        let long = "x".repeat(257);
+        for (records, case) in [
+            (
+                report(&[0x0d; 31], &[0x0e; 32], b"done"),
+                "a short dispatch",
+            ),
+            (
+                report(&[0x0d; 32], &[0x0e; 33], b"done"),
+                "a long content hash",
+            ),
+            (report(&[0x0d; 32], &[0x0e; 32], b""), "an empty summary"),
+            (
+                report(&[0x0d; 32], &[0x0e; 32], long.as_bytes()),
+                "a summary of 257 bytes",
+            ),
+            (
+                report(&[0x0d; 32], &[0x0e; 32], b"two\nlines"),
+                "a summary of two lines",
+            ),
+            (
+                report(&[0x0d; 32], &[0x0e; 32], &[0x68, 0xff]),
+                "a summary that is not UTF-8",
+            ),
+        ] {
+            assert_eq!(refused(&records), Err(constructor(10, 4)), "{case}");
+        }
+        for (records, case) in [
+            (
+                seated(11, vec![bytes(&[0x0d; 31]), bytes(&peer)]),
+                "a handoff of a short dispatch",
+            ),
+            (
+                seated(11, vec![bytes(&[0x0d; 32]), bytes(&peer[.. 31])]),
+                "a handoff to a short peer",
+            ),
+        ] {
+            assert_eq!(refused(&records), Err(constructor(11, 4)), "{case}");
+        }
+        assert_eq!(
+            refused(&seated(12, vec![bytes(&[0x0d; 33])])),
+            Err(constructor(12, 4)),
+            "a retirement of a long dispatch"
         );
     }
 }

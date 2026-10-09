@@ -10,6 +10,7 @@ The record plane stores signed receipts in sedimentrees, folds them into views, 
 - [Receipts and views](#receipts-and-views)
 - [Anchors and witnesses](#anchors-and-witnesses)
 - [Presence](#presence)
+- [Tasks](#tasks)
 - [Networking](#networking)
 - [Codec](#codec)
 - [Dependencies](#dependencies)
@@ -17,7 +18,7 @@ The record plane stores signed receipts in sedimentrees, folds them into views, 
 
 ## Synopsis
 
-**What.** `domhringr-record-tree` is the record plane's durable, replicated receipt store. It provides one sedimentree per tree, named by the tree's own verifying key, a view of each tree's owner, delegated write authority, admitted notes, bound paths, claimed DNS names, introduced trees, the book of which member is reachable at which endpoint, and admitted and refused commits, and the resolution against those views of an anchor naming a tree, a path in it, `domhringr://<authority>/<path>`, or a commit in it, `domhringr://<authority>/.commit/<commit-id>`, whose authority takes three forms: the tree's key, a DNS name, or a label.
+**What.** `domhringr-record-tree` is the record plane's durable, replicated receipt store. It provides one sedimentree per tree, named by the tree's own verifying key, a view of each tree's owner, delegated write authority, admitted notes, bound paths, claimed DNS names, introduced trees, the book of which member is reachable at which endpoint, the task its seat receipts make of the tree, and admitted and refused commits, and the resolution against those views of an anchor naming a tree, a path in it, `domhringr://<authority>/<path>`, or a commit in it, `domhringr://<authority>/.commit/<commit-id>`, whose authority takes three forms: the tree's key, a DNS name, or a label.
 
 **Why.** Peers need the same interpretation of signed operations regardless of arrival order. Authority depends on a commit's causal past; retaining refused commits lets peers replicate the same evidence without treating every stored write as authorized.
 
@@ -34,16 +35,17 @@ The record plane stores signed receipts in sedimentrees, folds them into views, 
 | `tokio`, [crate documentation](https://docs.rs/tokio) | Runtime, task spawning, and timers. |
 | `gandr-storage-values`, [crate documentation](https://github.com/gandr-lang/gandr/tree/main/crates/storage-values) | Canonical receipt tokens and flat encoding. |
 | `getrandom`, [crate documentation](https://docs.rs/getrandom/0.4) | Operating-system randomness for operation fences. |
+| `blake3`, [crate documentation](https://docs.rs/blake3) | The hash a report names its content by. |
 
 ## Provided features
 
 - Persistent endpoint and signing identities in a state directory, and one minted key per tree opened.
-- Durable commits carrying `Open`, `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, or `Withdraw` receipts; an `Open` carries the tree key's proof, a `Present` the presented endpoint key's.
-- Canonical views with causal authority checks, path bindings, owner-only name claims, label introductions, a book of each member's own presented endpoint, and explicit refusals.
+- Durable commits carrying `Open`, `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, or `Retire` receipts; an `Open` carries the tree key's proof, a `Present` the presented endpoint key's.
+- Canonical views with causal authority checks, path bindings, owner-only name claims, label introductions, a book of each member's own presented endpoint, a task of seat receipts with its current attempt, and explicit refusals.
 - Anchors naming a tree, a path in it, or a commit in it by key, by DNS name, or by label, resolved by fold to a binding, to unbound, to a commit's verdict, to unknown, or to a named refusal; a `Reference` may abbreviate a commit id to a unique prefix of at least eight hex digits.
 - A `Witness` trait for a DNS name's candidate trees, with the `Dns` witness over `_domhringr.<domain>` TXT records and the `Static` witness supplied by hand.
-- Sorted tree heads and one-round peer synchronization.
-- Ephemeral or fixed UDP binding, presenting the bound endpoint in a tree, routing a dial for a tree through its book or to an endpoint named by hand, dialing an endpoint by its id and any addresses, and selected-path reporting.
+- Sorted tree heads, the trees a store holds, and one-round peer synchronization.
+- Ephemeral or fixed UDP binding beside other application protocols, presenting the bound endpoint in a tree, routing a dial for a tree through its book or to an endpoint named by hand, dialing an endpoint by its id and any addresses, a link held open for pulls, and selected-path reporting.
 
 ## Expected features
 
@@ -151,9 +153,39 @@ Reversal: a transport beyond IP and relays that a dialer needs from the book.
 
 Reversal: a book that cannot go stale, as when a dial that fails at a presence falls back on its own.
 
+## Tasks
+
+A tree is also a task. A `Dispatch { seat, brief }` names the peer that is to act and the brief it acts on — an anchor, or a content hash; a `Report { dispatch, content, summary }` answers a dispatch with the BLAKE3 hash of what the seat produced and a one-line summary of at most 256 bytes; a `Handoff { dispatch, to }` moves the dispatch's slot to another peer; a `Retire { dispatch }` gives the slot up. `View::task` holds every admitted seat receipt in canonical order and the current attempt — the admitted dispatch last in canonical order, its slot, held or retired, and its answer, awaited or reported — and prints as one line per step and one saying where the task stands: `undispatched`, `dispatched <dispatch> <holder>`, `reported <dispatch> <report>` or `stalled <dispatch> <retirement>`.
+
+**A dispatch is admitted from the owner or a member; a report, a handoff and a retirement from the dispatch's holder alone, on the current dispatch, both judged in the receipt's causal past.** The fold carries, beside a commit's grantees and seats, the course of the task in its causal past: the latest dispatch there and who holds its slot. A receipt naming another dispatch is refused `not current`, and one whose author does not hold the slot there `not holder`; so a report on a superseded dispatch, a second report after a handoff, and a report after the slot was retired are refused alike, whatever order they arrive in, while a report concurrent with a later dispatch is admitted as a step that answers nothing current. A dispatched seat may present its endpoint and withdraw its own presence without a grant: the seat is reached through the task's book, and it holds no other authority in the tree.
+
+- the canonical-order latest dispatch instead of the causal one: a report written before a concurrent dispatch arrived would be refused by where the dispatch sorts, not by what its author saw.
+- seat receipts as an extension kind beside the grammar with a hook in the fold: the record plane cannot depend on the seat's crate, and the author rule is the fold's.
+
+Reversal: a dispatch that names several seats or slots, which needs a slot per seat in the course.
+
+**A stalled task is read from a retirement alone.** The record names no time, so a dispatch nobody answers stays `dispatched` until its holder retires it; the operator, not the fold, decides when silence is a stall.
+
+- a deadline in the dispatch: a clock in the record, and a stall judged by elapsed time.
+
+Reversal: an operator loop that retires on its own deadline, which then writes the retirement it already reads.
+
+**A report names its content by hash and retains no bytes.** The tree records what was produced, not where it lives; the bytes are the seat's to keep or publish.
+
+- the bytes in the receipt: a tree grows with every artifact, and a sync carries what only a reader of that artifact needs.
+
+Reversal: a content store reachable from the record — a blob plane — when a report's hash resolves through it.
+
 ## Networking
 
-A bound peer is reached by endpoint id alone: on the local network through mDNS and direct addresses, across networks through n0's relay and DNS. It binds an ephemeral UDP port, or a fixed one that a firewall rule can name. A sync dials the remote, runs one batch round for one tree, and disconnects; a dialer that knows the remote's addresses — from its presence in the book, or named by hand — names them in the dial, and the dial does not wait on the lookups. Each side reports the network path iroh selected — direct, relayed, or not yet chosen.
+A bound peer is reached by endpoint id alone: on the local network through mDNS and direct addresses, across networks through n0's relay and DNS. It binds an ephemeral UDP port, or a fixed one that a firewall rule can name. A sync dials the remote, runs one batch round for one tree, and disconnects; a dialer that knows the remote's addresses — from its presence in the book, or named by hand — names them in the dial, and the dial does not wait on the lookups. Each side reports the network path iroh selected — direct, relayed, or not yet chosen. A caller holds a link open instead with `Node::connect`, pulls trees over it with `Node::pull` — the other side may pull over the same link — and drops it with `Node::disconnect`.
+
+**A node accepts other application protocols beside subduction's, routed by ALPN.** `Peer::bind` takes the `Protocol`s the node accepts; `Node::accept` yields an `Incoming`: a peer admitted to subduction, or a connection under another protocol, handed over unread; `Node::open` dials a remote under one. The node runs subduction's handshake itself on the connections it accepts, one at a time, so a peer that links and then opens another protocol is linked before its second connection is handed over.
+
+- subduction_iroh's `accept_one`: it accepts any connection and runs subduction's handshake on it, so a second protocol on the endpoint fails its handshake.
+- one endpoint per protocol: two ports to bind, present and reach for one peer.
+
+Reversal: subduction_iroh routing ALPNs itself, when the node hands it the endpoint's other protocols.
 
 ## Codec
 
@@ -180,6 +212,12 @@ Reversal: a new form within a tree or a new authority adds a constructor under a
 
 Reversal: a change to an existing kind's payload, which needs a new version.
 
+**The seat receipts are new kinds under receipt version 2, and a brief a constructor.** `Dispatch`, `Report`, `Handoff` and `Retire` follow the presence and the withdrawal for the same reason; a brief is an anchor, as a bind's target carries it, or a content hash of 32 bytes; a summary is UTF-8 bytes that parse as a summary.
+
+- receipt version 3: an old decoder refuses every receipt it could read.
+
+Reversal: a change to an existing kind's payload.
+
 ## Dependencies
 
 **Operation fences use `getrandom` 0.4 with no features.** `getrandom::fill` draws the 16 fence bytes from the operating system's source. iroh already brings the crate into the dependency graph, so it adds no crate to the build; native targets require no feature.
@@ -195,6 +233,16 @@ Reversal: a high-risk advisory against `getrandom`, its departure from the depen
 - the operating system's resolver through the standard library: it resolves addresses and returns no TXT records.
 
 Reversal: iroh no longer exporting its resolver, or a witness that needs record types or DNSSEC validation the resolver does not expose.
+
+**A report's content hash is `blake3` 1.8 with no features.** It is the hash sedimentree names commits by, already in the graph through sedimentree, iroh and subduction, so it adds no crate to the build.
+
+- SHA-256: a second hash function, and a crate the graph does not otherwise need.
+
+Reversal: a value-plane content pointer standing for report content, when a report names that instead.
+
+**subduction_iroh is built without its `server` feature.** The node accepts connections itself to route them by ALPN, so the crate's server half is unused.
+
+Reversal: subduction_iroh's own accept loop, when it routes other protocols.
 
 ## License
 

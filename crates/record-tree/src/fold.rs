@@ -38,12 +38,15 @@ use crate::presence::Presence;
 use crate::receipt::Kind;
 use crate::receipt::Operation;
 use crate::receipt::Receipt;
+use crate::task::Step;
+use crate::task::Task;
 
 /// What a peer makes of a tree.
 ///
 /// Its owner, the peers granted write authority, the admitted notes, the paths
 /// bound, the DNS names claimed, the trees introduced, the book of who is
-/// reachable at which endpoint, the commits admitted, and the commits refused.
+/// reachable at which endpoint, the tree read as a task, the commits admitted,
+/// and the commits refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View
 {
@@ -64,6 +67,8 @@ pub struct View
     /// Each present author's presence: the admitted presence last in
     /// canonical order, unless an admitted withdrawal follows it.
     book: BTreeMap<PeerKey, Presence>,
+    /// The admitted seat receipts and the current attempt.
+    task: Task,
     /// The admitted commits' ids.
     admitted: BTreeSet<CommitId>,
     /// The refused commits and why, in canonical order.
@@ -266,6 +271,35 @@ impl View
         &self.book
     }
 
+    /// The tree read as a task: its admitted dispatches, reports, handoffs
+    /// and retirements in canonical order, and the current attempt.
+    ///
+    /// # Specification
+    /// - ensures: the current attempt is the admitted dispatch last in
+    ///   canonical order, or none when no dispatch was admitted; its slot is
+    ///   held by the dispatched seat, or by the recipient of the admitted
+    ///   handoff of it last in canonical order, or retired by the admitted
+    ///   retirement of it when that comes later; its answer is the admitted
+    ///   report on it last in canonical order, or awaited. A report, handoff or
+    ///   retirement of an earlier dispatch is a step and moves no attempt.
+    /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a dispatch reported on by its seat, a slot handed off
+    ///   and reported on by its recipient, a slot retired from, and a report on
+    ///   a dispatch a later one superseded are each read back by a case of
+    ///   their own.
+    /// - witness: `fold::tests::the_dispatched_seat_reports_on_its_dispatch`
+    /// - witness: `fold::tests::a_handoff_moves_the_slot_to_its_recipient`
+    /// - witness: `fold::tests::a_retired_slot_without_a_report_is_stalled`
+    /// - witness: `fold::tests::a_report_on_a_superseded_dispatch_is_refused`
+    #[inline]
+    #[must_use]
+    pub const fn task(&self) -> &Task
+    {
+        &self.task
+    }
+
     /// The refused commits and why, in canonical order.
     ///
     /// # Specification
@@ -364,7 +398,8 @@ pub enum Refusal
         first: CommitId,
     },
     /// The author is not the owner, and no admitted grant to the author is
-    /// an ancestor of the receipt.
+    /// an ancestor of the receipt — nor, for a presence or a withdrawal, a
+    /// dispatch or handoff to it.
     NoAuthority,
     /// An Open whose proof is not the tree key's signature naming its author.
     BadProof,
@@ -379,6 +414,14 @@ pub enum Refusal
     /// A withdrawal of another member's presence by anyone but the owner: a
     /// member withdraws its own presence alone.
     ForeignPresence,
+    /// A report, a handoff or a retirement whose dispatch is not the admitted
+    /// dispatch last in canonical order among the receipt's ancestors: a
+    /// later dispatch superseded it, or it names none.
+    NotCurrent,
+    /// A report, a handoff or a retirement whose author does not hold the
+    /// dispatch's slot among the receipt's ancestors: the seat dispatched, or
+    /// the recipient of the slot's last handoff, holds it until it retires.
+    NotHolder,
 }
 
 impl fmt::Display for Refusal
@@ -403,6 +446,8 @@ impl fmt::Display for Refusal
             | Self::SecondOpen => "second open",
             | Self::ForeignEndpoint => "foreign endpoint",
             | Self::ForeignPresence => "foreign presence",
+            | Self::NotCurrent => "not current",
+            | Self::NotHolder => "not holder",
         })
     }
 }
@@ -447,6 +492,121 @@ pub struct Unopened;
 #[repr(transparent)]
 struct Position(usize);
 
+/// A commit's place in the canonical order: how many commits the fold placed
+/// before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+struct Placed(usize);
+
+/// Who a dispatch's slot is with in a commit's causal past.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Holder
+{
+    /// This seat holds it.
+    Seat(PeerKey),
+    /// Its last holder retired from it.
+    Vacant,
+}
+
+/// The admitted dispatch last in canonical order in a commit's causal past,
+/// and its slot there.
+///
+/// The derived order is the order two pasts merge by: a later dispatch
+/// supersedes an earlier one, and of one dispatch the slot's later move wins.
+/// One placement names one commit, so the fields after a placement never
+/// decide between two courses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Course
+{
+    /// No admitted dispatch is in the causal past.
+    Undispatched,
+    /// This dispatch is.
+    Dispatched
+    {
+        /// Where the dispatch was placed.
+        placed: Placed,
+        /// The dispatch's commit.
+        dispatch: CommitId,
+        /// Where the slot's last move — the dispatch, a handoff or a
+        /// retirement — was placed.
+        moved: Placed,
+        /// Who the slot is with after that move.
+        holder: Holder,
+    },
+}
+
+impl Course
+{
+    /// Whether `author` may report on, hand off or retire from `dispatch`
+    /// here.
+    ///
+    /// # Specification
+    /// - ensures: `Ok` iff `dispatch` is this course's dispatch and `author`
+    ///   holds its slot; [`Refusal::NotCurrent`] when the course is of another
+    ///   dispatch or of none, and [`Refusal::NotHolder`] when the slot is with
+    ///   another seat or retired.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`Refusal`]: as listed above.
+    fn answerable(
+        self,
+        dispatch: CommitId,
+        author: PeerKey,
+    ) -> Result<(), Refusal>
+    {
+        match self {
+            | Self::Dispatched {
+                dispatch: current,
+                holder,
+                ..
+            } if current == dispatch => match holder {
+                | Holder::Seat(seat) if seat == author => Ok(()),
+                | Holder::Seat(_) | Holder::Vacant => Err(Refusal::NotHolder),
+            },
+            | Self::Dispatched { .. } | Self::Undispatched => Err(Refusal::NotCurrent),
+        }
+    }
+
+    /// This course with its slot moved to `holder` by the commit placed at
+    /// `moved`.
+    ///
+    /// # Specification
+    /// - ensures: a dispatched course keeps its dispatch and takes `moved` and
+    ///   `holder`; an undispatched one is returned unchanged.
+    /// - panics: none.
+    const fn moved(
+        self,
+        moved: Placed,
+        holder: Holder,
+    ) -> Self
+    {
+        match self {
+            | Self::Dispatched {
+                placed, dispatch, ..
+            } => Self::Dispatched {
+                placed,
+                dispatch,
+                moved,
+                holder,
+            },
+            | Self::Undispatched => self,
+        }
+    }
+}
+
+/// What a commit's causal past, the commit itself included, hands its
+/// children.
+struct Past
+{
+    /// The peers named by admitted grants.
+    grantees: BTreeSet<PeerKey>,
+    /// The peers given a slot by an admitted dispatch or handoff.
+    seats: BTreeSet<PeerKey>,
+    /// The latest dispatch and its slot.
+    course: Course,
+}
+
 /// A commit awaiting its place in the canonical order.
 struct Node
 {
@@ -467,9 +627,8 @@ struct Node
 /// The authority a placed commit hands down to its children.
 struct Carry
 {
-    /// The peers named by admitted grants in the commit's causal past, the
-    /// commit itself included.
-    grantees: BTreeSet<PeerKey>,
+    /// The commit's causal past, the commit itself included.
+    past: Past,
     /// The children not placed yet, each of which reads this once.
     readers: BTreeSet<Position>,
 }
@@ -487,29 +646,39 @@ struct Carry
 ///   parents whose receipt is an Open of `tree` with a proof that verifies
 ///   under `tree` for its author ([`OpenProof::verify`]), the first in
 ///   canonical order, whose author is the owner — or it is a claim whose author
-///   is the owner, or it is a grant, a note, a bind or an introduction whose
-///   author is the owner or has an admitted grant among its ancestors, or it is
-///   a presence by such an author whose proof verifies under the presented
-///   endpoint's key for its author ([`EndpointProof::verify`]), or it is a
-///   withdrawal whose author is the owner, or has an admitted grant among its
-///   ancestors and withdraws its own presence.
+///   is the owner, or it is a grant, a note, a bind, an introduction or a
+///   dispatch whose author is the owner or has an admitted grant among its
+///   ancestors, or it is a presence by such an author or by a seat — a peer an
+///   admitted dispatch or handoff among its ancestors names — whose proof
+///   verifies under the presented endpoint's key for its author
+///   ([`EndpointProof::verify`]), or it is a withdrawal whose author is the
+///   owner, or is granted or a seat and withdraws its own presence, or it is a
+///   report, a handoff or a retirement whose dispatch is the admitted dispatch
+///   last in canonical order among its ancestors and whose author holds that
+///   dispatch's slot there: the seat dispatched, or the recipient of the slot's
+///   admitted handoff last in canonical order there, unless an admitted
+///   retirement from the slot comes later.
 /// - ensures: a refused commit is listed with the first refusal that holds,
 ///   checked in this order: [`Refusal::Undecodable`], [`Refusal::WrongTree`],
 ///   [`Refusal::Duplicate`] (an admitted commit earlier in canonical order
 ///   carries the same operation), then for an Open [`Refusal::BadProof`] when
 ///   its proof fails and [`Refusal::SecondOpen`] when it is not the tree's,
 ///   [`Refusal::NotOwner`] for a claim, [`Refusal::NoAuthority`] for a grant, a
-///   note, a bind, an introduction, a presence or a withdrawal by an author
-///   neither the owner nor granted, then [`Refusal::ForeignEndpoint`] for a
-///   presence whose proof fails and [`Refusal::ForeignPresence`] for a member's
-///   withdrawal of another's presence.
+///   note, a bind, an introduction or a dispatch by an author neither the owner
+///   nor granted and for a presence or a withdrawal by an author neither that
+///   nor a seat, then [`Refusal::ForeignEndpoint`] for a presence whose proof
+///   fails and [`Refusal::ForeignPresence`] for a member's or a seat's
+///   withdrawal of another's presence, and for a report, a handoff or a
+///   retirement [`Refusal::NotCurrent`] when its dispatch is not the latest
+///   among its ancestors and [`Refusal::NotHolder`] when its author does not
+///   hold the slot there.
 /// - ensures: each path's binding is the admitted bind of that path last in
 ///   canonical order, each label's introduction the admitted introduction of
 ///   that label last in canonical order, the claims the domains of every
 ///   admitted claim, each author's presence in the book its admitted presence
 ///   last in canonical order unless an admitted withdrawal of it comes later,
-///   whose `since` is that presence's commit, and the admitted commits the ids
-///   of every commit admitted.
+///   whose `since` is that presence's commit, the task as [`View::task`] states
+///   it, and the admitted commits the ids of every commit admitted.
 /// - fails: [`Unopened`] when no commit is the tree's Open.
 /// - panics: none.
 /// - intension: when parents claim a cycle no topological order exists; the
@@ -531,9 +700,12 @@ struct Carry
 ///   non-member, a presence refused to a non-member, a presence of another
 ///   member's endpoint and one proved by another key, the last-wins presence
 ///   from every arrival order, the owner's withdrawal of a member's presence
-///   and a member's of its own, a member's withdrawal of the owner's refused,
-///   an unopened tree and a parent cycle are each pinned by a case of their
-///   own.
+///   and a member's of its own, a member's withdrawal of the owner's refused, a
+///   dispatch refused to a non-member, a seat's presence, its report, a report
+///   by a peer not holding the slot, a handoff and its recipient's report, a
+///   retirement, a report on a superseded and on an unknown dispatch, a report
+///   concurrent with a later dispatch, an unopened tree and a parent cycle are
+///   each pinned by a case of their own.
 /// - witness: `fold::tests::a_view_is_the_same_whatever_order_commits_arrive_in`
 /// - witness: `fold::tests::a_note_by_a_non_member_is_refused`
 /// - witness: `fold::tests::a_note_by_a_peer_granted_in_its_causal_past_is_admitted`
@@ -553,6 +725,10 @@ struct Carry
 /// - witness: `fold::tests::the_book_after_a_withdrawal_does_not_offer_the_endpoint`
 /// - witness: `fold::tests::an_undecodable_blob_is_refused_and_an_unopened_tree_has_no_view`
 /// - witness: `fold::tests::a_parent_cycle_is_placed_in_commit_id_order`
+/// - witness: `fold::tests::the_dispatched_seat_reports_on_its_dispatch`
+/// - witness: `fold::tests::a_handoff_moves_the_slot_to_its_recipient`
+/// - witness: `fold::tests::a_retired_slot_without_a_report_is_stalled`
+/// - witness: `fold::tests::a_report_on_a_superseded_dispatch_is_refused`
 ///
 /// [`OpenProof::verify`]: crate::receipt::OpenProof::verify
 /// [`EndpointProof::verify`]: crate::receipt::EndpointProof::verify
@@ -606,7 +782,11 @@ pub fn fold(
                 | Kind::Claim { .. }
                 | Kind::Introduce { .. }
                 | Kind::Present { .. }
-                | Kind::Withdraw { .. } => None,
+                | Kind::Withdraw { .. }
+                | Kind::Dispatch { .. }
+                | Kind::Report { .. }
+                | Kind::Handoff { .. }
+                | Kind::Retire { .. } => None,
             },
             | Ok(_) | Err(_) => None,
         };
@@ -642,6 +822,7 @@ pub fn fold(
         claims: BTreeSet::new(),
         introductions: BTreeMap::new(),
         book: BTreeMap::new(),
+        task: Task::new(),
         admitted: BTreeSet::new(),
         refused: Vec::new(),
     };
@@ -652,7 +833,7 @@ pub fn fold(
         .collect();
     let mut carries = BTreeMap::new();
     let mut admitted = BTreeMap::new();
-    loop {
+    for placed in (0_usize ..).map(Placed) {
         let ready_node = core::iter::from_fn(|| ready.pop_first())
             .find_map(|position| nodes.remove_entry(&position));
         let Some((position, node)) = ready_node.or_else(|| nodes.pop_first())
@@ -667,12 +848,13 @@ pub fn fold(
                 }
             }
         }
-        let mut grantees = inherit(&mut carries, &node.parents, position);
+        let mut past = inherit(&mut carries, &node.parents, position);
         let refusal = match node.receipt {
             | Err(failure) => Some(Refusal::Undecodable(failure)),
             | Ok(receipt) => {
                 let (named, operation, kind) = receipt.into_parts();
-                let authorized = node.author == owner || grantees.contains(&node.author);
+                let authorized = node.author == owner || past.grantees.contains(&node.author);
+                let present = authorized || past.seats.contains(&node.author);
                 if named != tree {
                     Some(Refusal::WrongTree { named })
                 }
@@ -687,7 +869,7 @@ pub fn fold(
                         | Kind::Open { .. } => (position != open).then_some(Refusal::SecondOpen),
                         | Kind::Grant { to } if authorized => {
                             let _was_member = view.members.insert(to);
-                            let _was_granted = grantees.insert(to);
+                            let _was_granted = past.grantees.insert(to);
                             None
                         },
                         | Kind::Note { text } if authorized => {
@@ -711,7 +893,7 @@ pub fn fold(
                                 view.introductions.insert(label, (node.author, introduced));
                             None
                         },
-                        | Kind::Present { endpoint, proof } if authorized => {
+                        | Kind::Present { endpoint, proof } if present => {
                             match proof.verify(endpoint.key(), node.author) {
                                 | Ok(()) => {
                                     let presence = Presence::new(endpoint, node.commit);
@@ -722,18 +904,74 @@ pub fn fold(
                             }
                         },
                         | Kind::Withdraw { of }
-                            if node.author == owner || (authorized && of == node.author) =>
+                            if node.author == owner || (present && of == node.author) =>
                         {
                             let _withdrawn = view.book.remove(&of);
                             None
                         },
-                        | Kind::Withdraw { .. } if authorized => Some(Refusal::ForeignPresence),
+                        | Kind::Withdraw { .. } if present => Some(Refusal::ForeignPresence),
+                        | Kind::Dispatch { seat, brief } if authorized => {
+                            past.course = Course::Dispatched {
+                                placed,
+                                dispatch: node.commit,
+                                moved: placed,
+                                holder: Holder::Seat(seat),
+                            };
+                            let _seated_before = past.seats.insert(seat);
+                            view.task.dispatch(node.commit, seat, brief);
+                            None
+                        },
+                        | Kind::Report {
+                            dispatch,
+                            content,
+                            summary,
+                        } => match past.course.answerable(dispatch, node.author) {
+                            | Ok(()) => {
+                                view.task.answer(node.commit, Step::Report {
+                                    dispatch,
+                                    author: node.author,
+                                    content,
+                                    summary,
+                                });
+                                None
+                            },
+                            | Err(refusal) => Some(refusal),
+                        },
+                        | Kind::Handoff { dispatch, to } => {
+                            match past.course.answerable(dispatch, node.author) {
+                                | Ok(()) => {
+                                    past.course = past.course.moved(placed, Holder::Seat(to));
+                                    let _seated_before = past.seats.insert(to);
+                                    view.task.answer(node.commit, Step::Handoff {
+                                        dispatch,
+                                        from: node.author,
+                                        to,
+                                    });
+                                    None
+                                },
+                                | Err(refusal) => Some(refusal),
+                            }
+                        },
+                        | Kind::Retire { dispatch } => {
+                            match past.course.answerable(dispatch, node.author) {
+                                | Ok(()) => {
+                                    past.course = past.course.moved(placed, Holder::Vacant);
+                                    view.task.answer(node.commit, Step::Retire {
+                                        dispatch,
+                                        author: node.author,
+                                    });
+                                    None
+                                },
+                                | Err(refusal) => Some(refusal),
+                            }
+                        },
                         | Kind::Grant { .. }
                         | Kind::Note { .. }
                         | Kind::Bind { .. }
                         | Kind::Introduce { .. }
                         | Kind::Present { .. }
-                        | Kind::Withdraw { .. } => Some(Refusal::NoAuthority),
+                        | Kind::Withdraw { .. }
+                        | Kind::Dispatch { .. } => Some(Refusal::NoAuthority),
                     };
                     if refusal.is_none() {
                         admit(&mut admitted, operation, node.commit);
@@ -755,7 +993,7 @@ pub fn fold(
             .filter(|child| nodes.contains_key(child))
             .collect();
         if !readers.is_empty() {
-            drop(carries.insert(position, Carry { grantees, readers }));
+            drop(carries.insert(position, Carry { past, readers }));
         }
     }
     Ok(view)
@@ -778,22 +1016,26 @@ fn canonical(
         .then_with(|| left.signed().as_bytes().cmp(right.signed().as_bytes()))
 }
 
-/// The grantees in the causal past of the commit at `reader`, read from its
-/// placed `parents`.
+/// The causal past of the commit at `reader` — its grantees, its seats and its
+/// latest dispatch — read from its placed `parents`.
 ///
 /// # Specification
-/// - ensures: returns the union of the placed parents' carries; a parent not
-///   placed yet (a cycle) contributes nothing. Each carry is read once per
-///   reader and dropped after its last reader, moved rather than copied when it
-///   is.
+/// - ensures: returns the union of the placed parents' grantees and seats, and
+///   the latest of their courses; a parent not placed yet (a cycle) contributes
+///   nothing. Each carry is read once per reader and dropped after its last
+///   reader, moved rather than copied when it is.
 /// - panics: none.
 fn inherit(
     carries: &mut BTreeMap<Position, Carry>,
     parents: &[Position],
     reader: Position,
-) -> BTreeSet<PeerKey>
+) -> Past
 {
-    let mut grantees = BTreeSet::new();
+    let mut past = Past {
+        grantees: BTreeSet::new(),
+        seats: BTreeSet::new(),
+        course: Course::Undispatched,
+    };
     for parent in parents {
         let Entry::Occupied(mut slot) = carries.entry(*parent)
         else {
@@ -801,19 +1043,36 @@ fn inherit(
         };
         let _was_reader = slot.get_mut().readers.remove(&reader);
         if slot.get().readers.is_empty() {
-            let carry = slot.remove();
-            if grantees.is_empty() {
-                grantees = carry.grantees;
-            }
-            else {
-                grantees.extend(carry.grantees);
-            }
+            let carried = slot.remove().past;
+            join(&mut past.grantees, carried.grantees);
+            join(&mut past.seats, carried.seats);
+            past.course = past.course.max(carried.course);
         }
         else {
-            grantees.extend(slot.get().grantees.iter().copied());
+            let carried = &slot.get().past;
+            past.grantees.extend(carried.grantees.iter().copied());
+            past.seats.extend(carried.seats.iter().copied());
+            past.course = past.course.max(carried.course);
         }
     }
-    grantees
+    past
+}
+
+/// Add `carried` to `peers`, moving it whole when `peers` is empty.
+///
+/// # Specification
+/// trivial.
+fn join(
+    peers: &mut BTreeSet<PeerKey>,
+    carried: BTreeSet<PeerKey>,
+)
+{
+    if peers.is_empty() {
+        *peers = carried;
+    }
+    else {
+        peers.extend(carried);
+    }
 }
 
 /// Record that `commit` admitted `operation`.
@@ -856,6 +1115,8 @@ mod tests
     use crate::anchor::Path;
     use crate::anchor::Resolution;
     use crate::anchor::Target;
+    use crate::id::Content;
+    use crate::id::ContentHash;
     use crate::id::Endpoint;
     use crate::id::EndpointKey;
     use crate::id::PeerKey;
@@ -866,6 +1127,13 @@ mod tests
     use crate::receipt::Kind;
     use crate::receipt::Operation;
     use crate::receipt::Receipt;
+    use crate::task::Answer;
+    use crate::task::Attempt;
+    use crate::task::Brief;
+    use crate::task::Current;
+    use crate::task::Slot;
+    use crate::task::Step;
+    use crate::task::Task;
     use crate::testing::commit;
     use crate::testing::digest;
     use crate::testing::elsewhere_key;
@@ -996,6 +1264,61 @@ mod tests
     fn withdraw(of: PeerKey) -> Receipt
     {
         Receipt::withdraw(tree(), of).unwrap()
+    }
+
+    /// The brief the tests dispatch: a path in the tree.
+    ///
+    /// # Specification
+    /// trivial.
+    fn brief() -> Brief
+    {
+        Brief::Anchor(Anchor::Path {
+            authority: Authority::Key(tree()),
+            path: "briefs/one".parse().unwrap(),
+        })
+    }
+
+    /// The content the tests report: the hash of `text`.
+    ///
+    /// # Specification
+    /// trivial.
+    fn content(text: String) -> ContentHash
+    {
+        ContentHash::of(&Content::from(text.into_bytes()))
+    }
+
+    /// A fresh dispatch on the tree of `seat` to [`brief`].
+    ///
+    /// # Specification
+    /// trivial.
+    fn dispatch(seat: PeerKey) -> Receipt
+    {
+        Receipt::dispatch(tree(), seat, brief()).unwrap()
+    }
+
+    /// A fresh report on `dispatch` of the content `text`, summarized as it.
+    ///
+    /// # Specification
+    /// trivial.
+    fn report(
+        dispatch: CommitId,
+        text: String,
+    ) -> Receipt
+    {
+        let summary = text.parse().unwrap();
+        Receipt::report(tree(), dispatch, content(text), summary).unwrap()
+    }
+
+    /// The current attempt of `view`'s task.
+    ///
+    /// # Specification
+    /// trivial.
+    fn attempt(view: &View) -> &Attempt
+    {
+        match *view.task().current() {
+            | Current::Attempt(ref attempt) => attempt,
+            | Current::Undispatched => panic!("the task is undispatched"),
+        }
     }
 
     #[test]
@@ -1778,6 +2101,7 @@ mod tests
                 ("b".parse::<Label>().unwrap(), (author, tree())),
             ]),
             book: BTreeMap::from([(author, Presence::new(reached.clone(), presented))]),
+            task: Task::new(),
             admitted: BTreeSet::new(),
             refused: vec![(refused, Refusal::NoAuthority)],
         };
@@ -1799,6 +2123,311 @@ mod tests
             reached.to_string(),
             format!("{}@127.0.0.1:5@https://relay.example.org/", direct.key()),
             "the presence line writes the endpoint id and every address"
+        );
+    }
+
+    #[test]
+    fn the_dispatched_seat_reports_on_its_dispatch()
+    {
+        let (a, s, x) = (owner(), other(), MemorySigner::from_bytes(&[5; 32]));
+        let secret = b_secret();
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let undispatched = fold(tree(), vec![opened.clone()]).unwrap();
+            assert_eq!(
+                undispatched.task().current(),
+                &Current::Undispatched,
+                "a tree with no dispatch is undispatched"
+            );
+            let stray = commit(&x, tree(), &[&opened], &dispatch(key(&x))).await;
+            let dispatched = commit(&a, tree(), &[&opened], &dispatch(key(&s))).await;
+            let by_stranger = commit(
+                &x,
+                tree(),
+                &[&dispatched],
+                &report(id(&dispatched), "mine".into()),
+            )
+            .await;
+            let presented = commit(
+                &s,
+                tree(),
+                &[&dispatched],
+                &present(&secret, Port(9), key(&s)),
+            )
+            .await;
+            let reported = commit(
+                &s,
+                tree(),
+                &[&presented],
+                &report(id(&dispatched), "done".into()),
+            )
+            .await;
+            let view = fold(tree(), vec![
+                opened,
+                stray.clone(),
+                dispatched.clone(),
+                by_stranger.clone(),
+                presented.clone(),
+                reported.clone(),
+            ])
+            .unwrap();
+            assert_eq!(view.refused().len(), 2, "{:?}", view.refused());
+            assert!(
+                view.refused().contains(&(id(&stray), Refusal::NoAuthority)),
+                "a dispatch by a non-member is refused for want of authority"
+            );
+            assert!(
+                view.refused()
+                    .contains(&(id(&by_stranger), Refusal::NotHolder)),
+                "a report by a key not dispatched is refused by name"
+            );
+            assert_eq!(
+                view.book().get(&key(&s)),
+                Some(&Presence::new(endpoint(&secret, Port(9)), id(&presented))),
+                "the dispatched seat presents in the task's book"
+            );
+            let attempt = attempt(&view);
+            assert_eq!(
+                (attempt.dispatch(), attempt.slot(), attempt.answer()),
+                (
+                    id(&dispatched),
+                    Slot::Held(key(&s)),
+                    Answer::Reported(id(&reported))
+                ),
+                "the seat's report answers the current attempt"
+            );
+            assert_eq!(
+                view.task().steps(),
+                &[
+                    (id(&dispatched), Step::Dispatch {
+                        seat: key(&s),
+                        brief: brief(),
+                    }),
+                    (id(&reported), Step::Report {
+                        dispatch: id(&dispatched),
+                        author: key(&s),
+                        content: content("done".into()),
+                        summary: "done".parse().unwrap(),
+                    }),
+                ],
+                "the admitted seat receipts are the task's steps"
+            );
+        });
+    }
+
+    #[test]
+    fn a_handoff_moves_the_slot_to_its_recipient()
+    {
+        let (a, s, t) = (owner(), other(), MemorySigner::from_bytes(&[5; 32]));
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let dispatched = commit(&a, tree(), &[&opened], &dispatch(key(&s))).await;
+            let d = id(&dispatched);
+            let early = commit(&t, tree(), &[&dispatched], &report(d, "early".into())).await;
+            let handoff = Receipt::handoff(tree(), d, key(&t)).unwrap();
+            let handed = commit(&s, tree(), &[&dispatched], &handoff).await;
+            let by_former = commit(&s, tree(), &[&handed], &report(d, "late".into())).await;
+            let seize = Receipt::handoff(tree(), d, key(&a)).unwrap();
+            let by_owner = commit(&a, tree(), &[&handed], &seize).await;
+            let reported = commit(&t, tree(), &[&handed], &report(d, "done".into())).await;
+            let view = fold(tree(), vec![
+                opened,
+                dispatched,
+                early.clone(),
+                handed.clone(),
+                by_former.clone(),
+                by_owner.clone(),
+                reported.clone(),
+            ])
+            .unwrap();
+            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            assert_eq!(
+                refused,
+                BTreeMap::from([
+                    (id(&early), Refusal::NotHolder),
+                    (id(&by_former), Refusal::NotHolder),
+                    (id(&by_owner), Refusal::NotHolder),
+                ]),
+                "the recipient before the handoff, the holder after it and the owner hold no \
+                 slot"
+            );
+            let attempt = attempt(&view);
+            assert_eq!(
+                (attempt.slot(), attempt.answer()),
+                (Slot::Held(key(&t)), Answer::Reported(id(&reported))),
+                "the recipient holds the slot and reports on the dispatch"
+            );
+            assert!(
+                view.task().steps().contains(&(id(&handed), Step::Handoff {
+                    dispatch: d,
+                    from: key(&s),
+                    to: key(&t),
+                })),
+                "the handoff is a step"
+            );
+        });
+    }
+
+    #[test]
+    fn a_retired_slot_without_a_report_is_stalled()
+    {
+        let (a, s) = (owner(), other());
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let dispatched = commit(&a, tree(), &[&opened], &dispatch(key(&s))).await;
+            let d = id(&dispatched);
+            let retirement = Receipt::retire(tree(), d).unwrap();
+            let retired = commit(&s, tree(), &[&dispatched], &retirement).await;
+            let late = commit(&s, tree(), &[&retired], &report(d, "late".into())).await;
+            let view = fold(tree(), vec![
+                opened,
+                dispatched,
+                retired.clone(),
+                late.clone(),
+            ])
+            .unwrap();
+            assert_eq!(
+                view.refused(),
+                &[(id(&late), Refusal::NotHolder)],
+                "a report after its author retired is refused"
+            );
+            let attempt = attempt(&view);
+            assert_eq!(
+                (attempt.slot(), attempt.answer(), attempt.seat()),
+                (
+                    Slot::Retired {
+                        by: key(&s),
+                        at: id(&retired),
+                    },
+                    Answer::Awaited,
+                    key(&s)
+                ),
+                "the slot is retired and the dispatch unreported"
+            );
+            assert!(
+                view.task()
+                    .to_string()
+                    .ends_with(&format!("stalled {d} {}\n", id(&retired))),
+                "a retired slot without a report is stalled"
+            );
+        });
+    }
+
+    #[test]
+    fn a_report_on_a_superseded_dispatch_is_refused()
+    {
+        let (a, s, t) = (owner(), other(), MemorySigner::from_bytes(&[5; 32]));
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let first = commit(&a, tree(), &[&opened], &dispatch(key(&s))).await;
+            let second = commit(&a, tree(), &[&first], &dispatch(key(&t))).await;
+            let stale = commit(&s, tree(), &[&second], &report(id(&first), "stale".into())).await;
+            let nowhere = CommitId::new([9; 32]);
+            let unknown = commit(&s, tree(), &[&first], &report(nowhere, "unknown".into())).await;
+            let concurrent = commit(
+                &s,
+                tree(),
+                &[&first],
+                &report(id(&first), "concurrent".into()),
+            )
+            .await;
+            let view = fold(tree(), vec![
+                opened,
+                first.clone(),
+                second.clone(),
+                stale.clone(),
+                unknown.clone(),
+                concurrent.clone(),
+            ])
+            .unwrap();
+            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            assert_eq!(
+                refused,
+                BTreeMap::from([
+                    (id(&stale), Refusal::NotCurrent),
+                    (id(&unknown), Refusal::NotCurrent),
+                ]),
+                "a report naming a dispatch superseded or never made in its past is refused"
+            );
+            assert!(
+                view.task()
+                    .steps()
+                    .contains(&(id(&concurrent), Step::Report {
+                        dispatch: id(&first),
+                        author: key(&s),
+                        content: content("concurrent".into()),
+                        summary: "concurrent".parse().unwrap(),
+                    })),
+                "a report concurrent with the later dispatch is admitted as a step"
+            );
+            let attempt = attempt(&view);
+            assert_eq!(
+                (attempt.dispatch(), attempt.slot(), attempt.answer()),
+                (id(&second), Slot::Held(key(&t)), Answer::Awaited),
+                "the later dispatch is the current attempt, its report awaited"
+            );
+        });
+    }
+
+    #[test]
+    fn a_task_prints_one_line_per_step_and_its_standing()
+    {
+        let (s, t) = (key(&other()), key(&MemorySigner::from_bytes(&[5; 32])));
+        let [first, handed, reported, retired, second, abandoned] =
+            [1, 2, 3, 4, 5, 6].map(|byte| CommitId::new([byte; 32]));
+        let hash = content("brief".into());
+        let anchored = Brief::Anchor(Anchor::Path {
+            authority: Authority::Key(tree()),
+            path: "a\\b".parse().unwrap(),
+        });
+        let mut task = Task::new();
+        assert_eq!(task.to_string(), "undispatched\n", "no dispatch");
+        task.dispatch(first, s, anchored);
+        let dispatch_line = format!(
+            "dispatch {first} {s} anchor domhringr://{}/a\\\\b\n",
+            tree()
+        );
+        assert_eq!(
+            task.to_string(),
+            format!("{dispatch_line}dispatched {first} {s}\n"),
+            "a held, unreported dispatch"
+        );
+        task.answer(handed, Step::Handoff {
+            dispatch: first,
+            from: s,
+            to: t,
+        });
+        task.answer(reported, Step::Report {
+            dispatch: first,
+            author: t,
+            content: hash,
+            summary: "done \\ ok".parse().unwrap(),
+        });
+        task.answer(retired, Step::Retire {
+            dispatch: first,
+            author: t,
+        });
+        let answered = format!(
+            "{dispatch_line}handoff {handed} {first} {s} {t}\nreport {reported} {first} {t} \
+             {hash} done \\\\ ok\nretire {retired} {first} {t}\n"
+        );
+        assert_eq!(
+            task.to_string(),
+            format!("{answered}reported {first} {reported}\n"),
+            "a reported dispatch stays reported after its slot is retired"
+        );
+        task.dispatch(second, s, Brief::Content(hash));
+        task.answer(abandoned, Step::Retire {
+            dispatch: second,
+            author: s,
+        });
+        assert_eq!(
+            task.to_string(),
+            format!(
+                "{answered}dispatch {second} {s} content {hash}\nretire {abandoned} {second} \
+                 {s}\nstalled {second} {abandoned}\n"
+            ),
+            "a later dispatch by content, retired from unreported, is stalled"
         );
     }
 }

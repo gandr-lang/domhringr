@@ -3,7 +3,7 @@ name = "domhringr-surface-peer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "The domhringr peer binary: opens, grants on, notes to, binds paths in, claims DNS names for, introduces by label, presents in and withdraws from, resolves anchors of, views, reads the book of and syncs a sedimentree over iroh, reaching peers through the book, and checks a concepts tree for drift"
+description = "The domhringr peer binary: opens, grants on, notes to, binds paths in, claims DNS names for, introduces by label, presents in and withdraws from, resolves anchors of, views, reads the book of and syncs a sedimentree over iroh, reaching peers through the book, dispatches seats to a task and serves as one, and checks a concepts tree for drift"
 readme = "README.md"
 repository.workspace = true
 license.workspace = true
@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 domhringr-record-tree = { workspace = true }
+domhringr-seat-slot = { workspace = true }
 lexopt = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

@@ -9,9 +9,9 @@ Three disciplines: consult this file before naming a crate; when it is silent, d
 Categories are a layering order: a crate depends only on crates of its own category or of one listed before it. The categories are also the closed vocabulary of commit scopes.
 
 ```text
-record    the causal plane: receipts and their codec, the sedimentree, the fold, the endpoint and storage
+record    the causal plane: receipts (the seat's among them) and their codec, the sedimentree, the fold, the endpoint and storage
 arena     the game: arenas, plays, moves and polarity, validity, endings, verdicts, replay; no I/O
-seat      the Player participant: dispatch, report, handoff, retire; the harness shim
+seat      the Player participant: answering a dispatch, acting, reporting; the harness shim
 judge     the oracle: letter readout over a model, dialogues, verdict receipts
 strategy  playbooks (Player strategies) and rubrics (Opponent strategies): documents, schemas, loader, grades
 surface   what a human or harness touches: the driver, the peer binary, the operator CLI
@@ -27,9 +27,10 @@ One row per directory: the directory, its package, and what it is.
 
 ```text
 crates/
-├── record-tree/      domhringr-record-tree    the sedimentree: receipts, the fold to a view and a book of reachable peers, anchors naming a tree, a path or a commit by key, DNS name or label, a tree stored in redb and synced over iroh
+├── record-tree/      domhringr-record-tree    the sedimentree: receipts, the fold to a view, a book of reachable peers and a task, anchors naming a tree, a path or a commit by key, DNS name or label, a tree stored in redb and synced over iroh beside other protocols
+├── seat-slot/        domhringr-seat-slot      the seat: the wake an operator sends over one stream, and a seat that answers it, presents itself, acts through a program and reports, resuming what it holds on start
 ├── surface-driver/   domhringr                the `domhringr` driver: installs components
-└── surface-peer/     domhringr-surface-peer   the `domhringr-peer` binary: opens, grants on, notes to, binds in, claims names for, introduces, presents in, withdraws from, resolves, views, reads and syncs a tree, reaching peers through its book, and checks a concepts tree for drift
+└── surface-peer/     domhringr-surface-peer   the `domhringr-peer` binary: opens, grants on, notes to, binds in, claims names for, introduces, presents in, withdraws from, resolves, views, reads and syncs a tree, reaching peers through its book, dispatches a seat and replays its task, serves as a seat, and checks a concepts tree for drift
 ```
 
 ## Crate README shape

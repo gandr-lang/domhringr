@@ -14,10 +14,21 @@
 //! holding the same commits folds them into the same [`View`]
 //! ([`Peer::view`]): the tree's owner, the peers granted write authority, the
 //! admitted notes, the paths bound, the DNS names claimed, the trees
-//! introduced, the book of who is reachable at which endpoint, the commits
-//! admitted, and the commits refused with their [`Refusal`]. A receipt is
-//! admitted only from an author with authority in its causal past, a claim
-//! only from the owner, and a presence only of the author's own endpoint.
+//! introduced, the book of who is reachable at which endpoint, the tree read
+//! as a [`Task`], the commits admitted, and the commits refused with their
+//! [`Refusal`]. A receipt is admitted only from an author with authority in
+//! its causal past, a claim only from the owner, and a presence only of the
+//! author's own endpoint.
+//!
+//! A tree is also a task: an operator — the owner or a member — dispatches a
+//! seat to a [`Brief`], and the seat holding the dispatch's slot reports on
+//! it — the content's BLAKE3 hash ([`ContentHash`]) and a one-line
+//! [`Summary`] — hands the slot to another seat, or retires from it. Each is
+//! a receipt ([`Kind::Dispatch`], [`Kind::Report`], [`Kind::Handoff`],
+//! [`Kind::Retire`]) admitted only from the holder of the latest dispatch's
+//! slot in its causal past, and the fold reads the admitted ones in canonical
+//! order into the task's [`Step`]s and its [`Current`] attempt: who holds the
+//! slot ([`Slot`]) and whether it is reported on ([`Answer`]).
 //!
 //! A tree, the paths in it and its commits are named by [`Anchor`]s,
 //! `domhringr://<authority>/<path>` and `domhringr://<authority>/.commit/<id>`,
@@ -79,6 +90,7 @@ mod presence;
 mod receipt;
 mod runtime;
 mod store;
+mod task;
 #[cfg(test)]
 mod testing;
 mod witness;
@@ -97,6 +109,8 @@ pub use fold::Verdict;
 pub use fold::View;
 pub use id::Address;
 pub use id::CommitPrefix;
+pub use id::Content;
+pub use id::ContentHash;
 pub use id::Endpoint;
 pub use id::EndpointKey;
 pub use id::ParseIdError;
@@ -115,9 +129,12 @@ pub use node::AcceptError;
 pub use node::Accepted;
 pub use node::BindError;
 pub use node::BindPort;
+pub use node::DialError;
+pub use node::Incoming;
 pub use node::Node;
 pub use node::ParsePortError;
 pub use node::PresentError;
+pub use node::Protocol;
 pub use node::SelectedPath;
 pub use node::SyncError;
 pub use node::Synced;
@@ -132,14 +149,25 @@ pub use receipt::OpenProof;
 pub use receipt::Operation;
 pub use receipt::RandomError;
 pub use receipt::Receipt;
+pub use sedimentree_core::loose_commit::id::CommitId;
 pub use store::CommitError;
 pub use store::Heads;
 pub use store::HeadsError;
 pub use store::OpenError;
 pub use store::Peer;
 pub use store::RouteError;
+pub use store::TreesError;
 pub use store::ViewError;
 pub use store::WhenceError;
+pub use task::Answer;
+pub use task::Attempt;
+pub use task::Brief;
+pub use task::Current;
+pub use task::ParseSummaryError;
+pub use task::Slot;
+pub use task::Step;
+pub use task::Summary;
+pub use task::Task;
 pub use witness::Dns;
 pub use witness::Static;
 pub use witness::Witness;

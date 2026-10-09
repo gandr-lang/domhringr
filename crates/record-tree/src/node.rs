@@ -9,6 +9,13 @@
 //! presence in the tree's book, or named by hand — names them in the dial
 //! ([`Endpoint`]) and does not wait on the lookups. Each connection reports
 //! the network path iroh selected for it ([`SelectedPath`]).
+//!
+//! Beside subduction, an endpoint accepts the application protocols it is
+//! bound with ([`Protocol`]): an accepted connection is a peer admitted to
+//! sync, or a connection under one of those protocols for its caller to
+//! serve ([`Incoming`]). A link to a peer ([`Node::connect`]) stays up until
+//! [`Node::disconnect`], so either side pulls a tree over it
+//! ([`Node::pull`]) while another protocol runs beside it ([`Node::open`]).
 
 use core::convert::Infallible;
 use core::fmt;
@@ -21,18 +28,23 @@ use core::num::NonZeroU16;
 use core::str::FromStr;
 use core::time::Duration;
 
+use future_form::Sendable;
 use futures::StreamExt as _;
 use sedimentree_core::loose_commit::id::CommitId;
 use subduction_core::connection::managed::CallError;
 use subduction_core::connection::message::SyncMessage;
+use subduction_core::handshake;
 use subduction_core::handshake::MAX_PLAUSIBLE_DRIFT;
 use subduction_core::handshake::audience::Audience;
 use subduction_core::subduction::error::AddConnectionError;
 use subduction_core::subduction::error::IoError;
 use subduction_core::timeout::call::CallTimeout;
+use subduction_core::timestamp::TimestampSeconds;
 use subduction_core::transport::message::MessageTransport;
 use subduction_iroh::error::DisconnectionError;
 use subduction_iroh::error::SendError;
+use subduction_iroh::handshake::IrohHandshake;
+use subduction_iroh::transport::IrohTransport;
 use subduction_redb_storage::RedbStorage;
 
 use crate::id::Endpoint;
@@ -70,12 +82,13 @@ const ONLINE: Duration = Duration::from_secs(5);
 impl Peer
 {
     /// Bind the peer to an iroh endpoint under its endpoint key, its UDP
-    /// sockets on `port`.
+    /// sockets on `port`, accepting `protocols` beside subduction's.
     ///
     /// # Specification
     /// - ensures: the returned node's endpoint id is the identity's endpoint
-    ///   key; the endpoint accepts subduction's ALPN and publishes and looks up
-    ///   addresses through n0's DNS and through mDNS.
+    ///   key; the endpoint accepts subduction's ALPN and each of `protocols`',
+    ///   and publishes and looks up addresses through n0's DNS and through
+    ///   mDNS.
     /// - ensures: with [`BindPort::Fixed`] the endpoint's IPv4 socket is bound
     ///   on every interface at that port, and its IPv6 socket too where the
     ///   host has IPv6; with [`BindPort::Ephemeral`] the system picks the
@@ -93,18 +106,25 @@ impl Peer
     /// # Adequacy
     /// - hypothesis: L3 — two peers bound in one process reach each other by
     ///   endpoint id alone, which needs the key, the ALPN and the lookup; a
-    ///   peer bound to a fixed port reports a socket on it.
+    ///   peer bound with a protocol accepts a connection under it; a peer bound
+    ///   to a fixed port reports a socket on it.
     /// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
+    /// - witness: `node::tests::a_linked_peer_pulls_beside_another_protocol`
     /// - witness: `node::tests::a_fixed_port_is_the_bound_port`
     #[inline]
     pub async fn bind(
         self,
         port: BindPort,
+        protocols: &[Protocol],
     ) -> Result<Node, BindError>
     {
+        let alpns = core::iter::once(subduction_iroh::ALPN)
+            .chain(protocols.iter().map(|protocol| protocol.0))
+            .map(<[u8]>::to_vec)
+            .collect();
         let builder = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
             .secret_key(self.identity().endpoint_secret().clone())
-            .alpns(vec![subduction_iroh::ALPN.to_vec()])
+            .alpns(alpns)
             .address_lookup(iroh_mdns_address_lookup::MdnsAddressLookup::builder());
         let builder = match port {
             | BindPort::Ephemeral => Ok(builder),
@@ -115,9 +135,17 @@ impl Peer
         Ok(Node {
             peer: self,
             endpoint,
+            protocols: protocols.to_vec(),
         })
     }
 }
+
+/// An application protocol a node accepts beside subduction's: the ALPN a
+/// connection names it by, the wrapper's one field, so a protocol is a
+/// constant: `Protocol(b"name/0")`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct Protocol(pub &'static [u8]);
 
 /// A UDP port a peer's endpoint binds, never zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -340,6 +368,23 @@ impl Accepted
     }
 }
 
+/// A connection [`Node::accept`] took.
+#[derive(Debug)]
+pub enum Incoming
+{
+    /// A peer admitted to sync.
+    Peer(Accepted),
+    /// A connection under another protocol the node accepts, past QUIC's
+    /// handshake alone: its caller serves it.
+    Protocol
+    {
+        /// The protocol the connection names.
+        protocol: Protocol,
+        /// The connection.
+        connection: iroh::endpoint::Connection,
+    },
+}
+
 /// The outcome of [`Node::sync`]: this peer's heads after it, and the path
 /// the sync took.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -387,6 +432,8 @@ pub struct Node
     peer: Peer,
     /// The bound endpoint.
     endpoint: iroh::Endpoint,
+    /// The protocols the endpoint accepts beside subduction's.
+    protocols: Vec<Protocol>,
 }
 
 impl Node
@@ -413,70 +460,133 @@ impl Node
         EndpointKey::new(self.endpoint.id())
     }
 
-    /// Accept the next incoming connection and admit its peer.
+    /// Accept the next incoming connection: admit its peer, or hand over a
+    /// connection under another protocol.
     ///
     /// # Specification
-    /// - ensures: on success the remote peer has passed the subduction
-    ///   handshake addressed to this peer's identity, its connection is
-    ///   registered with the engine, and the engine answers its sync requests;
-    ///   returns the remote's peer id and the path iroh selected for the
-    ///   connection when the handshake completed.
+    /// - ensures: for a connection naming subduction's ALPN, on success the
+    ///   remote peer has passed the subduction handshake addressed to this
+    ///   peer's identity, its connection is registered with the engine, and the
+    ///   engine answers its sync requests; returns [`Incoming::Peer`] with the
+    ///   remote's peer id and the path iroh selected for the connection when
+    ///   the handshake completed. For a connection naming a protocol the node
+    ///   was bound with, returns [`Incoming::Protocol`] with the protocol and
+    ///   the connection, nothing read from it.
     /// - fails: [`AcceptError::Closed`] once the endpoint is closed: no
     ///   connection will arrive again. [`AcceptError::Handshake`] for a
-    ///   connection that fails the QUIC or subduction handshake, and
-    ///   [`AcceptError::Register`] for one the engine cannot take; after
-    ///   either, the next call accepts the next connection.
+    ///   connection that fails the QUIC or subduction handshake,
+    ///   [`AcceptError::Register`] for one the engine cannot take, and
+    ///   [`AcceptError::Protocol`] for one naming a protocol the node does not
+    ///   accept, which is closed; after any of these, the next call accepts the
+    ///   next connection.
     /// - panics: none.
-    /// - intension: handshakes run one at a time, in arrival order.
+    /// - intension: connections are taken, and subduction handshakes run, one
+    ///   at a time in arrival order, so a protocol connection a dialer opens
+    ///   once its link ([`Node::connect`]) is up is handed over after the link
+    ///   is registered: its caller can pull over the link at once. A slow
+    ///   handshake holds up the connections behind it.
     ///
     /// # Errors
     /// - [`AcceptError::Closed`]: the endpoint is closed.
     /// - [`AcceptError::Handshake`]: the connection failed its handshake.
     /// - [`AcceptError::Register`]: the engine refused the connection.
+    /// - [`AcceptError::Protocol`]: the connection names no accepted protocol.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a dialer that names this peer is accepted and synced,
     ///   and a dialer that names another peer id is refused, so the handshake's
     ///   audience check is observed from both sides; the accepted peer and a
-    ///   selected path are read back.
+    ///   selected path are read back; a connection under another protocol is
+    ///   handed over after its dialer's link, which the acceptor pulls over.
     /// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
     /// - witness: `node::tests::a_dialer_naming_another_peer_is_refused`
+    /// - witness: `node::tests::a_linked_peer_pulls_beside_another_protocol`
     #[inline]
-    pub async fn accept(&self) -> Result<Accepted, AcceptError>
+    pub async fn accept(&self) -> Result<Incoming, AcceptError>
     {
-        // economy: `accept_one` couples the QUIC accept with the handshake, so
-        // a slow handshake holds up the connections behind it. Split the two
-        // and run handshakes concurrently once subduction_iroh exposes them
-        // apart.
-        let accepted = subduction_iroh::server::accept_one(
-            &self.endpoint,
+        let incoming = self.endpoint.accept().await.ok_or(AcceptError::Closed)?;
+        let connection = incoming.await.map_err(|failure| {
+            AcceptError::Handshake(subduction_iroh::error::AcceptError::Connecting(failure))
+        })?;
+        if connection.alpn() == subduction_iroh::ALPN {
+            return self.admit(connection).await.map(Incoming::Peer);
+        }
+        let accepted = self
+            .protocols
+            .iter()
+            .copied()
+            .find(|protocol| protocol.0 == connection.alpn());
+        match accepted {
+            | Some(protocol) => Ok(Incoming::Protocol {
+                protocol,
+                connection,
+            }),
+            | None => {
+                connection.close(iroh::endpoint::VarInt::from_u32(0), b"unknown protocol");
+                Err(AcceptError::Protocol)
+            },
+        }
+    }
+
+    /// Run the subduction handshake as the responder on `connection` and
+    /// register the peer it authenticates.
+    ///
+    /// # Specification
+    /// - ensures: as [`Node::accept`] states for a connection naming
+    ///   subduction's ALPN: the bidirectional stream the dialer opens carries
+    ///   the handshake and then the connection's messages, whose reader and
+    ///   writer tasks run detached on the peer's runtime.
+    /// - fails: [`AcceptError::Handshake`] when no stream opens or the
+    ///   handshake fails, as when the dialer addresses another peer or its
+    ///   clock drifts past [`MAX_PLAUSIBLE_DRIFT`]; [`AcceptError::Register`]
+    ///   when the engine refuses the connection.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`AcceptError::Handshake`]: the handshake failed.
+    /// - [`AcceptError::Register`]: the engine refused the connection.
+    async fn admit(
+        &self,
+        connection: iroh::endpoint::Connection,
+    ) -> Result<Accepted, AcceptError>
+    {
+        let (send, recv) = connection.accept_bi().await.map_err(|failure| {
+            AcceptError::Handshake(subduction_iroh::error::AcceptError::AcceptBi(failure))
+        })?;
+        let quic = connection.clone();
+        let (authenticated, (listener, sender)) = handshake::respond::<Sendable, _, _, _, _>(
+            IrohHandshake::new(send, recv),
+            move |handshake, peer| {
+                let (send, recv) = handshake.into_parts();
+                let (transport, outbound) = IrohTransport::new(peer, quic);
+                let listener = subduction_iroh::tasks::listener_task(transport.clone(), recv);
+                let sender = subduction_iroh::tasks::sender_task(send, outbound);
+                (transport, (listener, sender))
+            },
             self.peer.identity().signer(),
             self.peer.engine().nonce_cache(),
             self.peer.engine().peer_id(),
             None,
+            now(),
             MAX_PLAUSIBLE_DRIFT,
         )
-        .await;
-        let accepted = match accepted {
-            | Ok(accepted) => accepted,
-            | Err(subduction_iroh::error::AcceptError::NoIncoming) => {
-                return Err(AcceptError::Closed);
-            },
-            | Err(failure) => return Err(AcceptError::Handshake(failure)),
-        };
-        drop(self.peer.runtime().spawn(accepted.listener_task));
-        drop(self.peer.runtime().spawn(accepted.sender_task));
-        let path = SelectedPath::of(accepted.authenticated.inner().quic_connection());
-        let connection = accepted.authenticated.map(MessageTransport::new);
+        .await
+        .map_err(|failure| {
+            AcceptError::Handshake(subduction_iroh::error::AcceptError::Handshake(Box::new(
+                failure,
+            )))
+        })?;
+        drop(self.peer.runtime().spawn(listener));
+        drop(self.peer.runtime().spawn(sender));
+        let path = SelectedPath::of(&connection);
+        let peer = PeerKey::new(authenticated.peer_id());
+        let registered = authenticated.map(MessageTransport::new);
         self.peer
             .engine()
-            .add_connection(connection)
+            .add_connection(registered)
             .await
             .map_err(AcceptError::Register)?;
-        Ok(Accepted {
-            peer: PeerKey::new(accepted.peer_id),
-            path,
-        })
+        Ok(Accepted { peer, path })
     }
 
     /// Commit this node's endpoint, at its current addresses, as its presence
@@ -581,13 +691,164 @@ impl Node
         tree: TreeId,
     ) -> Result<Synced, SyncError>
     {
-        let peer = remote.peer().peer_id();
-        let address = remote.endpoint().addr();
+        let quic = self.link(remote).await?;
+        let peer = remote.peer();
+        let round = self.round(peer, tree);
+        let (round, ()) = futures::future::join(round, SelectedPath::settle(&quic)).await;
+        let path = SelectedPath::of(&quic);
+        let disconnected = self.disconnect(peer).await;
+        round?;
+        disconnected?;
+        let heads = self.peer.heads(tree).await.map_err(SyncError::Heads)?;
+        Ok(Synced { heads, path })
+    }
+
+    /// Dial `remote` at the endpoint it names and keep the link: the remote
+    /// and this peer each pull over it ([`Node::pull`]) until either
+    /// disconnects ([`Node::disconnect`]).
+    ///
+    /// # Specification
+    /// - ensures: the dial names `remote`'s endpoint as [`Node::sync`] does; on
+    ///   success the remote proved it holds `remote`'s peer key, and the link
+    ///   is registered with the engine, which answers the remote's sync
+    ///   requests over it.
+    /// - fails: [`SyncError::Connect`] when the remote cannot be reached or
+    ///   fails the handshake, and [`SyncError::Register`] when the engine
+    ///   refuses the connection.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`SyncError::Connect`]: dialing or the handshake fails.
+    /// - [`SyncError::Register`]: the engine refuses the connection.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a dialer links, opens a connection under another
+    ///   protocol, and the acceptor pulls the dialer's commit over the link.
+    /// - witness: `node::tests::a_linked_peer_pulls_beside_another_protocol`
+    #[inline]
+    pub async fn connect(
+        &self,
+        remote: &RemotePeer,
+    ) -> Result<(), SyncError>
+    {
+        let _quic = self.link(remote).await?;
+        Ok(())
+    }
+
+    /// Batch-sync `tree` with `remote` over the link this node holds to it,
+    /// dialed or accepted, and keep the link.
+    ///
+    /// # Specification
+    /// - requires: a link to `remote` is up: [`Node::connect`] dialed it, or
+    ///   [`Node::accept`] admitted it.
+    /// - ensures: on success every commit `remote` held for `tree` when it
+    ///   answered is durable in this peer's store; returns this peer's heads
+    ///   for `tree` after the round. Commits `remote` asks for are queued to
+    ///   it, best effort.
+    /// - fails: [`SyncError::Exchange`] and [`SyncError::Call`] when the round
+    ///   fails, [`SyncError::Refused`] when `remote` answers without a diff or
+    ///   no link to it is up, and [`SyncError::Heads`] when the heads cannot be
+    ///   read back.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`SyncError::Exchange`]: storage or the connection fails mid-sync.
+    /// - [`SyncError::Call`]: the sync request gets no answer.
+    /// - [`SyncError::Refused`]: no answer with a diff, or no link.
+    /// - [`SyncError::Heads`]: the heads cannot be read back.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the acceptor of a link pulls a commit only the dialer
+    ///   holds and reads it among its heads.
+    /// - witness: `node::tests::a_linked_peer_pulls_beside_another_protocol`
+    #[inline]
+    pub async fn pull(
+        &self,
+        remote: PeerKey,
+        tree: TreeId,
+    ) -> Result<Heads, SyncError>
+    {
+        self.round(remote, tree).await?;
+        self.peer.heads(tree).await.map_err(SyncError::Heads)
+    }
+
+    /// Close every link this node holds to `remote`.
+    ///
+    /// # Specification
+    /// - ensures: on success no link to `remote` is registered; a node with
+    ///   none succeeds.
+    /// - fails: [`SyncError::Disconnect`] when a link cannot be closed.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`SyncError::Disconnect`]: a link cannot be closed.
+    #[inline]
+    pub async fn disconnect(
+        &self,
+        remote: PeerKey,
+    ) -> Result<(), SyncError>
+    {
+        let _was_connected = self
+            .peer
+            .engine()
+            .disconnect_from_peer(&remote.peer_id())
+            .await
+            .map_err(SyncError::Disconnect)?;
+        Ok(())
+    }
+
+    /// Dial `remote` under `protocol`.
+    ///
+    /// # Specification
+    /// - ensures: the dial names `remote` with every address it names, as
+    ///   [`Node::sync`] does; on success the connection is past QUIC's
+    ///   handshake, which proves the remote holds `remote`'s endpoint key, and
+    ///   carries nothing yet.
+    /// - fails: [`DialError`] when the remote cannot be reached or does not
+    ///   accept `protocol`.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`DialError`]: the dial fails.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a connection dialed under another protocol arrives at
+    ///   the acceptor as that protocol's, and carries a stream both ways.
+    /// - witness: `node::tests::a_linked_peer_pulls_beside_another_protocol`
+    #[inline]
+    pub async fn open(
+        &self,
+        remote: &Endpoint,
+        protocol: Protocol,
+    ) -> Result<iroh::endpoint::Connection, DialError>
+    {
+        self.endpoint
+            .connect(remote.addr(), protocol.0)
+            .await
+            .map_err(DialError)
+    }
+
+    /// Dial `remote` under subduction's ALPN, run the handshake as the
+    /// initiator, and register the link.
+    ///
+    /// # Specification
+    /// - ensures: as [`Node::connect`]; returns the link's QUIC connection.
+    /// - fails: as [`Node::connect`].
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`SyncError::Connect`]: dialing or the handshake fails.
+    /// - [`SyncError::Register`]: the engine refuses the connection.
+    async fn link(
+        &self,
+        remote: &RemotePeer,
+    ) -> Result<iroh::endpoint::Connection, SyncError>
+    {
         let connected = subduction_iroh::client::connect(
             &self.endpoint,
-            address,
+            remote.endpoint().addr(),
             self.peer.identity().signer(),
-            Audience::known(peer),
+            Audience::known(remote.peer().peer_id()),
         )
         .await
         .map_err(SyncError::Connect)?;
@@ -600,26 +861,45 @@ impl Node
             .add_connection(connection)
             .await
             .map_err(SyncError::Register)?;
+        Ok(quic)
+    }
+
+    /// Run one batch-sync round of `tree` with `remote` over the links this
+    /// node holds to it.
+    ///
+    /// # Specification
+    /// - ensures: on success the remote answered with a diff and every commit
+    ///   it sent is durable in this peer's store.
+    /// - fails: [`SyncError::Exchange`] when storage or a link fails,
+    ///   [`SyncError::Call`] for the first link whose request got no answer,
+    ///   and [`SyncError::Refused`] when no link answered with a diff, none
+    ///   failing.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`SyncError::Exchange`], [`SyncError::Call`], [`SyncError::Refused`]:
+    ///   as listed above.
+    async fn round(
+        &self,
+        remote: PeerKey,
+        tree: TreeId,
+    ) -> Result<(), SyncError>
+    {
+        let peer = remote.peer_id();
         let round = self.peer.engine().sync_with_peer(
             &peer,
             tree.sedimentree(),
             false,
             CallTimeout::Default,
         );
-        let (round, ()) = futures::future::join(round, SelectedPath::settle(&quic)).await;
-        let path = SelectedPath::of(&quic);
-        let disconnected = self.peer.engine().disconnect_from_peer(&peer).await;
-        let (answered, _statistics, failures) = round.map_err(SyncError::Exchange)?;
-        if !answered {
-            let failure = failures.into_iter().next();
-            return Err(match failure {
-                | Some((_connection, failure)) => SyncError::Call(failure),
-                | None => SyncError::Refused,
-            });
+        let (answered, _statistics, failures) = round.await.map_err(SyncError::Exchange)?;
+        if answered {
+            return Ok(());
         }
-        let _was_connected = disconnected.map_err(SyncError::Disconnect)?;
-        let heads = self.peer.heads(tree).await.map_err(SyncError::Heads)?;
-        Ok(Synced { heads, path })
+        Err(match failures.into_iter().next() {
+            | Some((_connection, failure)) => SyncError::Call(failure),
+            | None => SyncError::Refused,
+        })
     }
 
     /// Close every connection and the endpoint, and stop the engine.
@@ -680,7 +960,17 @@ pub enum AcceptError
     /// The engine refused the connection.
     #[error("the engine refused an incoming connection")]
     Register(#[source] AddConnectionError<Infallible>),
+    /// The connection names a protocol the node does not accept.
+    #[error("an incoming connection names a protocol this peer does not accept")]
+    Protocol,
 }
+
+/// Why a dial under another protocol failed: the remote cannot be reached,
+/// or does not accept the protocol.
+#[derive(Debug, thiserror::Error)]
+#[error("cannot dial the remote peer's protocol")]
+#[repr(transparent)]
+pub struct DialError(#[source] iroh::endpoint::ConnectError);
 
 /// Why a sync with a remote peer failed.
 #[derive(Debug, thiserror::Error)]
@@ -698,8 +988,9 @@ pub enum SyncError
     /// The sync request gets no answer.
     #[error("the remote peer did not answer the sync request")]
     Call(#[source] CallError<SendError>),
-    /// The remote answers without a diff: it refuses the tree.
-    #[error("the remote peer refused to sync the tree")]
+    /// The remote answers without a diff, refusing the tree, or no link to it
+    /// is up.
+    #[error("the remote peer refused to sync the tree, or no link to it is up")]
     Refused,
     /// The connection cannot be closed.
     #[error("cannot close the connection")]
@@ -707,6 +998,19 @@ pub enum SyncError
     /// The heads cannot be read back.
     #[error("cannot read the heads after the sync")]
     Heads(#[source] HeadsError),
+}
+
+/// The time a handshake is answered at: the seconds since the Unix epoch.
+///
+/// # Specification
+/// - ensures: the system clock's reading; a clock set before the epoch reads as
+///   the epoch, which the handshake's drift check then refuses rather than this
+///   reading panicking.
+/// - panics: none.
+fn now() -> TimestampSeconds
+{
+    let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    TimestampSeconds::new(since.map_or(0, |since| since.as_secs()))
 }
 
 #[cfg(test)]
@@ -721,7 +1025,9 @@ mod tests
 
     use super::AcceptError;
     use super::BindPort;
+    use super::Incoming;
     use super::Node;
+    use super::Protocol;
     use super::SelectedPath;
     use super::SyncError;
     use super::UdpPort;
@@ -738,6 +1044,29 @@ mod tests
     use crate::testing::runtime;
     use crate::testing::tree_key;
 
+    /// A protocol a test node accepts beside subduction's.
+    const ECHO: Protocol = Protocol(b"domhringr/test/0");
+
+    /// Open and bind a peer on a fresh state directory beneath `root`,
+    /// accepting `protocols` beside subduction's.
+    ///
+    /// # Specification
+    /// trivial.
+    async fn bound_with(
+        root: &tempfile::TempDir,
+        port: BindPort,
+        protocols: &[Protocol],
+    ) -> Node
+    {
+        let state = StateDir::from(root.path().to_path_buf());
+        let identity = Identity::load_or_create(&state).unwrap();
+        Peer::open(&state, identity)
+            .unwrap()
+            .bind(port, protocols)
+            .await
+            .unwrap()
+    }
+
     /// Open and bind a peer on a fresh state directory beneath `root`.
     ///
     /// # Specification
@@ -747,13 +1076,7 @@ mod tests
         port: BindPort,
     ) -> Node
     {
-        let state = StateDir::from(root.path().to_path_buf());
-        let identity = Identity::load_or_create(&state).unwrap();
-        Peer::open(&state, identity)
-            .unwrap()
-            .bind(port)
-            .await
-            .unwrap()
+        bound_with(root, port, &[]).await
     }
 
     /// Accept connections on `node` until its endpoint closes.
@@ -922,6 +1245,64 @@ mod tests
                 [later],
                 "a dial at the presented endpoint syncs what the owner committed since"
             );
+            b.close().await;
+            drop(b);
+            a.close().await;
+            drop(a);
+        });
+    }
+
+    #[test]
+    fn a_linked_peer_pulls_beside_another_protocol()
+    {
+        let (root_a, root_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let tree = tree_key().tree();
+        runtime().block_on(async {
+            let a = Arc::new(bound_with(&root_a, BindPort::Ephemeral, &[ECHO]).await);
+            let b = bound(&root_b, BindPort::Ephemeral).await;
+            let b1 = commit(&b, tree, "b1".into()).await;
+            let acceptor = Arc::clone(&a);
+            let accepting = tokio::spawn(async move {
+                let Incoming::Peer(linked) = acceptor.accept().await.unwrap()
+                else {
+                    panic!("the link arrives first");
+                };
+                let Incoming::Protocol {
+                    protocol,
+                    connection,
+                } = acceptor.accept().await.unwrap()
+                else {
+                    panic!("the protocol's connection arrives second");
+                };
+                let heads = acceptor.pull(linked.peer(), tree).await.unwrap();
+                let (mut send, mut recv) = connection.accept_bi().await.unwrap();
+                let asked = recv.read_to_end(64).await.unwrap();
+                send.write_all(&asked).await.unwrap();
+                send.finish().unwrap();
+                let _closed = connection.closed().await;
+                (linked.peer(), protocol, heads)
+            });
+            let remote = RemotePeer::new(direct(&a), a.peer().identity().peer_key());
+            b.connect(&remote).await.unwrap();
+            let connection = b.open(&direct(&a), ECHO).await.unwrap();
+            let (mut send, mut recv) = connection.open_bi().await.unwrap();
+            send.write_all(b"ping").await.unwrap();
+            send.finish().unwrap();
+            let answered = recv.read_to_end(64).await.unwrap();
+            connection.close(iroh::endpoint::VarInt::from_u32(0), b"done");
+            let (linked, protocol, heads) = accepting.await.unwrap();
+            assert_eq!(answered, b"ping", "the protocol's stream carries both ways");
+            assert_eq!(
+                (linked, protocol),
+                (b.peer().identity().peer_key(), ECHO),
+                "the acceptor admits the dialer's link, then hands over its protocol"
+            );
+            assert_eq!(
+                heads.iter().copied().collect::<Vec<_>>(),
+                [b1],
+                "the acceptor pulls the dialer's commit over the link"
+            );
+            b.disconnect(remote.peer()).await.unwrap();
             b.close().await;
             drop(b);
             a.close().await;

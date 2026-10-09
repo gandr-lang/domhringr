@@ -2,11 +2,12 @@
 //! addressed by: a tree id in the z-base-32 form an anchor's authority
 //! carries, a commit id in the lowercase hex an anchor's commit form carries,
 //! whole or abbreviated by hand to a prefix, the peer and endpoint keys in the
-//! hex form the peer binary reads and prints, and an endpoint with the
-//! addresses it is reached at.
+//! hex form the peer binary reads and prints, an endpoint with the addresses
+//! it is reached at, and the hash a report names its content by.
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 use core::net::SocketAddr;
 use core::net::SocketAddrV6;
@@ -276,6 +277,121 @@ impl fmt::Display for EndpointKey
     ) -> fmt::Result
     {
         fmt::Display::fmt(&self.0, f)
+    }
+}
+
+/// The BLAKE3 hash of a content's bytes: the name a report gives its content
+/// by, and the name iroh-blobs serves the same bytes by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ContentHash(blake3::Hash);
+
+impl ContentHash
+{
+    /// The hash of `content`'s bytes.
+    ///
+    /// # Specification
+    /// - ensures: the BLAKE3 hash of exactly the content's bytes, so equal
+    ///   contents hash alike and the hash names the bytes wherever they are
+    ///   held.
+    /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a content is hashed and compared with the reference
+    ///   BLAKE3 of its bytes, and with the hash of a content one byte longer.
+    /// - witness: `id::tests::a_content_hash_is_the_blake3_of_its_bytes`
+    #[inline]
+    #[must_use]
+    pub fn of(content: &Content) -> Self
+    {
+        Self(blake3::hash(&content.0))
+    }
+
+    /// The BLAKE3 hash itself, whose bytes receipts encode.
+    ///
+    /// # Specification
+    /// trivial.
+    pub(crate) const fn digest(&self) -> &blake3::Hash
+    {
+        &self.0
+    }
+}
+
+impl From<blake3::Hash> for ContentHash
+{
+    /// Take a BLAKE3 hash as a content's hash.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn from(hash: blake3::Hash) -> Self
+    {
+        Self(hash)
+    }
+}
+
+impl FromStr for ContentHash
+{
+    type Err = ParseIdError;
+
+    /// Read a content hash from its 64 hex digits.
+    ///
+    /// # Specification
+    /// - ensures: accepts exactly 64 hex digits, either case, and yields the
+    ///   hash they spell; [`Display`] writes them back lowercase.
+    /// - fails: [`ParseIdError::Length`] for text of any other byte length,
+    ///   [`ParseIdError::Digit`] for a non-hex character.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ParseIdError::Length`]: the text is not 64 bytes long.
+    /// - [`ParseIdError::Digit`]: a character is not a hex digit.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a hash round-trips through its text, and 63 and 65
+    ///   digits and a non-hex digit are each refused by name.
+    /// - witness: `id::tests::a_content_hash_is_the_blake3_of_its_bytes`
+    ///
+    /// [`Display`]: fmt::Display
+    #[inline]
+    fn from_str(text: &str) -> Result<Self, Self::Err>
+    {
+        let bytes = text.parse::<HexBytes>()?;
+        Ok(Self(blake3::Hash::from_bytes(bytes.0)))
+    }
+}
+
+impl fmt::Display for ContentHash
+{
+    /// Write the hash as 64 lowercase hex digits.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result
+    {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+/// A content's bytes: what a report names by its hash ([`ContentHash`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct Content(Vec<u8>);
+
+impl From<Vec<u8>> for Content
+{
+    /// Take `bytes` as a content.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn from(bytes: Vec<u8>) -> Self
+    {
+        Self(bytes)
     }
 }
 
@@ -855,6 +971,8 @@ mod tests
 
     use super::Address;
     use super::CommitDigits;
+    use super::Content;
+    use super::ContentHash;
     use super::Endpoint;
     use super::EndpointKey;
     use super::ParseIdError;
@@ -866,6 +984,46 @@ mod tests
 
     /// The z-base-32 spelling of the all-zero key: the symbol for zero is `y`.
     const ZERO: &str = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
+
+    /// BLAKE3 of the empty input, from the reference implementation's test
+    /// vectors.
+    const EMPTY_BLAKE3: &str = "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
+
+    #[test]
+    fn a_content_hash_is_the_blake3_of_its_bytes()
+    {
+        let empty = ContentHash::of(&Content::from(Vec::new()));
+        assert_eq!(empty.to_string(), EMPTY_BLAKE3, "the empty content's hash");
+        assert_ne!(
+            ContentHash::of(&Content::from(vec![0])),
+            empty,
+            "one byte more is another content"
+        );
+        assert_eq!(
+            EMPTY_BLAKE3.to_uppercase().parse::<ContentHash>().unwrap(),
+            empty,
+            "a hash reads back from its digits in either case"
+        );
+        let (short, _last) = EMPTY_BLAKE3.split_at(63);
+        assert!(
+            matches!(short.parse::<ContentHash>(), Err(ParseIdError::Length)),
+            "63 digits are refused"
+        );
+        assert!(
+            matches!(
+                format!("{EMPTY_BLAKE3}0").parse::<ContentHash>(),
+                Err(ParseIdError::Length)
+            ),
+            "65 digits are refused"
+        );
+        assert!(
+            matches!(
+                format!("{short}g").parse::<ContentHash>(),
+                Err(ParseIdError::Digit(_))
+            ),
+            "a non-hex digit is refused"
+        );
+    }
 
     #[test]
     fn a_tree_id_round_trips_through_its_anchor_text()

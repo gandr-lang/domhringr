@@ -1,0 +1,24 @@
+[package]
+name = "domhringr-seat-slot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The domhringr seat: answers an operator's wake over one iroh stream, acts on the dispatch it holds through a command surface, and reports its content by hash"
+readme = "README.md"
+repository.workspace = true
+license.workspace = true
+keywords = ["dispatch", "domhringr", "iroh", "report", "seat"]
+categories = ["network-programming"]
+publish.workspace = true
+
+[dependencies]
+domhringr-record-tree = { workspace = true }
+iroh = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
