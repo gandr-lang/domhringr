@@ -1,0 +1,24 @@
+[package]
+name = "domhringr-strategy-document"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "domhringr playbooks and rubrics: TOML documents refused by field, a step's verifier run as a process, a rubric's questions graded against its band and composed"
+readme = "README.md"
+repository.workspace = true
+license.workspace = true
+keywords = ["domhringr", "playbook", "rubric", "toml"]
+categories = ["parser-implementations"]
+publish.workspace = true
+
+[dependencies]
+domhringr-judge-oracle = { workspace = true }
+domhringr-record-tree = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

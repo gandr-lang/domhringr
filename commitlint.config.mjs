@@ -41,6 +41,7 @@ const SCOPES = [
   "surface",
   "oracle",
   "judge",
+  "strategy",
   "pipeline",
   "record",
   "tool",

@@ -4,6 +4,7 @@ members = [
   "crates/judge-oracle",
   "crates/record-tree",
   "crates/seat-slot",
+  "crates/strategy-document",
   "crates/surface-driver",
   "crates/surface-peer",
 ]
@@ -43,6 +44,7 @@ default-features = false
 
 # The judge: the letter readout over a model, its backends.
 # consumers:
+# - strategy-document
 # - surface-peer
 [workspace.dependencies.domhringr-judge-oracle]
 path = "crates/judge-oracle"
@@ -51,6 +53,7 @@ path = "crates/judge-oracle"
 # consumers:
 # - judge-oracle
 # - seat-slot
+# - strategy-document
 # - surface-peer
 [workspace.dependencies.domhringr-record-tree]
 path = "crates/record-tree"
@@ -202,17 +205,19 @@ default-features = false
 # consumers:
 # - surface-peer (dev)
 # - seat-slot (dev)
+# - strategy-document (dev)
 # - record-tree (dev)
 [workspace.dependencies.tempfile]
 version = "3.27"
 default-features = false
 
-# `derive(Error)` for the record library's, the seat's and the peer binary's
-# error enums.
+# `derive(Error)` for the record library's, the seat's, the strategy
+# documents' and the peer binary's error enums.
 # consumers:
 # - judge-oracle
 # - surface-peer
 # - seat-slot
+# - strategy-document
 # - record-tree
 [workspace.dependencies.thiserror]
 version = "2.0"
@@ -232,6 +237,19 @@ default-features = false
 version = "1"
 default-features = false
 features = ["rt-multi-thread", "sync", "time"]
+
+# TOML text for playbooks and rubrics: the parser alone, its spanned
+# document tree walked by hand into the typed documents, so each refusal
+# names its field. Its parser, `winnow` and `toml_datetime` are already in
+# the graph under a build script's `toml_edit`.
+# features:
+# - parse: `de::DeTable::parse`, the document tree without serde
+# consumers:
+# - strategy-document
+[workspace.dependencies.toml]
+version = "1.1"
+default-features = false
+features = ["parse"]
 
 # The lint wall. Every group is denied at priority -1 so an individual `allow`
 # below it wins; every allow states the class it exempts. A lint leaves this

@@ -1,0 +1,20 @@
+#:tombi toml-version = "v1.0.0"
+
+# A playbook for a change to this repository, run on a checkout of it:
+# `domhringr-peer playbook run examples/playbook.toml <tree> --task-state <checkout>`.
+name = "change-review"
+
+[[steps]]
+id = "gates"
+why = "Every gate the repository defines passes on the change."
+verifier = { command = "mise", args = ["run", "check"] }
+
+[[steps]]
+id = "synopsis"
+why = "The README's synopsis states what the project is, why it exists, and how it works."
+question = { rubric = "rubric.toml", question = "synopsis" }
+
+[[steps]]
+id = "crate-rows"
+why = "The crate table names every crate the workspace builds."
+question = { rubric = "rubric.toml", question = "crate-rows" }

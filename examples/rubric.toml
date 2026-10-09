@@ -1,0 +1,24 @@
+#:tombi toml-version = "v1.0.0"
+
+# A rubric over a checkout of this repository: the state files are read
+# from the checkout into the transcript the judge reads.
+name = "change-review"
+state = ["README.md", "Cargo.toml", "crates/README.md"]
+
+[band]
+low = 0.2
+high = 0.8
+
+[questions.crate-rows]
+instructions = """
+Read the workspace manifest's members and the crate table in crates/README.md. \
+Does the table hold one row for each member, and no row for anything else?"""
+criteria.true = "Every workspace member has its row, and every row is a member."
+criteria.false = "A member has no row, or a row names no member."
+
+[questions.synopsis]
+instructions = """
+Read the README's synopsis. Does it state what the project is, the need it \
+answers, and the mechanism it answers it by, in the present tense?"""
+criteria.true = "The synopsis states what, why and how, in the present tense."
+criteria.false = "The synopsis misses what, why or how, or narrates history."
