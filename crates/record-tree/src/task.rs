@@ -1,6 +1,7 @@
 //! Tasks: a tree read as a task — the operator's dispatch of a brief to a
-//! seat, and that seat's reports, handoffs and retirement — and where the
-//! task stands once its commits are folded.
+//! seat, that seat's reports, handoffs and retirement, and the verdicts
+//! judges rule on it — and where the task stands once its commits are
+//! folded.
 //!
 //! A dispatch names the seat it puts in the task's slot and the brief
 //! ([`Brief`]): an anchor, or the hash of the brief's content
@@ -10,7 +11,11 @@
 //! answers. Dispatches are attempts: the one last in canonical order is the
 //! current attempt ([`Current`]), and what the task's view says of it — held,
 //! reported, or stalled because its slot was retired without a report — is
-//! read from the receipts alone, never from a clock.
+//! read from the receipts alone, never from a clock. A judge's verdict names
+//! the current dispatch, the rubric and the transcript by hash, and rules on
+//! each question asked ([`Ruling`]); it is a step of the task and leaves the
+//! attempt's standing as it was: which judge a task trusts, and what its
+//! rulings decide, is the rubric's.
 //!
 //! [`ContentHash`]: crate::id::ContentHash
 
@@ -27,6 +32,7 @@ use crate::id::ContentHash;
 use crate::id::PeerKey;
 use crate::line::Field;
 use crate::line::OneLine;
+use crate::ruling::Ruling;
 
 /// The longest summary, in bytes of UTF-8: a line a reader takes in at a
 /// glance, the content carrying the rest.
@@ -201,6 +207,21 @@ pub enum Step
         dispatch: CommitId,
         /// The holder who retired.
         author: PeerKey,
+    },
+    /// The judge ruled on `dispatch`: each question asked about `transcript`
+    /// under `rubric`, with its ruling.
+    Verdict
+    {
+        /// The dispatch ruled on.
+        dispatch: CommitId,
+        /// The judge who ruled.
+        judge: PeerKey,
+        /// The hash of the rubric the questions come from.
+        rubric: ContentHash,
+        /// The hash of the transcript the questions were asked about.
+        transcript: ContentHash,
+        /// Each question's hash and its ruling, in the order asked.
+        answers: Vec<(ContentHash, Ruling)>,
     },
 }
 
@@ -394,15 +415,15 @@ impl Task
         self.steps.push((commit, Step::Dispatch { seat, brief }));
     }
 
-    /// Record the admitted `step` of `commit`: a report, a handoff or a
-    /// retirement.
+    /// Record the admitted `step` of `commit`: a report, a handoff, a
+    /// retirement or a verdict.
     ///
     /// # Specification
     /// - ensures: the step is appended; when it answers the current attempt's
     ///   dispatch, a report makes `commit` the attempt's report, a handoff puts
     ///   its recipient in the slot, and a retirement retires the slot at
-    ///   `commit`. A step answering an earlier dispatch changes no attempt: a
-    ///   later dispatch superseded it.
+    ///   `commit`. A verdict changes no attempt, and a step answering an
+    ///   earlier dispatch changes none either: a later dispatch superseded it.
     /// - panics: none.
     pub(crate) fn answer(
         &mut self,
@@ -427,7 +448,8 @@ impl Task
                 | Step::Dispatch { .. }
                 | Step::Report { .. }
                 | Step::Handoff { .. }
-                | Step::Retire { .. } => {},
+                | Step::Retire { .. }
+                | Step::Verdict { .. } => {},
             }
         }
         self.steps.push((commit, step));
@@ -438,23 +460,27 @@ impl fmt::Display for Task
 {
     /// Write the task as lines: one per step in canonical order — `dispatch
     /// <commit> <seat> <brief>`, `report <commit> <dispatch> <author>
-    /// <content> <summary>`, `handoff <commit> <dispatch> <from> <to>`, or
-    /// `retire <commit> <dispatch> <author>` — then where it stands:
-    /// `undispatched`, `reported <dispatch> <report>`, `stalled <dispatch>
-    /// <retirement>` for a slot retired from without a report, or `dispatched
-    /// <dispatch> <holder>`.
+    /// <content> <summary>`, `handoff <commit> <dispatch> <from> <to>`,
+    /// `retire <commit> <dispatch> <author>`, or `verdict <commit> <dispatch>
+    /// <judge> <rubric> <transcript>` followed by `ruling <commit> <question>
+    /// <ruling>` per question asked — then where it stands: `undispatched`,
+    /// `reported <dispatch> <report>`, `stalled <dispatch> <retirement>` for a
+    /// slot retired from without a report, or `dispatched <dispatch>
+    /// <holder>`.
     ///
     /// # Specification
     /// - ensures: every line ends in a newline, and each step stays one line: a
     ///   brief's anchor and a summary have their backslashes escaped as a
-    ///   note's are, and a summary holds no control character.
+    ///   note's are, a summary holds no control character, and a ruling is
+    ///   written as one line ([`Ruling`]'s `Display`).
     /// - panics: none.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a task with a dispatch by anchor, a handoff, a report
-    ///   whose summary holds a backslash, a retirement and a second dispatch by
-    ///   content is printed and compared line for line, and each standing is
-    ///   printed by a case of its own.
+    ///   whose summary holds a backslash, a retirement, a verdict with a read
+    ///   and an unread ruling and a second dispatch by content is printed and
+    ///   compared line for line, and each standing is printed by a case of its
+    ///   own.
     /// - witness: `fold::tests::a_task_prints_one_line_per_step_and_its_standing`
     #[inline]
     fn fmt(
@@ -482,6 +508,21 @@ impl fmt::Display for Task
                 },
                 | Step::Retire { dispatch, author } => {
                     writeln!(f, "retire {commit} {dispatch} {author}")?;
+                },
+                | Step::Verdict {
+                    dispatch,
+                    judge,
+                    rubric,
+                    transcript,
+                    ref answers,
+                } => {
+                    writeln!(
+                        f,
+                        "verdict {commit} {dispatch} {judge} {rubric} {transcript}"
+                    )?;
+                    for &(question, ref ruling) in answers {
+                        writeln!(f, "ruling {commit} {question} {ruling}")?;
+                    }
                 },
             }
         }

@@ -27,10 +27,11 @@ One row per directory: the directory, its package, and what it is.
 
 ```text
 crates/
+├── judge-oracle/     domhringr-judge-oracle   the judge: a lettered question about a transcript, read from a model's next-token distribution over an OpenAI-compatible endpoint into a letter and a probability per option, or a refusal by its reason; a table of rulings for tests and replay
 ├── record-tree/      domhringr-record-tree    the sedimentree: receipts, the fold to a view, a book of reachable peers and a task, anchors naming a tree, a path or a commit by key, DNS name or label, a tree stored in redb and synced over iroh beside other protocols
 ├── seat-slot/        domhringr-seat-slot      the seat: the wake an operator sends over one stream, and a seat that answers it, presents itself, acts through a program and reports, resuming what it holds on start
 ├── surface-driver/   domhringr                the `domhringr` driver: installs components
-└── surface-peer/     domhringr-surface-peer   the `domhringr-peer` binary: opens, grants on, notes to, binds in, claims names for, introduces, presents in, withdraws from, resolves, views, reads and syncs a tree, reaching peers through its book, dispatches a seat and replays its task, serves as a seat, and checks a concepts tree for drift
+└── surface-peer/     domhringr-surface-peer   the `domhringr-peer` binary: opens, grants on, notes to, binds in, claims names for, introduces, presents in, withdraws from, resolves, views, reads and syncs a tree, reaching peers through its book, dispatches a seat and replays its task, serves as a seat, rules on a task as its judge, and checks a concepts tree for drift
 ```
 
 ## Crate README shape

@@ -677,6 +677,20 @@ name = "domhringr"
 version = "0.0.0"
 
 [[package]]
+name = "domhringr-judge-oracle"
+version = "0.0.0"
+dependencies = [
+ "domhringr-record-tree",
+ "gandr-storage-values",
+ "iroh",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "domhringr-record-tree"
 version = "0.0.0"
 dependencies = [
@@ -713,6 +727,7 @@ dependencies = [
 name = "domhringr-surface-peer"
 version = "0.0.0"
 dependencies = [
+ "domhringr-judge-oracle",
  "domhringr-record-tree",
  "domhringr-seat-slot",
  "lexopt",
@@ -2972,6 +2987,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_json"
+version = "1.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+dependencies = [
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
+]
+
+[[package]]
 name = "serdect"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4366,3 +4394,9 @@ dependencies = [
  "quote",
  "syn 3.0.6",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"

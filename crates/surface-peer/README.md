@@ -1,6 +1,6 @@
 # domhringr-surface-peer
 
-The `domhringr-peer` binary manages and synchronizes a record-plane peer over a state directory, dispatches seats to tasks and serves as one, and checks a concepts tree against the checkouts that cite it and hold its pages.
+The `domhringr-peer` binary manages and synchronizes a record-plane peer over a state directory, dispatches seats to tasks and serves as one, judges a task's transcript into a verdict, and checks a concepts tree against the checkouts that cite it and hold its pages.
 
 - [Synopsis](#synopsis)
 - [References](#references)
@@ -11,21 +11,23 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 - [Output](#output)
 - [Networking](#networking)
 - [Tasks](#tasks)
+- [Judging](#judging)
 - [Drift](#drift)
 - [License](#license)
 
 ## Synopsis
 
-**What.** `domhringr-surface-peer` provides the `domhringr-peer` command-line binary. It opens sedimentrees, delegates write authority, writes notes, binds paths, claims DNS names for a tree, introduces other trees by label, presents the peer's endpoint in a tree and withdraws presences, resolves anchors and commits by key, by DNS name, or by label, reads views, books, and heads, synchronizes a tree with another peer reached through the tree's book or at an endpoint named by hand, dispatches a seat to a task and wakes it, reports, hands off and retires as a seat, replays a task, serves as a seat acting through a program, and reports where a concepts tree has drifted from a public checkout and a vault.
+**What.** `domhringr-surface-peer` provides the `domhringr-peer` command-line binary. It opens sedimentrees, delegates write authority, writes notes, binds paths, claims DNS names for a tree, introduces other trees by label, presents the peer's endpoint in a tree and withdraws presences, resolves anchors and commits by key, by DNS name, or by label, reads views, books, and heads, synchronizes a tree with another peer reached through the tree's book or at an endpoint named by hand, dispatches a seat to a task and wakes it, reports, hands off and retires as a seat, replays a task, serves as a seat acting through a program, asks a judge lettered questions about a transcript and commits its rulings as a verdict on the task, and reports where a concepts tree has drifted from a public checkout and a vault.
 
 **Why.** A peer needs a persistent identity and a command-line surface for operating its trees and inspecting their interpretation. Separate state directories let peers retain independent keys and stores while exchanging the same signed commits. Public text that cites private pages by anchor stays in step with them only if something checks each citation against its binding and each binding against its page.
 
-**How.** Commands use `domhringr-record-tree` for identity, storage, receipt construction, folding, routing, resolution, and synchronization. `whence` asks DNS for a DNS name's `_domhringr.<domain>` TXT records unless `--witness` names the candidate trees, reads a label in the `--in` tree, and syncs each tree it reads from the peer aimed at before resolving. `serve` accepts connections over iroh; `sync` dials one remote, at its presence in the tree's book or at an endpoint named by hand, exchanges one tree in a batch round, and disconnects. `drift` folds the concepts tree from the local store and reads both checkouts with the `git` binary: `git grep` for the tree's anchor over the public checkout's tracked files, and one `git cat-file --batch-check` for every bound page's blob at the vault's `HEAD` and at its bound commit.
+**How.** Commands use `domhringr-record-tree` for identity, storage, receipt construction, folding, routing, resolution, and synchronization. `whence` asks DNS for a DNS name's `_domhringr.<domain>` TXT records unless `--witness` names the candidate trees, reads a label in the `--in` tree, and syncs each tree it reads from the peer aimed at before resolving. `serve` accepts connections over iroh; `sync` dials one remote, at its presence in the tree's book or at an endpoint named by hand, exchanges one tree in a batch round, and disconnects. `judge` asks through `domhringr-judge-oracle`, of the endpoint the environment configures or from a table file. `drift` folds the concepts tree from the local store and reads both checkouts with the `git` binary: `git grep` for the tree's anchor over the public checkout's tracked files, and one `git cat-file --batch-check` for every bound page's blob at the vault's `HEAD` and at its bound commit.
 
 ## References
 
 - `domhringr-record-tree`, [crate documentation](../record-tree/README.md): the persistent peer, receipt fold, and synchronization operation.
 - `domhringr-seat-slot`, [crate documentation](../seat-slot/README.md): the wake and the serving seat.
+- `domhringr-judge-oracle`, [crate documentation](../judge-oracle/README.md): the question, the readout and the judge's backends.
 - `iroh`, [crate documentation](https://docs.rs/iroh): endpoint discovery and direct or relayed network paths.
 - `lexopt`, [crate documentation](https://docs.rs/lexopt): command-line options and operands.
 
@@ -33,13 +35,14 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 
 - Identity inspection and persistent state creation.
 - Tree opening under a freshly minted tree key, printing the tree's anchor.
-- `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, and `Retire` receipt submission; `present` commits the endpoint at the addresses it binds, and the seat verbs answer the task's current dispatch.
+- `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, `Retire`, and `Verdict` receipt submission; `present` commits the endpoint at the addresses it binds, the seat verbs answer the task's current dispatch, and a verdict rules on it.
 - Resolution of a tree, a path, or a commit in the key, DNS, and label forms, a commit by its whole id or a unique prefix of it, with DNS witnesses or witnesses supplied by hand; canonical views; and sorted tree heads.
 - Serving on an ephemeral or fixed UDP port, as a seat that holds its slots or acts through a program.
 - Dispatching a seat and waking it at its presence in the task's book or at an endpoint named by hand, and replaying a task through its seat.
 - A tree's book: each present peer, the endpoint it is reached at, and the commit that presented it.
 - Single-tree synchronization with the tree's owner or a named peer, at its presence in the book or at an endpoint named by hand, reporting where the endpoint came from and the selected path; `whence` reaches each tree it reads the same way, or resolves from the local store alone.
 - A drift check of a concepts tree against a public and a vault checkout: unbound citations, drifted, missing and orphaned bindings, and malformed data and citations, one line each in anchor order, with an exit status a gate can read.
+- A judge's question about a transcript, by file or by hash, answered by an OpenAI-compatible endpoint or a table file, and a verdict of such rulings on a task's current dispatch.
 
 ## Expected features
 
@@ -51,6 +54,7 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 - For a DNS-form anchor, DNS resolvers reaching the name's `_domhringr.<domain>` TXT records, unless `--witness` names its trees; and in the local store, the witnessed tree whose root claims the name.
 - For a label-form anchor, the tree that introduced the label, named by `--in` and held in the local store.
 - For `drift`, the `git` binary on `PATH`, both checkouts local, each a directory in a git working tree, and the concepts tree in the local store; a `sync` brings it there, since `drift` dials no one.
+- For `judge` without `--static`, an OpenAI-compatible endpoint reporting log-probabilities, configured as [`domhringr-judge-oracle`](../judge-oracle/README.md#configuration) reads it from the environment; for `judge verdict`, the task in the local store with a dispatch.
 
 ## Examples
 
@@ -106,9 +110,11 @@ domhringr-peer --state <dir> handoff <tree> <peer-id>              # the handoff
 domhringr-peer --state <dir> retire <tree>                         # the retirement's commit id
 domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]  # where the task was reached, then one line per step and its standing
 domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>  # one line per finding, nothing when consistent
+domhringr-peer --state <dir> judge ask --question <text> --option <text>... --transcript <hash> | --transcript-file <file> [--static <file>]  # the transcript's hash, then the ruling
+domhringr-peer --state <dir> judge verdict <tree> --rubric <hash> --transcript <hash> | --transcript-file <file> (--question <text> --option <text>...)... [--static <file>]  # the transcript's hash, one ruling per question, then the verdict's commit id
 ```
 
-Run the crate's tests, including two-process synchronization, reaching a peer through its presence, a seat dispatched, woken and reporting across restarts of both sides, and a drift check over throwaway git repositories:
+Run the crate's tests, including two-process synchronization, reaching a peer through its presence, a seat dispatched, woken and reporting across restarts of both sides, a judge ruling on a task from a table file, and a drift check over throwaway git repositories:
 
 ```sh
 mise exec -- cargo nextest run -p domhringr-surface-peer
@@ -175,9 +181,9 @@ Reversal: a resolution that needs no remote, as one served from a published snap
 
 An operator dispatches a seat with `dispatch <tree> <peer-id> <brief>`, the brief an anchor or a content hash. The command routes to the seat first, at `--at` or its presence in the task's book, so a seat no endpoint names gets no dispatch. It then commits the dispatch, prints its commit id, wakes the seat, and prints `source <tree> at <endpoint>` or `source <tree> book <commit-id>` and `woken`. A seat that declines fails the command as `the seat declined the wake: <reason>`, and a seat that cannot be reached fails it after the dispatch's id is printed: the dispatch stays committed, to be sent again. A woken operator holds the seat's presence, so the next dispatch, a `replay` or a `sync` reaches the seat through the book.
 
-`serve --surface <program>` serves as a seat. It prints `accepted` and `path` lines for each link, `woken <tree> <dispatch-id>` for a wake it answers, `declined <reason>` for one it declines, `reported <tree> <commit-id>` for a report it commits, and `unreported <tree> <dispatch-id>` for an act that committed none, with its cause on standard error. Without `--surface` the seat holds the slots it is dispatched to and never reports. `report <tree> <hash> <summary>`, `handoff <tree> <peer-id>` and `retire <tree>` commit their receipt on the task's current dispatch, and fail as `the task has no dispatch: nothing to report on, hand off or retire from` when there is none; the fold admits them from the slot's holder alone.
+`serve --surface <program>` serves as a seat. It prints `accepted` and `path` lines for each link, `woken <tree> <dispatch-id>` for a wake it answers, `declined <reason>` for one it declines, `reported <tree> <commit-id>` for a report it commits, and `unreported <tree> <dispatch-id>` for an act that committed none, with its cause on standard error. Without `--surface` the seat holds the slots it is dispatched to and never reports. `report <tree> <hash> <summary>`, `handoff <tree> <peer-id>` and `retire <tree>` commit their receipt on the task's current dispatch, and fail as `the task has no dispatch: nothing to report on, hand off, retire from or rule on` when there is none; the fold admits them from the slot's holder alone.
 
-`replay <tree>` reaches the current attempt's seat, the owner when nothing is dispatched, or the peer `--peer` names, syncs the task as `sync` does, and prints the source line and the task. The task is one line per admitted seat receipt in canonical order: `dispatch <commit-id> <peer-id> <brief>`, `report <commit-id> <dispatch-id> <peer-id> <hash> <summary>`, `handoff <commit-id> <dispatch-id> <from> <to>` and `retire <commit-id> <dispatch-id> <peer-id>`. Then one line says where the task stands: `undispatched`, `dispatched <dispatch-id> <holder>`, `reported <dispatch-id> <report-id>` or `stalled <dispatch-id> <retirement-id>`. `--local` prints the local store's task and dials no one.
+`replay <tree>` reaches the current attempt's seat, the owner when nothing is dispatched, or the peer `--peer` names, syncs the task as `sync` does, and prints the source line and the task. The task is one line per admitted seat receipt in canonical order: `dispatch <commit-id> <peer-id> <brief>`, `report <commit-id> <dispatch-id> <peer-id> <hash> <summary>`, `handoff <commit-id> <dispatch-id> <from> <to>` and `retire <commit-id> <dispatch-id> <peer-id>`; a verdict is `verdict <commit-id> <dispatch-id> <judge> <rubric> <transcript>` and one `ruling <commit-id> <question> <ruling>` line per question. Then one line says where the task stands: `undispatched`, `dispatched <dispatch-id> <holder>`, `reported <dispatch-id> <report-id>` or `stalled <dispatch-id> <retirement-id>`. `--local` prints the local store's task and dials no one.
 
 **A dispatch to the seat already holding the current attempt's slot, for the same brief, is sent again, not committed again.** The command prints the same commit id and wakes the seat once more. An operator whose wake failed, or that was killed while it dialed, repeats the command and reaches the same dispatch, and a seat that already reported answers `woken` without acting again.
 
@@ -187,6 +193,25 @@ An operator dispatches a seat with `dispatch <tree> <peer-id> <brief>`, the brie
 Reversal: a task that dispatches one seat to one brief twice on purpose, which needs the new commit asked for.
 
 **The seat acts through a program and reports its standard output.** The design and its alternatives are the seat's, in [`domhringr-seat-slot`](../seat-slot/README.md#the-command-surface); the binary adds only the `--surface` option and the event lines.
+
+## Judging
+
+`judge ask` asks one question about a transcript and prints `transcript <hash>` and `ruling <question-hash> <ruling>`. A question is a `--question <text>` and the `--option <text>`s after it, two to twenty-six, lettered `A`, `B`, … in the order given, and named by the hash [`domhringr-judge-oracle`](../judge-oracle/README.md#questions-and-transcripts) defines. The transcript is the content of `--transcript-file`, or the content `--transcript` names by its hash. `judge verdict <tree> --rubric <hash>` first names the task's current dispatch, then asks each question in the order given, prints the same lines, commits this peer's verdict on that dispatch, and prints the verdict's commit id. A ruling reads `read <letter> A=<p> B=<p> … outside=<p>`, the answer letter, each option's probability and the mass outside the options, or `unread <reason>`: `no letter`, `outside`, `tied`, `endpoint` or `malformed`.
+
+Without `--static` the judge asks the endpoint the environment configures ([configuration](../judge-oracle/README.md#configuration)). With `--static <file>` it answers from a table instead, one `<question-hash> <transcript-hash> <ruling>` line per ruling, a later line for the same pair winning; a question the table does not hold is unread as `malformed`. A transcript named by `--transcript` alone holds no text, so only a table can answer it; an endpoint is asked the text, and a transcript it cannot read is unread as `malformed`.
+
+**A refused question is a ruling, and the command succeeds.** An unread ruling is printed and committed as a read one is, with its cause on standard error. The command fails, committing nothing, only when it cannot ask at all: no endpoint configured, a table file that cannot be read, a transcript file that cannot be read, or a task with no dispatch.
+
+- failing the command on any refusal: a verdict with one unread question would not be committed, the rulings that were read would be lost, and a refusal would read as an error rather than an outcome.
+
+Reversal: a gate that must tell an unread ruling from the exit status. It reads the `unread` lines today.
+
+**The questions are given on the command line, and the rubric by its hash.** The verdict records the rubric's hash and each question's; the binary reads no rubric document.
+
+- a rubric file read by the binary: a document format fixed before the crates that own rubrics define it.
+- questions named by their hashes alone: a model is asked a question's text.
+
+Reversal: a rubric loader, when `--rubric` names a document the binary reads its questions from.
 
 ## Drift
 

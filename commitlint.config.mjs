@@ -40,6 +40,7 @@ const SCOPES = [
   "seat",
   "surface",
   "oracle",
+  "judge",
   "pipeline",
   "record",
   "tool",

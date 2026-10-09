@@ -1,0 +1,27 @@
+[package]
+name = "domhringr-judge-oracle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The domhringr judge: asks a model one lettered question about a transcript and reads the answer letter and a probability per option from its next-token distribution"
+readme = "README.md"
+repository.workspace = true
+license.workspace = true
+keywords = ["domhringr", "judge", "llm", "logprobs", "oracle"]
+categories = ["text-processing"]
+publish.workspace = true
+
+[dependencies]
+domhringr-record-tree = { workspace = true }
+gandr-storage-values = { workspace = true }
+iroh = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

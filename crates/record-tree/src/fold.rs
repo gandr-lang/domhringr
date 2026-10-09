@@ -271,8 +271,8 @@ impl View
         &self.book
     }
 
-    /// The tree read as a task: its admitted dispatches, reports, handoffs
-    /// and retirements in canonical order, and the current attempt.
+    /// The tree read as a task: its admitted dispatches, reports, handoffs,
+    /// retirements and verdicts in canonical order, and the current attempt.
     ///
     /// # Specification
     /// - ensures: the current attempt is the admitted dispatch last in
@@ -281,18 +281,20 @@ impl View
     ///   handoff of it last in canonical order, or retired by the admitted
     ///   retirement of it when that comes later; its answer is the admitted
     ///   report on it last in canonical order, or awaited. A report, handoff or
-    ///   retirement of an earlier dispatch is a step and moves no attempt.
+    ///   retirement of an earlier dispatch is a step and moves no attempt, and
+    ///   a verdict is a step and moves none.
     /// - panics: none.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a dispatch reported on by its seat, a slot handed off
-    ///   and reported on by its recipient, a slot retired from, and a report on
-    ///   a dispatch a later one superseded are each read back by a case of
-    ///   their own.
+    ///   and reported on by its recipient, a slot retired from, a report on a
+    ///   dispatch a later one superseded, and verdicts on a held and a retired
+    ///   slot are each read back by a case of their own.
     /// - witness: `fold::tests::the_dispatched_seat_reports_on_its_dispatch`
     /// - witness: `fold::tests::a_handoff_moves_the_slot_to_its_recipient`
     /// - witness: `fold::tests::a_retired_slot_without_a_report_is_stalled`
     /// - witness: `fold::tests::a_report_on_a_superseded_dispatch_is_refused`
+    /// - witness: `fold::tests::a_judge_rules_on_the_current_dispatch`
     #[inline]
     #[must_use]
     pub const fn task(&self) -> &Task
@@ -414,14 +416,17 @@ pub enum Refusal
     /// A withdrawal of another member's presence by anyone but the owner: a
     /// member withdraws its own presence alone.
     ForeignPresence,
-    /// A report, a handoff or a retirement whose dispatch is not the admitted
-    /// dispatch last in canonical order among the receipt's ancestors: a
-    /// later dispatch superseded it, or it names none.
+    /// A report, a handoff, a retirement or a verdict whose dispatch is not
+    /// the admitted dispatch last in canonical order among the receipt's
+    /// ancestors: a later dispatch superseded it, or it names none.
     NotCurrent,
     /// A report, a handoff or a retirement whose author does not hold the
     /// dispatch's slot among the receipt's ancestors: the seat dispatched, or
     /// the recipient of the slot's last handoff, holds it until it retires.
     NotHolder,
+    /// A verdict whose author is not the judge it names: a judge's verdict is
+    /// signed by its own key.
+    NotJudge,
 }
 
 impl fmt::Display for Refusal
@@ -448,6 +453,7 @@ impl fmt::Display for Refusal
             | Self::ForeignPresence => "foreign presence",
             | Self::NotCurrent => "not current",
             | Self::NotHolder => "not holder",
+            | Self::NotJudge => "not judge",
         })
     }
 }
@@ -568,6 +574,30 @@ impl Course
         }
     }
 
+    /// Whether a verdict may rule on `dispatch` here.
+    ///
+    /// # Specification
+    /// - ensures: `Ok` iff `dispatch` is this course's dispatch, whoever holds
+    ///   its slot and whether or not it was retired from;
+    ///   [`Refusal::NotCurrent`] when the course is of another dispatch or of
+    ///   none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`Refusal::NotCurrent`]: as listed above.
+    fn current(
+        self,
+        dispatch: CommitId,
+    ) -> Result<(), Refusal>
+    {
+        match self {
+            | Self::Dispatched {
+                dispatch: current, ..
+            } if current == dispatch => Ok(()),
+            | Self::Dispatched { .. } | Self::Undispatched => Err(Refusal::NotCurrent),
+        }
+    }
+
     /// This course with its slot moved to `holder` by the commit placed at
     /// `moved`.
     ///
@@ -657,7 +687,9 @@ struct Carry
 ///   last in canonical order among its ancestors and whose author holds that
 ///   dispatch's slot there: the seat dispatched, or the recipient of the slot's
 ///   admitted handoff last in canonical order there, unless an admitted
-///   retirement from the slot comes later.
+///   retirement from the slot comes later; or it is a verdict whose author is
+///   the judge it names and whose dispatch is the admitted dispatch last in
+///   canonical order among its ancestors, whoever holds the slot.
 /// - ensures: a refused commit is listed with the first refusal that holds,
 ///   checked in this order: [`Refusal::Undecodable`], [`Refusal::WrongTree`],
 ///   [`Refusal::Duplicate`] (an admitted commit earlier in canonical order
@@ -668,10 +700,12 @@ struct Carry
 ///   nor granted and for a presence or a withdrawal by an author neither that
 ///   nor a seat, then [`Refusal::ForeignEndpoint`] for a presence whose proof
 ///   fails and [`Refusal::ForeignPresence`] for a member's or a seat's
-///   withdrawal of another's presence, and for a report, a handoff or a
-///   retirement [`Refusal::NotCurrent`] when its dispatch is not the latest
-///   among its ancestors and [`Refusal::NotHolder`] when its author does not
-///   hold the slot there.
+///   withdrawal of another's presence, for a report, a handoff or a retirement
+///   [`Refusal::NotCurrent`] when its dispatch is not the latest among its
+///   ancestors and [`Refusal::NotHolder`] when its author does not hold the
+///   slot there, and for a verdict [`Refusal::NotJudge`] when its author is not
+///   the judge it names, then [`Refusal::NotCurrent`] when its dispatch is not
+///   the latest among its ancestors.
 /// - ensures: each path's binding is the admitted bind of that path last in
 ///   canonical order, each label's introduction the admitted introduction of
 ///   that label last in canonical order, the claims the domains of every
@@ -704,8 +738,10 @@ struct Carry
 ///   dispatch refused to a non-member, a seat's presence, its report, a report
 ///   by a peer not holding the slot, a handoff and its recipient's report, a
 ///   retirement, a report on a superseded and on an unknown dispatch, a report
-///   concurrent with a later dispatch, an unopened tree and a parent cycle are
-///   each pinned by a case of their own.
+///   concurrent with a later dispatch, a judge's verdict on a held and on a
+///   retired slot, a verdict signed by another key than its judge's, a verdict
+///   on a superseded and on an unknown dispatch, an unopened tree and a parent
+///   cycle are each pinned by a case of their own.
 /// - witness: `fold::tests::a_view_is_the_same_whatever_order_commits_arrive_in`
 /// - witness: `fold::tests::a_note_by_a_non_member_is_refused`
 /// - witness: `fold::tests::a_note_by_a_peer_granted_in_its_causal_past_is_admitted`
@@ -729,6 +765,8 @@ struct Carry
 /// - witness: `fold::tests::a_handoff_moves_the_slot_to_its_recipient`
 /// - witness: `fold::tests::a_retired_slot_without_a_report_is_stalled`
 /// - witness: `fold::tests::a_report_on_a_superseded_dispatch_is_refused`
+/// - witness: `fold::tests::a_judge_rules_on_the_current_dispatch`
+/// - witness: `fold::tests::a_verdict_on_a_superseded_dispatch_is_refused`
 ///
 /// [`OpenProof::verify`]: crate::receipt::OpenProof::verify
 /// [`EndpointProof::verify`]: crate::receipt::EndpointProof::verify
@@ -786,7 +824,8 @@ pub fn fold(
                 | Kind::Dispatch { .. }
                 | Kind::Report { .. }
                 | Kind::Handoff { .. }
-                | Kind::Retire { .. } => None,
+                | Kind::Retire { .. }
+                | Kind::Verdict { .. } => None,
             },
             | Ok(_) | Err(_) => None,
         };
@@ -965,6 +1004,28 @@ pub fn fold(
                                 | Err(refusal) => Some(refusal),
                             }
                         },
+                        | Kind::Verdict { judge, .. } if node.author != judge => {
+                            Some(Refusal::NotJudge)
+                        },
+                        | Kind::Verdict {
+                            dispatch,
+                            judge,
+                            rubric,
+                            transcript,
+                            answers,
+                        } => match past.course.current(dispatch) {
+                            | Ok(()) => {
+                                view.task.answer(node.commit, Step::Verdict {
+                                    dispatch,
+                                    judge,
+                                    rubric,
+                                    transcript,
+                                    answers,
+                                });
+                                None
+                            },
+                            | Err(refusal) => Some(refusal),
+                        },
                         | Kind::Grant { .. }
                         | Kind::Note { .. }
                         | Kind::Bind { .. }
@@ -1127,6 +1188,10 @@ mod tests
     use crate::receipt::Kind;
     use crate::receipt::Operation;
     use crate::receipt::Receipt;
+    use crate::ruling::Probability;
+    use crate::ruling::Readout;
+    use crate::ruling::Ruling;
+    use crate::ruling::Unread;
     use crate::task::Answer;
     use crate::task::Attempt;
     use crate::task::Brief;
@@ -1307,6 +1372,39 @@ mod tests
     {
         let summary = text.parse().unwrap();
         Receipt::report(tree(), dispatch, content(text), summary).unwrap()
+    }
+
+    /// The answers the tests' verdicts carry: a question read as `B`, and one
+    /// left unread for want of a letter.
+    ///
+    /// # Specification
+    /// trivial.
+    fn answers() -> Vec<(ContentHash, Ruling)>
+    {
+        let probability = |value: f64| Probability::try_from(value).unwrap();
+        let readout = Readout::new(
+            vec![probability(0.25_f64), probability(0.75_f64)],
+            probability(0.0_f64),
+        )
+        .unwrap();
+        vec![
+            (content("read".into()), Ruling::Read(readout)),
+            (content("unread".into()), Ruling::Unread(Unread::NoLetter)),
+        ]
+    }
+
+    /// A fresh verdict on `dispatch` naming `judge`, carrying [`answers`].
+    ///
+    /// # Specification
+    /// trivial.
+    fn verdict(
+        dispatch: CommitId,
+        judge: PeerKey,
+    ) -> Receipt
+    {
+        let rubric = content("rubric".into());
+        let transcript = content("transcript".into());
+        Receipt::verdict(tree(), dispatch, judge, rubric, transcript, answers()).unwrap()
     }
 
     /// The current attempt of `view`'s task.
@@ -2370,11 +2468,131 @@ mod tests
     }
 
     #[test]
+    fn a_judge_rules_on_the_current_dispatch()
+    {
+        let (a, s) = (owner(), other());
+        let (j, stranger) = (
+            MemorySigner::from_bytes(&[5; 32]),
+            MemorySigner::from_bytes(&[7; 32]),
+        );
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let dispatched = commit(&a, tree(), &[&opened], &dispatch(key(&s))).await;
+            let d = id(&dispatched);
+            let judged = commit(&j, tree(), &[&dispatched], &verdict(d, key(&j))).await;
+            let forged = commit(&stranger, tree(), &[&dispatched], &verdict(d, key(&j))).await;
+            let by_owner = commit(&a, tree(), &[&dispatched], &verdict(d, key(&j))).await;
+            let retirement = Receipt::retire(tree(), d).unwrap();
+            let retired = commit(&s, tree(), &[&judged], &retirement).await;
+            let own = verdict(d, key(&stranger));
+            let after = commit(&stranger, tree(), &[&retired], &own).await;
+            let view = fold(tree(), vec![
+                opened,
+                dispatched,
+                judged.clone(),
+                forged.clone(),
+                by_owner.clone(),
+                retired.clone(),
+                after.clone(),
+            ])
+            .unwrap();
+            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            assert_eq!(
+                refused,
+                BTreeMap::from([
+                    (id(&forged), Refusal::NotJudge),
+                    (id(&by_owner), Refusal::NotJudge),
+                ]),
+                "a verdict signed by any key but its judge's, the owner's among them, is refused"
+            );
+            let ruled = |judge: PeerKey| Step::Verdict {
+                dispatch: d,
+                judge,
+                rubric: content("rubric".into()),
+                transcript: content("transcript".into()),
+                answers: answers(),
+            };
+            assert_eq!(
+                view.task()
+                    .steps()
+                    .iter()
+                    .filter(|entry| matches!(entry.1, Step::Verdict { .. }))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                [
+                    (id(&judged), ruled(key(&j))),
+                    (id(&after), ruled(key(&stranger)))
+                ],
+                "a judge's verdict on the held slot and a stranger's own on the retired one \
+                 are the task's steps"
+            );
+            let attempt = attempt(&view);
+            assert_eq!(
+                (attempt.slot(), attempt.answer()),
+                (
+                    Slot::Retired {
+                        by: key(&s),
+                        at: id(&retired),
+                    },
+                    Answer::Awaited
+                ),
+                "a verdict moves no slot and answers no attempt"
+            );
+        });
+    }
+
+    #[test]
+    fn a_verdict_on_a_superseded_dispatch_is_refused()
+    {
+        let (a, s, j) = (owner(), other(), MemorySigner::from_bytes(&[5; 32]));
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let early = commit(
+                &j,
+                tree(),
+                &[&opened],
+                &verdict(CommitId::new([9; 32]), key(&j)),
+            )
+            .await;
+            let first = commit(&a, tree(), &[&opened], &dispatch(key(&s))).await;
+            let second = commit(&a, tree(), &[&first], &dispatch(key(&s))).await;
+            let stale = commit(&j, tree(), &[&second], &verdict(id(&first), key(&j))).await;
+            let forged = commit(&s, tree(), &[&second], &verdict(id(&first), key(&j))).await;
+            let concurrent = commit(&j, tree(), &[&first], &verdict(id(&first), key(&j))).await;
+            let view = fold(tree(), vec![
+                opened,
+                early.clone(),
+                first.clone(),
+                second,
+                stale.clone(),
+                forged.clone(),
+                concurrent.clone(),
+            ])
+            .unwrap();
+            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            assert_eq!(
+                refused,
+                BTreeMap::from([
+                    (id(&early), Refusal::NotCurrent),
+                    (id(&stale), Refusal::NotCurrent),
+                    (id(&forged), Refusal::NotJudge),
+                ]),
+                "a verdict naming a dispatch never made or superseded in its past is not \
+                 current, and one its judge did not sign is refused for that first"
+            );
+            assert!(
+                view.admitted.contains(&id(&concurrent)),
+                "a verdict concurrent with the later dispatch is admitted"
+            );
+        });
+    }
+
+    #[test]
     fn a_task_prints_one_line_per_step_and_its_standing()
     {
         let (s, t) = (key(&other()), key(&MemorySigner::from_bytes(&[5; 32])));
-        let [first, handed, reported, retired, second, abandoned] =
-            [1, 2, 3, 4, 5, 6].map(|byte| CommitId::new([byte; 32]));
+        let [first, handed, reported, retired, judged, second, abandoned] =
+            [1, 2, 3, 4, 5, 6, 7].map(|byte| CommitId::new([byte; 32]));
         let hash = content("brief".into());
         let anchored = Brief::Anchor(Anchor::Path {
             authority: Authority::Key(tree()),
@@ -2407,9 +2625,27 @@ mod tests
             dispatch: first,
             author: t,
         });
+        let probability = |value: f64| Probability::try_from(value).unwrap();
+        let readout = Readout::new(
+            vec![probability(0.25_f64), probability(0.75_f64)],
+            probability(0.0_f64),
+        )
+        .unwrap();
+        task.answer(judged, Step::Verdict {
+            dispatch: first,
+            judge: s,
+            rubric: hash,
+            transcript: hash,
+            answers: vec![
+                (hash, Ruling::Read(readout)),
+                (hash, Ruling::Unread(Unread::Tied)),
+            ],
+        });
         let answered = format!(
             "{dispatch_line}handoff {handed} {first} {s} {t}\nreport {reported} {first} {t} \
-             {hash} done \\\\ ok\nretire {retired} {first} {t}\n"
+             {hash} done \\\\ ok\nretire {retired} {first} {t}\nverdict {judged} {first} {s} \
+             {hash} {hash}\nruling {judged} {hash} read B A=0.25 B=0.75 outside=0\nruling \
+             {judged} {hash} unread tied\n"
         );
         assert_eq!(
             task.to_string(),

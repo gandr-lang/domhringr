@@ -25,6 +25,9 @@
 //!                        · bytes summary (UTF-8) · close                  Report
 //!            | open 0x0b · bytes dispatch (32) · bytes peer (32) · close  Handoff
 //!            | open 0x0c · bytes dispatch (32) · close                    Retire
+//!            | open 0x0d · bytes dispatch (32) · bytes judge (32) · bytes rubric (32)
+//!                        · bytes transcript (32) · word count · answer{count}
+//!                        · close                                          Verdict
 //! target    := open 0x01 · anchor · close                                 Anchor
 //!            | open 0x02 · bytes endpoint (32) · close                    Endpoint
 //!            | open 0x03 · bytes datum (UTF-8) · close                    Datum
@@ -39,14 +42,24 @@
 //! endpoint  := open 0x01 · bytes id (32) · word count · address{count} · close
 //! address   := open 0x01 · bytes ip (4 or 16) · word port · close         Direct
 //!            | open 0x02 · bytes url (UTF-8) · close                      Relay
+//! answer    := bytes question (32) · ruling
+//! ruling    := open 0x01 · word count · word probability{count}
+//!                        · word outside · close                           Read
+//!            | open 0x02 · reason · close                                 Unread
+//! reason    := open 0x01 · close                                          NoLetter
+//!            | open 0x02 · close                                          Outside
+//!            | open 0x03 · close                                          Tied
+//!            | open 0x04 · close                                          Endpoint
+//!            | open 0x05 · close                                          Malformed
 //! ```
 //!
 //! A tree, in the receipt's header, as an authority or as the tree
 //! introduced, and an endpoint are ed25519 verifying keys; a grantee, a
-//! withdrawn peer, a seat and a handoff's recipient are 32-byte peer ids; a
-//! commit, an anchor's or the dispatch a report, a handoff or a retirement
-//! names, is its whole 32-byte id, never a prefix; a content is its 32-byte
-//! BLAKE3 hash; a path is its segments joined by `/`, none empty or beginning
+//! withdrawn peer, a seat, a handoff's recipient and a judge are 32-byte peer
+//! ids; a commit, an anchor's or the dispatch a report, a handoff, a
+//! retirement or a verdict names, is its whole 32-byte id, never a prefix; a
+//! content, a rubric, a transcript and a question are their 32-byte BLAKE3
+//! hashes; a path is its segments joined by `/`, none empty or beginning
 //! with `.`; a domain is a DNS name as [`Domain`] admits it, a label one as
 //! [`Label`] admits it, and a summary one as [`Summary`] admits it. An anchor
 //! is written as its typed parts, so each part takes the record and the
@@ -55,23 +68,31 @@
 //! IPv6, by address and then port, an IPv6 address without flow label or
 //! scope id; then relays by the URL's text, each an `http` or `https` URL
 //! written as it parses back and holding no `@`. A presence carries no time:
-//! its commit is when it holds since.
+//! its commit is when it holds since. A verdict lists its answers in the
+//! order the questions were asked; a probability is the IEEE 754 binary64
+//! encoding of a number from zero to one, never negative zero, and a read
+//! ruling lists one per option in letter order, as [`Readout::new`] admits
+//! them, then the mass outside the option letters. A readout's answer letter
+//! is not written: it is the option holding the most.
 //!
 //! The decoder admits exactly what the encoder writes, so a receipt has one
 //! blob. A constructor whose tag or payload it does not admit — another
-//! receipt tag or version, an unknown kind, target, brief, anchor, authority
-//! or address, an id or hash of the wrong length (an abbreviated commit id
-//! among them), a tree or endpoint that is not a verifying key, text that is
-//! not UTF-8, a path with an empty or reserved segment, a malformed domain,
-//! label or summary, an IP address of another length, a port beyond 65535, a
-//! relay that is no canonical `http` or `https` URL or holds `@`, addresses
-//! out of order or repeated — is refused as that constructor
+//! receipt tag or version, an unknown kind, target, brief, anchor, authority,
+//! address, ruling or reason, an id or hash of the wrong length (an
+//! abbreviated commit id among them), a tree or endpoint that is not a
+//! verifying key, text that is not UTF-8, a path with an empty or reserved
+//! segment, a malformed domain, label or summary, an IP address of another
+//! length, a port beyond 65535, a relay that is no canonical `http` or
+//! `https` URL or holds `@`, addresses out of order or repeated, a
+//! probability that is no probability or is negative zero, a read ruling
+//! [`Readout::new`] refuses — is refused as that constructor
 //! ([`ValueError::UnexpectedConstructor`] at its open record): the value
 //! plane's refusals name token shapes, and this is the one that names the
 //! constructor a codec turns away.
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::net::IpAddr;
 use core::net::Ipv4Addr;
 use core::net::Ipv6Addr;
@@ -106,6 +127,10 @@ use crate::id::TreeId;
 use crate::identity::TreeKey;
 use crate::name::Domain;
 use crate::name::Label;
+use crate::ruling::Probability;
+use crate::ruling::Readout;
+use crate::ruling::Ruling;
+use crate::ruling::Unread;
 use crate::task::Brief;
 use crate::task::Summary;
 
@@ -151,6 +176,9 @@ const HANDOFF: u8 = 0x0b;
 /// The constructor tag of [`Kind::Retire`].
 const RETIRE: u8 = 0x0c;
 
+/// The constructor tag of [`Kind::Verdict`].
+const VERDICT: u8 = 0x0d;
+
 /// The constructor tag of [`Target::Anchor`].
 const ANCHOR: u8 = 0x01;
 
@@ -192,6 +220,27 @@ const DIRECT: u8 = 0x01;
 
 /// The constructor tag of a relay [`Address`].
 const RELAY: u8 = 0x02;
+
+/// The constructor tag of [`Ruling::Read`].
+const READ: u8 = 0x01;
+
+/// The constructor tag of [`Ruling::Unread`].
+const UNREAD: u8 = 0x02;
+
+/// The constructor tag of [`Unread::NoLetter`].
+const NO_LETTER: u8 = 0x01;
+
+/// The constructor tag of [`Unread::Outside`].
+const OUTSIDE: u8 = 0x02;
+
+/// The constructor tag of [`Unread::Tied`].
+const TIED: u8 = 0x03;
+
+/// The constructor tag of [`Unread::Endpoint`].
+const FAILED: u8 = 0x04;
+
+/// The constructor tag of [`Unread::Malformed`].
+const MALFORMED: u8 = 0x05;
 
 /// The domain an Open proof is signed under: the first of the two 32-byte
 /// blocks of the message it signs, the owner's peer key the second.
@@ -443,6 +492,21 @@ pub enum Kind
     {
         /// The dispatch whose slot is retired from.
         dispatch: CommitId,
+    },
+    /// The author, the judge it names, rules on `dispatch`: each question
+    /// asked about `transcript` under `rubric`, with the judge's ruling.
+    Verdict
+    {
+        /// The dispatch ruled on.
+        dispatch: CommitId,
+        /// The judge: the peer whose key signs the verdict.
+        judge: PeerKey,
+        /// The hash of the rubric the questions come from.
+        rubric: ContentHash,
+        /// The hash of the transcript the questions are asked about.
+        transcript: ContentHash,
+        /// Each question's hash and its ruling, in the order asked.
+        answers: Vec<(ContentHash, Ruling)>,
     },
 }
 
@@ -729,6 +793,39 @@ impl Receipt
         Ok(Self::new(tree, operation, Kind::Retire { dispatch }))
     }
 
+    /// A fresh [`Kind::Verdict`] in `tree` on `dispatch` by `judge`: each
+    /// question in `answers` asked about `transcript` under `rubric`, with its
+    /// ruling.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the verdict, and carries a
+    ///   fresh fence ([`Operation::random`]); the fold admits it only from
+    ///   `judge`, and only while `dispatch` is current in its causal past.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn verdict(
+        tree: TreeId,
+        dispatch: CommitId,
+        judge: PeerKey,
+        rubric: ContentHash,
+        transcript: ContentHash,
+        answers: Vec<(ContentHash, Ruling)>,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Verdict {
+            dispatch,
+            judge,
+            rubric,
+            transcript,
+            answers,
+        }))
+    }
+
     /// A fresh [`Kind::Withdraw`] in `tree` of the presence of `of`.
     ///
     /// # Specification
@@ -874,13 +971,15 @@ impl CanonicalValue for Receipt
     /// # Adequacy
     /// - hypothesis: L3 — the flat forms of a note, a bind, a claim, an
     ///   introduction, a presence, a withdrawal, a dispatch by anchor and by
-    ///   content, a report, a handoff and a retirement are compared byte for
-    ///   byte with records written independently, and every kind round-trips.
+    ///   content, a report, a handoff, a retirement and a verdict are compared
+    ///   byte for byte with records written independently, and every kind
+    ///   round-trips.
     /// - witness: `receipt::tests::a_note_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_bind_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_claim_and_an_introduction_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::a_presence_and_a_withdrawal_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::the_seat_receipts_encode_to_their_fixed_layouts`
+    /// - witness: `receipt::tests::a_verdict_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::every_kind_round_trips`
     #[inline]
     fn emit_tokens<Sink>(
@@ -964,6 +1063,29 @@ impl CanonicalValue for Receipt
                 sink.open(ConstructorTag::from(RETIRE))?;
                 sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
             },
+            | Kind::Verdict {
+                dispatch,
+                judge,
+                rubric,
+                transcript,
+                ref answers,
+            } => {
+                sink.open(ConstructorTag::from(VERDICT))?;
+                sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(judge.peer_id().as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(rubric.digest().as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(transcript.digest().as_bytes().as_slice()))?;
+                let count = u64::try_from(answers.len()).map_err(|_too_many| {
+                    ValueError::ArithmeticOverflow {
+                        quantity: ValueQuantity::TokenCount,
+                    }
+                })?;
+                sink.word(CanonicalWord::from(count))?;
+                for &(question, ref ruling) in answers {
+                    sink.bytes(TokenBytes::from(question.digest().as_bytes().as_slice()))?;
+                    ruling.emit_tokens(sink)?;
+                }
+            },
         }
         sink.close()?;
         sink.close()
@@ -983,12 +1105,14 @@ impl CanonicalValue for Receipt
     ///   [`Domain`] admits, an introduced tree of the wrong length or that is
     ///   not a verifying key, a label that is not UTF-8 or not one [`Label`]
     ///   admits, a presence's proof or a withdrawn peer of the wrong length, a
-    ///   seat, a dispatch, a content hash or a handoff's recipient of the wrong
-    ///   length, a summary that is not UTF-8 or not one [`Summary`] admits; as
-    ///   [`Target`]'s decoder refuses for a bind's target, [`Endpoint`]'s for a
-    ///   presented endpoint and [`Brief`]'s for a dispatch's brief; and the
-    ///   reader's own refusals for a record of the wrong kind, a truncated
-    ///   stream or an exhausted budget.
+    ///   seat, a dispatch, a content hash, a handoff's recipient, a judge, a
+    ///   rubric, a transcript or a question of the wrong length, a summary that
+    ///   is not UTF-8 or not one [`Summary`] admits; as [`Target`]'s decoder
+    ///   refuses for a bind's target, [`Endpoint`]'s for a presented endpoint,
+    ///   [`Brief`]'s for a dispatch's brief and [`Ruling`]'s for a verdict's
+    ///   ruling; and the reader's own refusals for a record of the wrong kind,
+    ///   fewer answers than a verdict's count or more, a truncated stream or an
+    ///   exhausted budget.
     /// - panics: none.
     ///
     /// # Errors
@@ -1089,6 +1213,26 @@ impl CanonicalValue for Receipt
             | RETIRE => {
                 let dispatch = opened.commit(reader)?;
                 Kind::Retire { dispatch }
+            },
+            | VERDICT => {
+                let dispatch = opened.commit(reader)?;
+                let judge = opened.peer(reader)?;
+                let rubric = opened.content(reader)?;
+                let transcript = opened.content(reader)?;
+                let count = u64::from(reader.read_word()?);
+                let mut answers = Vec::new();
+                for _place in 0 .. count {
+                    let question = opened.content(reader)?;
+                    let ruling = Ruling::decode_tokens(reader)?;
+                    answers.push((question, ruling));
+                }
+                Kind::Verdict {
+                    dispatch,
+                    judge,
+                    rubric,
+                    transcript,
+                    answers,
+                }
             },
             | _unknown => return Err(opened.refused()),
         };
@@ -1659,6 +1803,126 @@ impl CanonicalValue for Address
     }
 }
 
+impl CanonicalValue for Ruling
+{
+    /// Walk the ruling into `sink` in the module grammar's order.
+    ///
+    /// # Specification
+    /// - ensures: on success `sink` received exactly one balanced value: a read
+    ///   ruling's constructor holding the count of its options, each option's
+    ///   probability in letter order and the outside mass, as words carrying
+    ///   their binary64 encodings; or an unread ruling's holding its reason's
+    ///   empty constructor.
+    /// - fails: propagates the sink's refusal unchanged.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: the sink refused a record.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a verdict holding a read and an unread ruling is
+    ///   compared byte for byte with records written independently, and every
+    ///   reason round-trips.
+    /// - witness: `receipt::tests::a_verdict_encodes_to_its_fixed_layout`
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    #[inline]
+    fn emit_tokens<Sink>(
+        &self,
+        sink: &mut Sink,
+    ) -> Result<(), ValueError>
+    where
+        Sink: TokenSink + ?Sized,
+    {
+        match *self {
+            | Self::Read(ref readout) => {
+                sink.open(ConstructorTag::from(READ))?;
+                let count =
+                    u64::try_from(readout.probabilities().count()).map_err(|_too_many| {
+                        ValueError::ArithmeticOverflow {
+                            quantity: ValueQuantity::TokenCount,
+                        }
+                    })?;
+                sink.word(CanonicalWord::from(count))?;
+                for (_letter, probability) in readout.probabilities() {
+                    sink.word(CanonicalWord::from(f64::from(probability).to_bits()))?;
+                }
+                sink.word(CanonicalWord::from(f64::from(readout.outside()).to_bits()))?;
+            },
+            | Self::Unread(reason) => {
+                sink.open(ConstructorTag::from(UNREAD))?;
+                sink.open(ConstructorTag::from(match reason {
+                    | Unread::NoLetter => NO_LETTER,
+                    | Unread::Outside => OUTSIDE,
+                    | Unread::Tied => TIED,
+                    | Unread::Endpoint => FAILED,
+                    | Unread::Malformed => MALFORMED,
+                }))?;
+                sink.close()?;
+            },
+        }
+        sink.close()
+    }
+
+    /// Read one ruling from `reader`.
+    ///
+    /// # Specification
+    /// - ensures: on success the ruling whose emission the records are, and the
+    ///   reader stands after the ruling's close.
+    /// - fails: [`ValueError::UnexpectedConstructor`] at the ruling's open
+    ///   record for an unknown ruling, a word that encodes no probability or
+    ///   encodes negative zero, or probabilities [`Readout::new`] refuses —
+    ///   fewer than two, more than twenty-six, not summing to one, or tied; at
+    ///   the reason's open record for an unknown reason; and the reader's own
+    ///   refusals for fewer probabilities than the count, more, or any other
+    ///   record.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — witnessed through the receipt decoder: read and
+    ///   unread rulings round-trip, and an unknown ruling and reason, a NaN, a
+    ///   negative zero, a sum off one, a tie, a single option and a count above
+    ///   the probabilities given each meet their own refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    #[inline]
+    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    {
+        let opened = Opened::read(reader)?;
+        let ruling = match u8::from(opened.tag) {
+            | READ => {
+                let count = u64::from(reader.read_word()?);
+                let mut probabilities = Vec::new();
+                for _place in 0 .. count {
+                    probabilities.push(opened.probability(reader)?);
+                }
+                let outside = opened.probability(reader)?;
+                let readout =
+                    Readout::new(probabilities, outside).map_err(|_no_readout| opened.refused())?;
+                Self::Read(readout)
+            },
+            | UNREAD => {
+                let reason = Opened::read(reader)?;
+                let unread = match u8::from(reason.tag) {
+                    | NO_LETTER => Unread::NoLetter,
+                    | OUTSIDE => Unread::Outside,
+                    | TIED => Unread::Tied,
+                    | FAILED => Unread::Endpoint,
+                    | MALFORMED => Unread::Malformed,
+                    | _unknown => return Err(reason.refused()),
+                };
+                reader.read_close()?;
+                Self::Unread(unread)
+            },
+            | _unknown => return Err(opened.refused()),
+        };
+        reader.read_close()?;
+        Ok(ruling)
+    }
+}
+
 /// A constructor's open record, as the receipt decoder read it.
 #[derive(Clone, Copy, Debug)]
 struct Opened
@@ -1865,6 +2129,33 @@ impl Opened
             .map_err(|_not_a_summary| self.refused())
     }
 
+    /// Read the next record as a probability's word in this constructor.
+    ///
+    /// # Specification
+    /// - ensures: on success the probability whose binary64 encoding the word
+    ///   is.
+    /// - fails: this constructor's refusal ([`Opened::refused`]) for a word
+    ///   that encodes no probability — a NaN, an infinity, a negative number or
+    ///   one above one — or encodes negative zero, which a probability writes
+    ///   as zero; and the reader's refusals for any other record or none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    fn probability(
+        self,
+        reader: &mut TokenReader<'_>,
+    ) -> Result<Probability, ValueError>
+    {
+        let bits = u64::from(reader.read_word()?);
+        let probability = Probability::try_from(f64::from_bits(bits))
+            .map_err(|_not_a_probability| self.refused())?;
+        if f64::from(probability).to_bits() != bits {
+            return Err(self.refused());
+        }
+        Ok(probability)
+    }
+
     /// The refusal of this constructor: its tag or its payload is not one the
     /// receipt grammar admits.
     ///
@@ -1913,6 +2204,10 @@ mod tests
     use crate::id::EndpointKey;
     use crate::id::PeerKey;
     use crate::id::TreeId;
+    use crate::ruling::Probability;
+    use crate::ruling::Readout;
+    use crate::ruling::Ruling;
+    use crate::ruling::Unread;
     use crate::task::Brief;
     use crate::testing::elsewhere_key;
     use crate::testing::tree_key;
@@ -1988,6 +2283,35 @@ mod tests
             Receipt::handoff(tree(), dispatch, peer).unwrap(),
             Receipt::retire(tree(), dispatch).unwrap(),
         ]);
+        let probability = |value: f64| Probability::try_from(value).unwrap();
+        let mut answers = vec![(
+            content,
+            Ruling::Read(
+                Readout::new(
+                    vec![
+                        probability(0.125_f64),
+                        probability(0.0_f64),
+                        probability(0.875_f64),
+                    ],
+                    probability(0.0625_f64),
+                )
+                .unwrap(),
+            ),
+        )];
+        for reason in [
+            Unread::NoLetter,
+            Unread::Outside,
+            Unread::Tied,
+            Unread::Endpoint,
+            Unread::Malformed,
+        ] {
+            answers.push((content, Ruling::Unread(reason)));
+        }
+        for answered in [vec![], answers] {
+            receipts.push(
+                Receipt::verdict(tree(), dispatch, peer, content, content, answered).unwrap(),
+            );
+        }
         let secret = iroh::SecretKey::from_bytes(&[7; 32]);
         let proof = EndpointProof::sign(&secret, peer);
         for presented in [
@@ -2490,10 +2814,10 @@ mod tests
         receipt[3] = bytes(&[0x0f; 17]);
         assert_eq!(refused(&receipt), Err(constructor(1, 0)), "a long fence");
         let mut receipt = note(b"hi");
-        receipt[4] = open(13);
+        receipt[4] = open(14);
         assert_eq!(
             refused(&receipt),
-            Err(constructor(13, 4)),
+            Err(constructor(14, 4)),
             "an unknown kind"
         );
         let mut receipt = note(b"hi");
@@ -2869,6 +3193,183 @@ mod tests
             refused(&seated(12, vec![bytes(&[0x0d; 33])])),
             Err(constructor(12, 4)),
             "a retirement of a long dispatch"
+        );
+        let verdict = |judge: &[u8], count: u64, answers: Vec<Vec<u8>>| {
+            seated(
+                13,
+                [
+                    vec![
+                        bytes(&[0x0d; 32]),
+                        bytes(judge),
+                        bytes(&[0x0e; 32]),
+                        bytes(&[0x0c; 32]),
+                        word(count),
+                    ],
+                    answers,
+                ]
+                .concat(),
+            )
+        };
+        let answer =
+            |question: &[u8], ruling: Vec<Vec<u8>>| [vec![bytes(question)], ruling].concat();
+        let read = |count: u64, probabilities: &[f64], outside: f64| {
+            [
+                vec![open(1), word(count)],
+                probabilities
+                    .iter()
+                    .map(|probability| word(probability.to_bits()))
+                    .collect(),
+                vec![word(outside.to_bits()), close()],
+            ]
+            .concat()
+        };
+        let unread = |reason: u8| vec![open(2), open(reason), close(), close()];
+        let ruled = |ruling: Vec<Vec<u8>>| verdict(&peer, 1, answer(&[0x0b; 32], ruling));
+        for (records, case) in [
+            (
+                verdict(&peer, 0, vec![]),
+                "the well-formed verdict of no answer",
+            ),
+            (
+                ruled(read(2, &[0.25_f64, 0.75_f64], 0.0_f64)),
+                "the well-formed verdict of a readout",
+            ),
+            (
+                ruled(unread(5)),
+                "the well-formed verdict of an unread question",
+            ),
+        ] {
+            assert!(refused(&records).is_ok(), "{case} decodes");
+        }
+        for (records, case) in [
+            (
+                verdict(&peer[.. 31], 0, vec![]),
+                "a verdict by a short judge",
+            ),
+            (
+                verdict(&peer, 1, answer(&[0x0b; 31], unread(1))),
+                "a verdict on a short question",
+            ),
+        ] {
+            assert_eq!(refused(&records), Err(constructor(13, 4)), "{case}");
+        }
+        assert_eq!(
+            refused(&ruled(vec![open(3), close()])),
+            Err(constructor(3, 11)),
+            "an unknown ruling"
+        );
+        assert_eq!(
+            refused(&ruled(unread(6))),
+            Err(constructor(6, 12)),
+            "an unknown reason"
+        );
+        for (ruling, case) in [
+            (read(2, &[f64::NAN, 0.75_f64], 0.0_f64), "a NaN"),
+            (
+                read(2, &[1.5_f64, -0.5_f64], 0.0_f64),
+                "a probability above one and one below zero",
+            ),
+            (
+                read(2, &[-0.0_f64, 1.0_f64], 0.0_f64),
+                "an option at negative zero",
+            ),
+            (
+                read(2, &[0.0_f64, 1.0_f64], -0.0_f64),
+                "an outside mass at negative zero",
+            ),
+            (
+                read(2, &[0.5_f64, 0.75_f64], 0.0_f64),
+                "probabilities off one",
+            ),
+            (
+                read(2, &[0.5_f64, 0.5_f64], 0.0_f64),
+                "two options sharing the most",
+            ),
+            (read(1, &[1.0_f64], 0.0_f64), "a single option"),
+        ] {
+            assert_eq!(refused(&ruled(ruling)), Err(constructor(1, 11)), "{case}");
+        }
+        assert!(
+            matches!(
+                refused(&ruled(read(3, &[0.25_f64, 0.75_f64], 0.0_f64))),
+                Err(ValueError::UnexpectedToken {
+                    found: TokenKind::Close,
+                    position,
+                    ..
+                }) if position == at(16)
+            ),
+            "a count above the probabilities given"
+        );
+        assert!(
+            matches!(
+                refused(&verdict(&peer, 2, answer(&[0x0b; 32], unread(1)))),
+                Err(ValueError::UnexpectedToken {
+                    found: TokenKind::Close,
+                    position,
+                    ..
+                }) if position == at(15)
+            ),
+            "a count above the answers given"
+        );
+    }
+
+    #[test]
+    fn a_verdict_encodes_to_its_fixed_layout()
+    {
+        let bytes = |payload: &[u8]| {
+            let length = u64::try_from(payload.len()).unwrap().to_le_bytes();
+            [&[0x03_u8][..], &length, payload].concat()
+        };
+        let word = |value: u64| [&[0x02_u8][..], &value.to_le_bytes()].concat();
+        let peer = PEER.parse::<PeerKey>().unwrap();
+        let hash = |byte: u8| ContentHash::from(blake3::Hash::from_bytes([byte; 32]));
+        let probability = |value: f64| Probability::try_from(value).unwrap();
+        let readout = Readout::new(
+            vec![probability(0.25_f64), probability(0.75_f64)],
+            probability(0.5_f64),
+        )
+        .unwrap();
+        let receipt = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Verdict {
+            dispatch: CommitId::new([0x0d; 32]),
+            judge: peer,
+            rubric: hash(0x0e),
+            transcript: hash(0x0c),
+            answers: vec![
+                (hash(0x0b), Ruling::Read(readout)),
+                (hash(0x0a), Ruling::Unread(Unread::NoLetter)),
+            ],
+        });
+        let expected = [
+            vec![0x01_u8, 0x01],
+            word(2),
+            bytes(tree().key().as_bytes()),
+            bytes(&[0x0f; 16]),
+            vec![0x01, 0x0d],
+            bytes(&[0x0d; 32]),
+            bytes(peer.peer_id().as_bytes()),
+            bytes(&[0x0e; 32]),
+            bytes(&[0x0c; 32]),
+            word(2),
+            bytes(&[0x0b; 32]),
+            vec![0x01, 0x01],
+            word(2),
+            // 0.25, 0.75 and 0.5 in binary64.
+            word(0x3fd0_0000_0000_0000),
+            word(0x3fe8_0000_0000_0000),
+            word(0x3fe0_0000_0000_0000),
+            vec![0x05],
+            bytes(&[0x0a; 32]),
+            vec![0x01, 0x02, 0x01, 0x01, 0x05, 0x05],
+            vec![0x05, 0x05],
+        ]
+        .concat();
+        assert_eq!(
+            receipt.encode().unwrap().as_slice(),
+            expected,
+            "open receipt, version word, tree, fence, open verdict, dispatch, judge, rubric, \
+             transcript, answer count; a question, open read, option count, each option's \
+             probability, the outside mass, close; a question, open unread, open no letter, \
+             close, close; two closes"
         );
     }
 }

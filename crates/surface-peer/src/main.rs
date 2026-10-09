@@ -7,8 +7,9 @@
 //! who is reachable where, reads the tree's heads, syncs the tree with
 //! another peer over iroh, dispatches a seat to a tree read as a task and
 //! wakes it, reports on, hands off or retires from the dispatch it holds,
-//! replays the task, and checks a concepts tree's bindings against a public
-//! and a vault checkout.
+//! replays the task, judges a transcript of the task into a verdict on its
+//! dispatch, and checks a concepts tree's bindings against a public and a
+//! vault checkout.
 //!
 //! ```text
 //! domhringr-peer --state <dir> id
@@ -33,6 +34,11 @@
 //! domhringr-peer --state <dir> retire <tree>
 //! domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]
 //! domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
+//! domhringr-peer --state <dir> judge ask --question <text> --option <text>...
+//!                (--transcript <content-hash> | --transcript-file <file>) [--static <file>]
+//! domhringr-peer --state <dir> judge verdict <tree> --rubric <content-hash>
+//!                (--transcript <content-hash> | --transcript-file <file>)
+//!                (--question <text> --option <text>...)... [--static <file>]
 //! ```
 //!
 //! A tree is named by its anchor, `domhringr://<tree-id>/`, whose tree id is
@@ -103,6 +109,30 @@
 //! <dispatch-id> <report-id>`, or `stalled <dispatch-id> <retirement-id>`;
 //! `--local` prints the local store's task alone.
 //!
+//! A judge rules on a task's current dispatch. `judge ask` asks one question
+//! about a transcript — the content at `--transcript-file`, or the content
+//! `--transcript` names by its hash — and prints `transcript <hash>` and
+//! `ruling <question-hash> <ruling>`; `judge verdict` asks each question in
+//! turn, prints the same lines, commits a verdict on the task's current
+//! dispatch naming this peer the judge, the `--rubric` the questions come
+//! from, the transcript and each question by their hashes with each ruling,
+//! and prints the commit id. A question is a `--question` and the `--option`s
+//! after it, two to twenty-six, lettered `A`, `B`, … in order; its hash is
+//! the BLAKE3 of its canonical form. A ruling is `read <letter> A=<p> B=<p> …
+//! outside=<p>` — the answer letter, each option's probability renormalised
+//! over the option letters, and the mass outside them — or `unread
+//! <reason>`, the reason `no letter`, `outside`, `tied`, `endpoint` or
+//! `malformed` and its cause written to standard error, the command still
+//! succeeding: an unread question is recorded, never a default letter. The
+//! judge asks the OpenAI-compatible endpoint the environment names —
+//! `DOMHRINGR_JUDGE_ENDPOINT` its base URL, `DOMHRINGR_JUDGE_MODEL`, and
+//! optionally `DOMHRINGR_JUDGE_KEY`, a bearer key, and
+//! `DOMHRINGR_JUDGE_CEILING`, the most outside mass it admits — or, with
+//! `--static`, answers from a table file of `<question-hash>
+//! <transcript-hash> <ruling>` lines. `replay` prints a verdict as `verdict
+//! <commit-id> <dispatch-id> <judge> <rubric> <transcript>` and one `ruling
+//! <commit-id> <question> <ruling>` line per question.
+//!
 //! The state directory holds the peer's two keys, the key of each tree it
 //! opened, and its tree store, all created on first use. A command holds the
 //! store exclusively while it runs, so every command but `id` fails while
@@ -139,6 +169,7 @@ use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
 use core::error::Error;
 use core::fmt;
+use core::slice;
 use core::str::FromStr;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -146,6 +177,15 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use domhringr_judge_oracle::Backend;
+use domhringr_judge_oracle::ChatCompletions;
+use domhringr_judge_oracle::Config;
+use domhringr_judge_oracle::ConfigError;
+use domhringr_judge_oracle::EndpointError;
+use domhringr_judge_oracle::ParseTableError;
+use domhringr_judge_oracle::Question;
+use domhringr_judge_oracle::QuestionError;
+use domhringr_judge_oracle::Transcript;
 use domhringr_record_tree::Aim;
 use domhringr_record_tree::Anchor;
 use domhringr_record_tree::At;
@@ -155,6 +195,7 @@ use domhringr_record_tree::BindPort;
 use domhringr_record_tree::Brief;
 use domhringr_record_tree::CommitError;
 use domhringr_record_tree::CommitId;
+use domhringr_record_tree::Content;
 use domhringr_record_tree::ContentHash;
 use domhringr_record_tree::Current;
 use domhringr_record_tree::Dns;
@@ -181,6 +222,7 @@ use domhringr_record_tree::Reference;
 use domhringr_record_tree::Resolution;
 use domhringr_record_tree::Route;
 use domhringr_record_tree::RouteError;
+use domhringr_record_tree::Ruling;
 use domhringr_record_tree::Scope;
 use domhringr_record_tree::Slot;
 use domhringr_record_tree::StateDir;
@@ -223,6 +265,9 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> retire <tree>
        domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]
        domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
+       domhringr-peer --state <dir> judge ask <question> <transcript> [--static <file>]
+       domhringr-peer --state <dir> judge verdict <tree> --rubric <content-hash> <transcript>
+                      <question>... [--static <file>]
 where  <tree>   is domhringr://<tree-id>/
        <anchor> is domhringr://<tree-id>/<segment>/.../<segment>
        <commit> is domhringr://<tree-id>/.commit/<commit-id>, the id whole, or for whence
@@ -240,6 +285,11 @@ where  <tree>   is domhringr://<tree-id>/
        <program> runs as <program> anchor <anchor> | content <hash>; exiting 0, its
                 standard output is the report: its hash, and its first line the summary
        <checkout> is a directory in a git working tree, read as its whole repository
+       <question> is --question <text> --option <text>..., two to twenty-six options
+       <transcript> is --transcript <content-hash> | --transcript-file <file>
+       <file>   for --static holds <question-hash> <transcript-hash> <ruling> lines; without
+                it the judge asks the endpoint DOMHRINGR_JUDGE_ENDPOINT and
+                DOMHRINGR_JUDGE_MODEL name
 A segment beginning with . is reserved for the forms above: no path holds one.
 ";
 
@@ -295,6 +345,14 @@ enum Verb
     Replay,
     /// Check a concepts tree against a public and a vault checkout.
     Drift,
+    /// Ask a question about a transcript, or rule on a task: `judge` without
+    /// `ask` or `verdict` after it.
+    Judge,
+    /// Ask a question about a transcript and print the ruling.
+    Ask,
+    /// Ask questions about a task's transcript and commit the rulings as a
+    /// verdict on its current dispatch.
+    Verdict,
 }
 
 impl fmt::Display for Verb
@@ -335,6 +393,16 @@ impl fmt::Display for Verb
             | Self::Retire => "retire <tree>",
             | Self::Replay => "replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]",
             | Self::Drift => "drift --public <checkout> --vault <checkout> <tree>",
+            | Self::Judge => "judge ask|verdict",
+            | Self::Ask => {
+                "judge ask --question <text> --option <text>... --transcript <content-hash> | \
+                 --transcript-file <file> [--static <file>]"
+            },
+            | Self::Verdict => {
+                "judge verdict <tree> --rubric <content-hash> --transcript <content-hash> | \
+                 --transcript-file <file> (--question <text> --option <text>...)... [--static \
+                 <file>]"
+            },
         })
     }
 }
@@ -344,8 +412,8 @@ impl fmt::Display for Verb
 enum Operand
 {
     /// The tree to grant on, write to, claim for, introduce in, present in,
-    /// withdraw from, read, sync, dispatch in, report on, or read a label in,
-    /// or the tree introduced.
+    /// withdraw from, read, sync, dispatch in, report on, rule on, or read a
+    /// label in, or the tree introduced.
     Tree,
     /// The anchor to bind or resolve.
     Anchor,
@@ -364,6 +432,10 @@ enum Operand
     Brief,
     /// A content's hash: a brief's or a report's.
     Content,
+    /// A judged transcript's hash.
+    Transcript,
+    /// A verdict's rubric's hash.
+    Rubric,
 }
 
 impl fmt::Display for Operand
@@ -387,6 +459,8 @@ impl fmt::Display for Operand
             | Self::Witness => "witness's tree id",
             | Self::Brief => "brief anchor",
             | Self::Content => "content hash",
+            | Self::Transcript => "transcript hash",
+            | Self::Rubric => "rubric hash",
         })
     }
 }
@@ -576,6 +650,54 @@ enum Command
         /// The concepts tree.
         tree: TreeId,
     },
+    /// Ask `question` about the transcript `transcript` names, as `judging`
+    /// says, and print the transcript's hash and the ruling.
+    Ask
+    {
+        /// The question asked.
+        question: Question,
+        /// Where the transcript comes from.
+        transcript: Asked,
+        /// What answers.
+        judging: Judging,
+    },
+    /// Ask each of `questions` about the transcript `transcript` names, as
+    /// `judging` says, print the transcript's hash and each ruling, commit a
+    /// verdict of them on `tree`'s current dispatch under `rubric`, and print
+    /// the commit id.
+    Verdict
+    {
+        /// The task.
+        tree: TreeId,
+        /// The hash of the rubric the questions come from.
+        rubric: ContentHash,
+        /// Where the transcript comes from.
+        transcript: Asked,
+        /// The questions, in the order asked.
+        questions: Vec<Question>,
+        /// What answers.
+        judging: Judging,
+    },
+}
+
+/// Where a judged transcript comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Asked
+{
+    /// `--transcript`: its hash alone; its content is not held.
+    Named(ContentHash),
+    /// `--transcript-file`: the file holding its content.
+    File(PathBuf),
+}
+
+/// What answers a judge's questions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Judging
+{
+    /// The endpoint the environment configures.
+    Endpoint,
+    /// `--static`: the table of rulings this file holds.
+    Table(PathBuf),
 }
 
 /// What names a DNS name's candidate trees for one `whence`.
@@ -779,6 +901,21 @@ enum UsageError
     /// no one.
     #[error("--local reaches no peer: it takes no --peer or --at")]
     Local,
+    /// A judge command names no transcript.
+    #[error("no transcript given: --transcript <content-hash> or --transcript-file <file>")]
+    NoTranscript,
+    /// `judge verdict` names no rubric.
+    #[error("no rubric given: --rubric <content-hash>")]
+    NoRubric,
+    /// A judge command asks no question.
+    #[error("no question given: --question <text> --option <text>...")]
+    NoQuestion,
+    /// An `--option` comes before any `--question`.
+    #[error("an --option follows the --question it answers")]
+    Unasked,
+    /// A question cannot be asked.
+    #[error("cannot ask the question")]
+    Question(#[source] QuestionError),
 }
 
 /// Why a command failed once its command line was read.
@@ -818,8 +955,9 @@ enum RunError
     /// The peer the dial aims at is this peer.
     #[error("no one to reach: the peer aimed at is this peer")]
     Itself,
-    /// The task has no dispatch to report on, hand off or retire from.
-    #[error("the task has no dispatch: nothing to report on, hand off or retire from")]
+    /// The task has no dispatch to report on, hand off, retire from or rule
+    /// on.
+    #[error("the task has no dispatch: nothing to report on, hand off, retire from or rule on")]
     Undispatched,
     /// The seat was not woken.
     #[error(transparent)]
@@ -836,6 +974,21 @@ enum RunError
     /// A checkout cannot be read for `drift`.
     #[error(transparent)]
     Drift(#[from] drift::CheckError),
+    /// The transcript file cannot be read.
+    #[error("cannot read the transcript file")]
+    Transcript(#[source] std::io::Error),
+    /// The table file cannot be read.
+    #[error("cannot read the table file")]
+    Table(#[source] std::io::Error),
+    /// The table file holds no table of rulings.
+    #[error("cannot read the table")]
+    Rulings(#[source] ParseTableError),
+    /// The environment configures no endpoint for the judge.
+    #[error("no judge endpoint configured")]
+    Config(#[source] ConfigError),
+    /// The judge's client cannot be built.
+    #[error("cannot build the judge's client")]
+    Client(#[source] EndpointError),
     /// Standard output cannot be written.
     #[error("cannot write to standard output")]
     Output(#[source] std::io::Error),
@@ -849,17 +1002,17 @@ enum RunError
 /// # Specification
 /// - ensures: accepts `--state <dir>` (or `--state=<dir>`; the last one given
 ///   wins) followed by a verb and exactly the operands that verb takes, or, for
-///   `serve`, `present`, `sync`, `whence`, `dispatch`, `replay` and `drift`,
-///   what [`serve_command`], [`present_command`], [`sync_command`],
-///   [`whence_command`], [`dispatch_command`], [`replay_command`] and
-///   [`drift_command`] read. Other verbs' operands are taken verbatim, so a
-///   note's text, a datum or a summary beginning with `-` is a text, not an
-///   option. A tree operand is a bare anchor in the key form, `bind`'s anchor
-///   names a path in the key form, `claim`'s DNS name and `introduce`'s label
-///   are read as [`read_name`] reads them, `bind`'s target is read as
-///   [`read_target`] reads it, `withdraw` withdraws this peer's own presence
-///   unless a peer id follows the tree, `report`'s content hash is 64 hex
-///   digits and its summary one line [`Summary`] admits, and `handoff`'s
+///   `serve`, `present`, `sync`, `whence`, `dispatch`, `replay`, `drift` and
+///   `judge`, what [`serve_command`], [`present_command`], [`sync_command`],
+///   [`whence_command`], [`dispatch_command`], [`replay_command`],
+///   [`drift_command`] and [`judge_command`] read. Other verbs' operands are
+///   taken verbatim, so a note's text, a datum or a summary beginning with `-`
+///   is a text, not an option. A tree operand is a bare anchor in the key form,
+///   `bind`'s anchor names a path in the key form, `claim`'s DNS name and
+///   `introduce`'s label are read as [`read_name`] reads them, `bind`'s target
+///   is read as [`read_target`] reads it, `withdraw` withdraws this peer's own
+///   presence unless a peer id follows the tree, `report`'s content hash is 64
+///   hex digits and its summary one line [`Summary`] admits, and `handoff`'s
 ///   recipient is a peer id.
 /// - fails: [`UsageError::Arguments`] for any option but `--state` or for
 ///   `--state` without a value, [`UsageError::NoCommand`] when no verb follows
@@ -877,8 +1030,8 @@ enum RunError
 ///   that does not parse, [`UsageError::Summary`] for a summary [`Summary`]
 ///   refuses, as [`read_target`] for `bind`'s target, and as [`serve_command`],
 ///   [`present_command`], [`sync_command`], [`whence_command`],
-///   [`dispatch_command`], [`replay_command`] and [`drift_command`] for their
-///   verbs.
+///   [`dispatch_command`], [`replay_command`], [`drift_command`] and
+///   [`judge_command`] for their verbs.
 /// - panics: none.
 ///
 /// # Errors
@@ -905,6 +1058,9 @@ enum RunError
 /// - [`UsageError::Port`]: `serve`'s or `present`'s port is not a UDP port.
 /// - [`UsageError::Local`]: `whence`'s or `replay`'s `--local` stands beside
 ///   `--peer` or `--at`.
+/// - [`UsageError::NoTranscript`], [`UsageError::NoRubric`],
+///   [`UsageError::NoQuestion`], [`UsageError::Unasked`] and
+///   [`UsageError::Question`]: as [`judge_command`] refuses a judge command.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — each verb with its operands, every bind target kind, a
@@ -915,10 +1071,11 @@ enum RunError
 ///   with and without witnesses, a scope, a peer, an endpoint and `--local`,
 ///   `dispatch` by anchor and by content with and without `--at`, `report`,
 ///   `handoff`, `retire`, `replay` toward the seat, a peer and `--local`,
-///   `drift` with its options before and after its operand, and a dash-leading
-///   note, datum and summary separate the accepted lines, and one line per
-///   refusal pins which refusal each malformation gets, including an arity
-///   error that wins over a malformed operand.
+///   `drift` with its options before and after its operand, `judge ask` and
+///   `judge verdict`, and a dash-leading note, datum and summary separate the
+///   accepted lines, and one line per refusal pins which refusal each
+///   malformation gets, including an arity error that wins over a malformed
+///   operand.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
@@ -960,6 +1117,10 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     }
     if verb == Verb::Drift {
         let command = drift_command(&mut arguments)?;
+        return Ok(Invocation { state, command });
+    }
+    if verb == Verb::Judge {
+        let command = judge_command(&mut arguments)?;
         return Ok(Invocation { state, command });
     }
     let mut raw = arguments.raw_args()?;
@@ -1554,13 +1715,143 @@ fn replay_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     }
 }
 
+/// Read a judge command — `ask` or `verdict`, its operands and its options —
+/// from what follows `judge`.
+///
+/// # Specification
+/// - ensures: accepts `ask` or `verdict`, then options anywhere around the
+///   operands, each also in the `=` spelling: `--question <text>` opening a
+///   question and each `--option <text>` adding an option to the question
+///   opened last; `--transcript <content-hash>` or `--transcript-file <file>`
+///   naming the transcript, the last one given of the two winning; `--static
+///   <file>`, answering from a table rather than the endpoint, the last one
+///   given winning; and for `verdict` `--rubric <content-hash>`, the last one
+///   given winning. `ask` takes no operand and one question; `verdict` takes
+///   one tree anchor in the key form and one or more questions, kept in the
+///   order given. Each question is read as [`Question::new`] reads it.
+/// - fails: [`UsageError::Operands`] naming `judge` when nothing follows it,
+///   [`UsageError::Command`] for a word there other than `ask` or `verdict`,
+///   [`UsageError::Arguments`] for any other option, among them `--rubric` to
+///   `ask`, or for an option without a value, [`UsageError::Text`] for a
+///   question or an option that is not UTF-8, [`UsageError::Unasked`] for an
+///   `--option` before any `--question`, and [`UsageError::Operand`] for a
+///   transcript or rubric hash that does not parse; then
+///   [`UsageError::NoQuestion`] when no question is asked,
+///   [`UsageError::Operands`] for operands other than the command takes or for
+///   `ask` with more than one question, [`UsageError::NoTranscript`] when no
+///   transcript is named, [`UsageError::NoRubric`] for `verdict` without a
+///   rubric, as [`read_tree`] for the tree, and [`UsageError::Question`] for a
+///   question [`Question::new`] refuses.
+/// - panics: none.
+///
+/// # Errors
+/// - [`UsageError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — `ask` with a named transcript and with a file and a
+///   table, and `verdict` with two questions in the `=` spelling around its
+///   tree, are read to their commands; nothing after `judge`, an unknown word
+///   after it, `--rubric` to `ask`, an `--option` before its `--question`, no
+///   question, two questions to `ask`, an operand to `ask`, no transcript, no
+///   rubric, a short transcript hash and a question of one option each meet
+///   their own refusal.
+/// - witness: `tests::every_verb_reads_its_operands`
+/// - witness: `tests::a_malformed_command_line_is_refused`
+fn judge_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
+{
+    let judged = match arguments.next()? {
+        | Some(lexopt::Arg::Value(word)) => match word.to_str() {
+            | Some("ask") => Verb::Ask,
+            | Some("verdict") => Verb::Verdict,
+            | Some(_) | None => return Err(UsageError::Command(word)),
+        },
+        | Some(other) => return Err(UsageError::from(other.unexpected())),
+        | None => return Err(UsageError::Operands(Verb::Judge)),
+    };
+    let (mut transcript, mut rubric, mut judging) = (None, None, Judging::Endpoint);
+    let mut asked: Vec<(String, Vec<String>)> = Vec::new();
+    let mut operands = Vec::new();
+    while let Some(argument) = arguments.next()? {
+        match argument {
+            | lexopt::Arg::Long("question") => {
+                let value = arguments.value()?;
+                let text = value.into_string().map_err(UsageError::Text)?;
+                asked.push((text, Vec::new()));
+            },
+            | lexopt::Arg::Long("option") => {
+                let value = arguments.value()?;
+                let option = value.into_string().map_err(UsageError::Text)?;
+                let last = asked.last_mut().ok_or(UsageError::Unasked)?;
+                last.1.push(option);
+            },
+            | lexopt::Arg::Long("transcript") => {
+                let value = arguments.value()?;
+                transcript = Some(Asked::Named(read_id(&value, Operand::Transcript)?));
+            },
+            | lexopt::Arg::Long("transcript-file") => {
+                let value = arguments.value()?;
+                transcript = Some(Asked::File(PathBuf::from(value)));
+            },
+            | lexopt::Arg::Long("rubric") if judged == Verb::Verdict => {
+                let value = arguments.value()?;
+                rubric = Some(read_id(&value, Operand::Rubric)?);
+            },
+            | lexopt::Arg::Long("static") => {
+                let value = arguments.value()?;
+                judging = Judging::Table(PathBuf::from(value));
+            },
+            | lexopt::Arg::Value(operand) => operands.push(operand),
+            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+                return Err(UsageError::from(other.unexpected()));
+            },
+        }
+    }
+    if asked.is_empty() {
+        return Err(UsageError::NoQuestion);
+    }
+    let mut operands = operands.into_iter();
+    let mut asked = asked.into_iter();
+    match (judged, operands.next(), operands.next()) {
+        | (Verb::Ask, None, None) => {
+            let (Some((text, options)), None) = (asked.next(), asked.next())
+            else {
+                return Err(UsageError::Operands(Verb::Ask));
+            };
+            let transcript = transcript.ok_or(UsageError::NoTranscript)?;
+            let question = Question::new(text, options).map_err(UsageError::Question)?;
+            Ok(Command::Ask {
+                question,
+                transcript,
+                judging,
+            })
+        },
+        | (Verb::Verdict, Some(tree), None) => {
+            let transcript = transcript.ok_or(UsageError::NoTranscript)?;
+            let rubric = rubric.ok_or(UsageError::NoRubric)?;
+            let tree = read_tree(&tree)?;
+            let questions = asked
+                .map(|(text, options)| Question::new(text, options))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(UsageError::Question)?;
+            Ok(Command::Verdict {
+                tree,
+                rubric,
+                transcript,
+                questions,
+                judging,
+            })
+        },
+        | (judged, ..) => Err(UsageError::Operands(judged)),
+    }
+}
+
 /// Name the verb `word` spells.
 ///
 /// # Specification
 /// - ensures: `id`, `serve`, `open`, `grant`, `note`, `bind`, `claim`,
 ///   `introduce`, `present`, `withdraw`, `book`, `whence`, `view`, `heads`,
-///   `sync`, `dispatch`, `report`, `handoff`, `retire`, `replay` and `drift`
-///   name their verbs.
+///   `sync`, `dispatch`, `report`, `handoff`, `retire`, `replay`, `drift` and
+///   `judge` name their verbs.
 /// - fails: [`UsageError::Command`] for any other word, carrying it.
 /// - panics: none.
 ///
@@ -1596,6 +1887,7 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
         | Some("retire") => Ok(Verb::Retire),
         | Some("replay") => Ok(Verb::Replay),
         | Some("drift") => Ok(Verb::Drift),
+        | Some("judge") => Ok(Verb::Judge),
         | Some(_) | None => Err(UsageError::Command(word)),
     }
 }
@@ -1857,18 +2149,24 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///   write the new commit's id line. `serve` runs as [`serve`] specifies.
 ///   `drift` folds the concepts tree in the local store, closes the store, and
 ///   writes [`drift::check`]'s report of it against the two checkouts, one line
-///   per finding. Every command ends in [`Completion::Success`] but a `drift`
-///   whose report holds a finding, which ends in [`Completion::Drifted`].
+///   per finding. `judge ask` writes `transcript <hash>` for the transcript
+///   [`transcript_of`] names, then rules on its question as [`rulings`] rules.
+///   `judge verdict` runs as [`verdict`] specifies, this peer the judge. Every
+///   command ends in [`Completion::Success`] but a `drift` whose report holds a
+///   finding, which ends in [`Completion::Drifted`].
 /// - fails: [`RunError::Identity`], [`RunError::Open`], [`RunError::Bind`],
 ///   [`RunError::Random`], [`RunError::Commit`], [`RunError::View`],
 ///   [`RunError::Present`], [`RunError::Route`], [`RunError::Whence`],
 ///   [`RunError::Heads`] and [`RunError::Sync`] as the record library reports
 ///   them, [`RunError::Itself`] for a `sync` or a `dispatch` aimed at this
-///   peer, [`RunError::Undispatched`] for a `report`, `handoff` or `retire` on
-///   a task with no dispatch, [`RunError::Wake`] as [`dispatch`] reports it,
-///   [`RunError::Drift`] as [`drift::check`] reports it, and
-///   [`RunError::Output`] when standard output cannot be written. A failed
-///   sync, presence or wake still closes the endpoint.
+///   peer, [`RunError::Undispatched`] for a `report`, `handoff`, `retire` or
+///   `judge verdict` on a task with no dispatch, [`RunError::Wake`] as
+///   [`dispatch`] reports it, [`RunError::Drift`] as [`drift::check`] reports
+///   it, [`RunError::Transcript`] as [`transcript_of`] and
+///   [`RunError::Config`], [`RunError::Client`], [`RunError::Table`] and
+///   [`RunError::Rulings`] as [`rulings`] report them, and [`RunError::Output`]
+///   when standard output cannot be written. A failed sync, presence or wake
+///   still closes the endpoint.
 /// - panics: none.
 ///
 /// # Errors
@@ -1883,13 +2181,18 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - [`RunError::Route`]: no remote can be named for the dial, as when the book
 ///   holds no presence of the peer aimed at.
 /// - [`RunError::Itself`]: `sync` or `dispatch` aims at this peer.
-/// - [`RunError::Undispatched`]: the task has no dispatch to answer.
+/// - [`RunError::Undispatched`]: the task has no dispatch to answer or rule on.
 /// - [`RunError::Wake`]: the seat was not woken.
 /// - [`RunError::Whence`]: the reference does not resolve, as when its DNS name
 ///   is unclaimed, its label unintroduced or its commit prefix ambiguous.
 /// - [`RunError::Heads`]: the heads cannot be read.
 /// - [`RunError::Sync`]: the sync failed.
 /// - [`RunError::Drift`]: a checkout cannot be read.
+/// - [`RunError::Transcript`]: the transcript file cannot be read.
+/// - [`RunError::Config`]: the judge has no endpoint configured.
+/// - [`RunError::Client`]: the judge's client cannot be built.
+/// - [`RunError::Table`], [`RunError::Rulings`]: the table file cannot be read
+///   or holds no table.
 /// - [`RunError::Output`]: standard output cannot be written.
 /// - [`RunError::Closed`], [`RunError::Diagnostics`]: as [`serve`].
 ///
@@ -1907,7 +2210,9 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///   withdraws; `drift` over a fixture pair prints its four findings exactly
 ///   and exits 3, then nothing and exits 0; an operator dispatches a seat that
 ///   is down, then up, and replays the task through the seat's presence as the
-///   seat reports across a restart of each.
+///   seat reports across a restart of each; a judge asks a question about a
+///   transcript, from a table and from no endpoint, and rules on the task's
+///   current dispatch, read and unread, and the replay shows the verdict.
 /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
 /// - witness: `sync::tests::two_peers_sync_one_tree_to_identical_heads`
 /// - witness: `sync::tests::an_anchor_resolves_alike_on_both_peers`
@@ -1916,6 +2221,7 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
 /// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
 /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
+/// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
 async fn execute(invocation: Invocation) -> Result<Completion, RunError>
 {
     let Invocation { state, command } = invocation;
@@ -2076,6 +2382,28 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             else {
                 Completion::Drifted
             });
+        },
+        | Command::Ask {
+            question,
+            transcript,
+            judging,
+        } => {
+            let transcript = transcript_of(transcript)?;
+            emit(&format_args!("transcript {}\n", transcript.hash()))?;
+            rulings(judging, slice::from_ref(&question), &transcript)
+                .await
+                .map(drop)
+        },
+        | Command::Verdict {
+            tree,
+            rubric,
+            transcript,
+            questions,
+            judging,
+        } => {
+            let judge = identity.peer_key();
+            let peer = Peer::open(&state, identity)?;
+            verdict(peer, judge, tree, rubric, transcript, questions, judging).await
         },
     };
     emitted.map(|()| Completion::Success)
@@ -2241,20 +2569,44 @@ async fn record(
     emit(&format_args!("{id}\n"))
 }
 
-/// Commit in `tree` the receipt `answer` makes on the task's current
-/// dispatch, and write the new commit's id line.
+/// The commit of `tree`'s current dispatch.
 ///
 /// # Specification
-/// - ensures: `answer` is given the commit of the admitted dispatch last in
-///   canonical order, and its receipt is committed as [`record`] commits it.
+/// - ensures: the commit of the admitted dispatch last in canonical order.
 /// - fails: [`RunError::View`] when the tree cannot be folded,
-///   [`RunError::Undispatched`] when no dispatch is admitted, and as `answer`
-///   and [`record`] fail.
+///   [`RunError::Undispatched`] when no dispatch is admitted.
 /// - panics: none.
 ///
 /// # Errors
 /// - [`RunError::View`]: the tree cannot be folded.
 /// - [`RunError::Undispatched`]: the task has no dispatch.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process tests answer and rule on a dispatch, and
+///   refuse a verdict on a task with none.
+/// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
+async fn current(
+    peer: &Peer,
+    tree: TreeId,
+) -> Result<CommitId, RunError>
+{
+    match *peer.view(tree).await?.task().current() {
+        | Current::Attempt(ref attempt) => Ok(attempt.dispatch()),
+        | Current::Undispatched => Err(RunError::Undispatched),
+    }
+}
+
+/// Commit in `tree` the receipt `answer` makes on the task's current
+/// dispatch, and write the new commit's id line.
+///
+/// # Specification
+/// - ensures: `answer` is given the commit [`current`] names, and its receipt
+///   is committed as [`record`] commits it.
+/// - fails: as [`current`], `answer` and [`record`] fail.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError::View`], [`RunError::Undispatched`]: as [`current`].
 /// - [`RunError::Random`]: no operation fence can be drawn.
 /// - [`RunError::Commit`], [`RunError::Output`]: as [`record`].
 async fn on_current(
@@ -2263,11 +2615,172 @@ async fn on_current(
     answer: impl FnOnce(CommitId) -> Result<Receipt, RandomError>,
 ) -> Result<(), RunError>
 {
-    let dispatch = match *peer.view(tree).await?.task().current() {
-        | Current::Attempt(ref attempt) => attempt.dispatch(),
-        | Current::Undispatched => return Err(RunError::Undispatched),
-    };
+    let dispatch = current(&peer, tree).await?;
     record(&peer, tree, answer(dispatch)?).await
+}
+
+/// Rule on `tree`'s current dispatch as `judge`, and commit the rulings as a
+/// verdict under `rubric`.
+///
+/// # Specification
+/// - ensures: names the current dispatch ([`current`]) before any question is
+///   asked; then writes `transcript <hash>` for the transcript
+///   [`transcript_of`] names, rules on each of `questions` as [`rulings`]
+///   rules, and commits the verdict of `judge` on that dispatch — `rubric`, the
+///   transcript's hash, and each question's hash with its ruling, in the order
+///   asked — under a fresh operation fence, as [`record`] commits it.
+/// - fails: as [`current`], [`transcript_of`], [`rulings`] and [`record`] fail,
+///   and [`RunError::Random`] when no operation fence can be drawn.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError::View`], [`RunError::Undispatched`]: as [`current`].
+/// - [`RunError::Transcript`]: as [`transcript_of`].
+/// - [`RunError::Config`], [`RunError::Client`], [`RunError::Table`],
+///   [`RunError::Rulings`], [`RunError::Diagnostics`]: as [`rulings`].
+/// - [`RunError::Random`]: no operation fence can be drawn.
+/// - [`RunError::Commit`], [`RunError::Output`]: as [`record`].
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process test refuses a verdict on a task with no
+///   dispatch, then rules on the current dispatch, read and unread, and replays
+///   the verdict with each ruling in the order asked.
+/// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
+async fn verdict(
+    peer: Peer,
+    judge: PeerKey,
+    tree: TreeId,
+    rubric: ContentHash,
+    asked: Asked,
+    questions: Vec<Question>,
+    judging: Judging,
+) -> Result<(), RunError>
+{
+    let dispatch = current(&peer, tree).await?;
+    let transcript = transcript_of(asked)?;
+    emit(&format_args!("transcript {}\n", transcript.hash()))?;
+    let answers = rulings(judging, &questions, &transcript).await?;
+    let receipt = Receipt::verdict(tree, dispatch, judge, rubric, transcript.hash(), answers)?;
+    record(&peer, tree, receipt).await
+}
+
+/// The transcript `asked` names.
+///
+/// # Specification
+/// - ensures: [`Asked::File`] reads the whole file and holds its content
+///   ([`Transcript::held`]); [`Asked::Named`] names the hash alone
+///   ([`Transcript::named`]).
+/// - fails: [`RunError::Transcript`] when the file cannot be read.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError::Transcript`]: the file cannot be read.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process test judges one transcript from its file and
+///   by its hash, and reads the same hash printed both ways.
+/// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
+fn transcript_of(asked: Asked) -> Result<Transcript, RunError>
+{
+    match asked {
+        | Asked::Named(hash) => Ok(Transcript::named(hash)),
+        | Asked::File(path) => {
+            let bytes = std::fs::read(path).map_err(RunError::Transcript)?;
+            Ok(Transcript::held(Content::from(bytes)))
+        },
+    }
+}
+
+/// Ask each of `questions` about `transcript` of what `judging` names,
+/// writing each ruling's line as it is read.
+///
+/// # Specification
+/// - ensures: builds what answers — for [`Judging::Endpoint`] a client of the
+///   endpoint [`Config::from_environment`] configures, for [`Judging::Table`]
+///   the table its file holds — then rules as [`rule`] rules.
+/// - fails: [`RunError::Config`] when the environment configures no endpoint,
+///   [`RunError::Client`] when the client cannot be built, [`RunError::Table`]
+///   when the table file cannot be read, [`RunError::Rulings`] when it holds no
+///   table, and as [`rule`].
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError::Config`]: no endpoint is configured.
+/// - [`RunError::Client`]: the client cannot be built.
+/// - [`RunError::Table`]: the table file cannot be read.
+/// - [`RunError::Rulings`]: the table file holds no table.
+/// - [`RunError::Diagnostics`], [`RunError::Output`]: as [`rule`].
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process test answers from a table file, and refuses a
+///   judge with no endpoint configured and a table file that holds no table.
+/// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
+async fn rulings(
+    judging: Judging,
+    questions: &[Question],
+    transcript: &Transcript,
+) -> Result<Vec<(ContentHash, Ruling)>, RunError>
+{
+    match judging {
+        | Judging::Endpoint => {
+            let config = Config::from_environment().map_err(RunError::Config)?;
+            let client = ChatCompletions::new(config).map_err(RunError::Client)?;
+            rule(&client, questions, transcript).await
+        },
+        | Judging::Table(path) => {
+            let text = std::fs::read_to_string(path).map_err(RunError::Table)?;
+            let table = text
+                .parse::<domhringr_judge_oracle::Static>()
+                .map_err(RunError::Rulings)?;
+            rule(&table, questions, transcript).await
+        },
+    }
+}
+
+/// Ask `backend` each of `questions` about `transcript`, in order, writing
+/// each ruling's line as it is read.
+///
+/// # Specification
+/// - ensures: a question answered is read ([`Ruling::Read`]); a question
+///   refused is unread for the refusal's reason ([`Ruling::Unread`]), its cause
+///   written to standard error, and the next question is still asked — a
+///   refusal is recorded, never answered with a default. Writes `ruling
+///   <question-hash> <ruling>` per question, and returns the question hashes
+///   with their rulings in the order asked.
+/// - fails: [`RunError::Diagnostics`] when standard error cannot be written,
+///   [`RunError::Output`] when standard output cannot be written.
+/// - panics: none.
+///
+/// # Errors
+/// - [`RunError::Diagnostics`]: standard error cannot be written.
+/// - [`RunError::Output`]: standard output cannot be written.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process test rules on a question the table answers
+///   and on one it does not, reading `read` and `unread malformed` lines and
+///   the cause on standard error.
+/// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
+async fn rule<Answering>(
+    backend: &Answering,
+    questions: &[Question],
+    transcript: &Transcript,
+) -> Result<Vec<(ContentHash, Ruling)>, RunError>
+where
+    Answering: Backend + Sync,
+{
+    let mut answers = Vec::with_capacity(questions.len());
+    for question in questions {
+        let ruling = match backend.ask(question, transcript).await {
+            | Ok(readout) => Ruling::Read(readout),
+            | Err(refusal) => {
+                report(&refusal).map_err(RunError::Diagnostics)?;
+                Ruling::Unread(refusal.reason())
+            },
+        };
+        emit(&format_args!("ruling {} {ruling}\n", question.hash()))?;
+        answers.push((question.hash(), ruling));
+    }
+    Ok(answers)
 }
 
 /// Dispatch `seat` to `brief` in `tree`, as `operator`, and wake it at the
@@ -2569,6 +3082,8 @@ mod tests
     use std::ffi::OsString;
     use std::path::PathBuf;
 
+    use domhringr_judge_oracle::Question;
+    use domhringr_judge_oracle::QuestionError;
     use domhringr_record_tree::Aim;
     use domhringr_record_tree::Anchor;
     use domhringr_record_tree::At;
@@ -2598,9 +3113,11 @@ mod tests
     use domhringr_record_tree::UdpPort;
     use domhringr_seat_slot::Surface;
 
+    use super::Asked;
     use super::Command;
     use super::Dial;
     use super::Invocation;
+    use super::Judging;
     use super::Operand;
     use super::Reach;
     use super::Replaying;
@@ -2711,6 +3228,13 @@ mod tests
         };
         let port = |text: &str| BindPort::Fixed(text.parse::<UdpPort>().unwrap());
         let content = CONTENT.parse::<ContentHash>().unwrap();
+        let question = |text: &str, options: &[&str]| {
+            Question::new(
+                text.to_owned(),
+                options.iter().map(|&option| option.to_owned()).collect(),
+            )
+            .unwrap()
+        };
         let bind = |target: Target| Command::Bind {
             tree,
             path: path.clone(),
@@ -3033,6 +3557,84 @@ mod tests
                     public: PathBuf::from("public"),
                     vault: PathBuf::from("vault"),
                     tree,
+                },
+            ),
+            (
+                vec![
+                    "--state",
+                    "dir",
+                    "judge",
+                    "ask",
+                    "--question",
+                    "Did it land?",
+                    "--option",
+                    "yes",
+                    "--option",
+                    "-no",
+                    "--transcript",
+                    CONTENT,
+                ],
+                Command::Ask {
+                    question: question("Did it land?", &["yes", "-no"]),
+                    transcript: Asked::Named(content),
+                    judging: Judging::Endpoint,
+                },
+            ),
+            (
+                vec![
+                    "--state",
+                    "dir",
+                    "judge",
+                    "ask",
+                    "--transcript",
+                    CONTENT,
+                    "--static",
+                    "elsewhere",
+                    "--question=Did it land?",
+                    "--transcript-file=transcript",
+                    "--option=yes",
+                    "--option=no",
+                    "--static=table",
+                ],
+                Command::Ask {
+                    question: question("Did it land?", &["yes", "no"]),
+                    transcript: Asked::File(PathBuf::from("transcript")),
+                    judging: Judging::Table(PathBuf::from("table")),
+                },
+            ),
+            (
+                vec![
+                    "--state",
+                    "dir",
+                    "judge",
+                    "verdict",
+                    "--question=Did it land?",
+                    "--option=yes",
+                    "--option=no",
+                    "--rubric",
+                    COMMIT,
+                    TREE,
+                    "--rubric",
+                    CONTENT,
+                    "--transcript-file=transcript",
+                    "--question",
+                    "Which?",
+                    "--option",
+                    "a",
+                    "--option",
+                    "b",
+                    "--option",
+                    "c",
+                ],
+                Command::Verdict {
+                    tree,
+                    rubric: content,
+                    transcript: Asked::File(PathBuf::from("transcript")),
+                    questions: vec![
+                        question("Did it land?", &["yes", "no"]),
+                        question("Which?", &["a", "b", "c"]),
+                    ],
+                    judging: Judging::Endpoint,
                 },
             ),
         ];
@@ -3654,5 +4256,143 @@ mod tests
         let mut invalid = line(&["--state", "dir", "report", TREE, CONTENT]);
         invalid.push(not_utf8());
         assert!(matches!(refused(invalid), UsageError::Text(_)));
+        let mut invalid = line(&["--state", "dir", "judge", "ask", "--question"]);
+        invalid.push(not_utf8());
+        assert!(matches!(refused(invalid), UsageError::Text(_)));
+        let mut invalid = line(&[
+            "--state",
+            "dir",
+            "judge",
+            "ask",
+            "--question",
+            "Did it land?",
+            "--option",
+        ]);
+        invalid.push(not_utf8());
+        assert!(matches!(refused(invalid), UsageError::Text(_)));
+        let judged = |words: &[&str]| {
+            let mut judged = line(&["--state", "dir", "judge"]);
+            judged.extend(line(words));
+            refused(judged)
+        };
+        let asked = [
+            "--question",
+            "Did it land?",
+            "--option",
+            "yes",
+            "--option",
+            "no",
+        ];
+        let ask = |words: &[&'static str]| {
+            let mut ask = vec!["ask"];
+            ask.extend(words);
+            ask
+        };
+        let verdict = |words: &[&'static str]| {
+            let mut verdict = vec!["verdict", TREE, "--rubric", CONTENT];
+            verdict.extend(words);
+            verdict
+        };
+        assert!(matches!(judged(&[]), UsageError::Operands(Verb::Judge)));
+        assert!(matches!(judged(&["tally"]), UsageError::Command(word) if word == "tally"));
+        assert!(matches!(
+            judged(&["--rubric", CONTENT, "ask"]),
+            UsageError::Arguments(_)
+        ));
+        assert!(
+            matches!(
+                judged(&ask(&["--rubric", CONTENT, "--transcript", CONTENT])),
+                UsageError::Arguments(_)
+            ),
+            "`ask` belongs to no rubric"
+        );
+        assert!(matches!(
+            judged(&ask(&[
+                "--option",
+                "yes",
+                "--question",
+                "Did it land?",
+                "--option",
+                "no",
+                "--transcript",
+                CONTENT
+            ])),
+            UsageError::Unasked
+        ));
+        assert!(matches!(
+            judged(&ask(&["--transcript", CONTENT])),
+            UsageError::NoQuestion
+        ));
+        assert!(matches!(
+            judged(&verdict(&["--transcript", CONTENT])),
+            UsageError::NoQuestion
+        ));
+        let mut twice = ask(&asked);
+        twice.extend(asked);
+        twice.extend(["--transcript", CONTENT]);
+        assert!(
+            matches!(judged(&twice), UsageError::Operands(Verb::Ask)),
+            "`ask` asks one question"
+        );
+        let mut operand = ask(&asked);
+        operand.extend(["--transcript", CONTENT, TREE]);
+        assert!(matches!(judged(&operand), UsageError::Operands(Verb::Ask)));
+        assert!(matches!(judged(&ask(&asked)), UsageError::NoTranscript));
+        assert!(matches!(judged(&verdict(&asked)), UsageError::NoTranscript));
+        let mut unruled = vec!["verdict", TREE, "--transcript", CONTENT];
+        unruled.extend(asked);
+        assert!(matches!(judged(&unruled), UsageError::NoRubric));
+        let mut treeless = vec!["verdict", "--rubric", CONTENT, "--transcript", CONTENT];
+        treeless.extend(asked);
+        assert!(matches!(
+            judged(&treeless),
+            UsageError::Operands(Verb::Verdict)
+        ));
+        let mut pathed = vec![
+            "verdict",
+            PATH,
+            "--rubric",
+            CONTENT,
+            "--transcript",
+            CONTENT,
+        ];
+        pathed.extend(asked);
+        assert!(matches!(judged(&pathed), UsageError::NotTree));
+        let mut short = ask(&asked);
+        short.extend(["--transcript", "0e0e0e0e"]);
+        assert!(matches!(judged(&short), UsageError::Operand {
+            operand: Operand::Transcript,
+            ..
+        }));
+        let mut short = vec!["verdict", TREE, "--rubric", "0e0e0e0e"];
+        short.extend(asked);
+        assert!(matches!(judged(&short), UsageError::Operand {
+            operand: Operand::Rubric,
+            ..
+        }));
+        assert!(matches!(
+            judged(&verdict(&[
+                "--transcript",
+                CONTENT,
+                "--question",
+                "Did it land?",
+                "--option",
+                "yes"
+            ])),
+            UsageError::Question(QuestionError::Few)
+        ));
+        assert!(matches!(
+            judged(&ask(&[
+                "--transcript",
+                CONTENT,
+                "--question",
+                "",
+                "--option",
+                "yes",
+                "--option",
+                "no"
+            ])),
+            UsageError::Question(QuestionError::Blank)
+        ));
     }
 }

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+  "crates/judge-oracle",
   "crates/record-tree",
   "crates/seat-slot",
   "crates/surface-driver",
@@ -40,8 +41,15 @@ default-features = false
 version = "2.11"
 default-features = false
 
+# The judge: the letter readout over a model, its backends.
+# consumers:
+# - surface-peer
+[workspace.dependencies.domhringr-judge-oracle]
+path = "crates/judge-oracle"
+
 # The record library: the tree store, the endpoint, sync.
 # consumers:
+# - judge-oracle
 # - seat-slot
 # - surface-peer
 [workspace.dependencies.domhringr-record-tree]
@@ -75,6 +83,7 @@ features = ["alloc"]
 # the chunk DAG later without re-encoding. The gandr sibling sits at
 # `vendor/gandr` at the revision `[workspace.metadata.siblings]` pins.
 # consumers:
+# - judge-oracle
 # - record-tree
 [workspace.dependencies.gandr-storage-values]
 path = "vendor/gandr/crates/storage-values"
@@ -89,10 +98,12 @@ default-features = false
 
 # QUIC endpoints dialed by public key, with relay and hole punching.
 # features:
-# - tls-ring: the crypto provider the `N0` preset requires
+# - tls-ring: the crypto provider the `N0` preset requires, and the one the
+#   judge's HTTPS client is configured with
 # - portmapper: UPnP / NAT-PMP port mapping, so a peer behind a home router is
 #   directly reachable across networks
 # consumers:
+# - judge-oracle
 # - record-tree
 # - seat-slot
 [workspace.dependencies.iroh]
@@ -115,12 +126,47 @@ default-features = false
 version = "0.3"
 default-features = false
 
+# The judge's HTTP client for an OpenAI-compatible endpoint. Already in the
+# graph under iroh with this feature among its own, so it adds no build. The
+# TLS configuration is iroh's: its webpki roots and its ring provider.
+# features:
+# - rustls-no-provider: rustls without a provider of its own, so the client
+#   takes iroh's preconfigured TLS
+# consumers:
+# - judge-oracle
+[workspace.dependencies.reqwest]
+version = "0.13"
+default-features = false
+features = ["rustls-no-provider"]
+
 # The sedimentree: tree and commit identities, blobs.
 # consumers:
 # - record-tree
 [workspace.dependencies.sedimentree_core]
 version = "0.15"
 default-features = false
+
+# Serialization for the judge's request to and response from an
+# OpenAI-compatible endpoint. Already in the graph with `derive`.
+# features:
+# - alloc: `String` and `Vec` fields in the wire structs
+# - derive: the wire structs' `Serialize` and `Deserialize`
+# consumers:
+# - judge-oracle
+[workspace.dependencies.serde]
+version = "1"
+default-features = false
+features = ["alloc", "derive"]
+
+# JSON text for the judge's wire structs.
+# features:
+# - alloc: `to_vec` and `from_slice`, which need no more of std
+# consumers:
+# - judge-oracle
+[workspace.dependencies.serde_json]
+version = "1"
+default-features = false
+features = ["alloc"]
 
 # The subduction sync protocol: the peer, its builder, storage policy.
 # consumers:
@@ -164,6 +210,7 @@ default-features = false
 # `derive(Error)` for the record library's, the seat's and the peer binary's
 # error enums.
 # consumers:
+# - judge-oracle
 # - surface-peer
 # - seat-slot
 # - record-tree
@@ -177,6 +224,7 @@ default-features = false
 # - time: `tokio::time::timeout` behind subduction's call deadlines
 # - sync: the seat's event channel and its lock on the dispatches it acts on
 # consumers:
+# - judge-oracle (dev)
 # - surface-peer
 # - seat-slot
 # - record-tree

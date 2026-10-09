@@ -395,6 +395,19 @@ impl From<Vec<u8>> for Content
     }
 }
 
+impl From<Content> for Vec<u8>
+{
+    /// The content's bytes, taken without a copy.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn from(content: Content) -> Self
+    {
+        content.0
+    }
+}
+
 /// A commit id abbreviated by hand to a prefix of its lowercase hex digits.
 ///
 /// It holds at least 8 digits and fewer than 64, and names the one commit in a
