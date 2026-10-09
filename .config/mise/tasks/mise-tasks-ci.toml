@@ -22,6 +22,8 @@
 # act resets Git indexes even offline, so each invocation snapshots the shared
 # action cache. A green run atomically publishes only new entries; a bounded
 # directory lock serializes publication, never the gates themselves.
+# Two host-wide slots bound concurrent gates across repositories and worktrees.
+# Acquisition waits for a free slot and reclaims holders whose process is gone.
 # The gandr sibling is a real clone at the revision the root manifest pins,
 # materialised in the disposable clone's vendor/ (`sibling:sync --clone`) so
 # act copies it with the tree; vendor/ is gitignored, so the copy keeps
@@ -78,6 +80,8 @@ lockdir="${action_cache}.publish-lock"
 publish=
 locked=false
 act_pid=
+slots="${XDG_CACHE_HOME:-$HOME/.cache}/act.slots"
+slot=
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
@@ -89,11 +93,55 @@ cleanup() {
   if [[ "$locked" == true ]]; then rmdir "$lockdir" || status=1; fi
   if [[ -n "$publish" ]]; then rm -rf "$publish" || status=1; fi
   rm -rf "$scratch" || status=1
+  if [[ -n "$slot" ]]; then
+    rm -f "$slot/pid" || status=1
+    rmdir "$slot" || status=1
+    printf '%s Released act slot %s (pid %s)\n' "$(date -u +%FT%TZ)" "${slot##*/}" "$$"
+  fi
   exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+mkdir -p "$slots"
+announced=false
+while [[ -z "$slot" ]]; do
+  for candidate in "$slots/slot-1" "$slots/slot-2"; do
+    if mkdir "$candidate" 2>/dev/null; then
+      slot=$candidate
+      printf '%s\n' "$$" > "$slot/pid"
+      printf '%s Acquired act slot %s (pid %s)\n' "$(date -u +%FT%TZ)" "${slot##*/}" "$$"
+      break
+    fi
+    # Serialize reclaimers, then read the current holder again. Never remove
+    # a replacement holder based on a pid read before obtaining this lock.
+    if mkdir "${candidate}.reap" 2>/dev/null; then
+      if [[ -s "$candidate/pid" ]]; then
+        if pgrep -F "$candidate/pid" >/dev/null; then
+          status=0
+        else
+          status=$?
+        fi
+        if [[ "$status" == 1 ]]; then
+          printf '%s Reclaiming act slot %s (dead pid %s)\n' "$(date -u +%FT%TZ)" "${candidate##*/}" "$(<"$candidate/pid")"
+          rm -f "$candidate/pid"
+          rmdir "$candidate"
+        elif [[ "$status" != 0 ]]; then
+          rmdir "${candidate}.reap"
+          exit "$status"
+        fi
+      fi
+      rmdir "${candidate}.reap"
+    fi
+  done
+  if [[ -z "$slot" ]]; then
+    if [[ "$announced" == false ]]; then
+      printf '%s Waiting for an act slot\n' "$(date -u +%FT%TZ)"
+      announced=true
+    fi
+    sleep 1
+  fi
+done
 mkdir -p "$action_cache" "$scratch/actions"
 cp -R "$action_cache/." "$scratch/actions/"
 git clone --quiet --local --no-hardlinks -- "{{config_root}}" "$scratch/checkout"
@@ -122,4 +170,154 @@ for entry in "$publish/"*; do
   [[ -d "$entry" && ! -e "$action_cache/${entry##*/}" ]] || continue
   mv "$entry" "$action_cache/"
 done
+'''
+
+# Head checks and merge-group checks are separate runs. Watch the queue entry
+# as well as the pull request; green head checks alone do not prove landing.
+["pr:land"]
+description = "Enable auto-merge and wait for the merge queue outcome"
+usage = 'arg "[number]" help="pull request number; defaults to the current branch"'
+run = '''
+{% raw %}#!/usr/bin/env bash
+set -euo pipefail
+number=${usage_number:-}
+if [[ -z "$number" ]]; then number=$(gh pr view --json number --jq .number); fi
+[[ "$number" =~ ^[1-9][0-9]*$ ]] || { echo 'Expected a pull request number' >&2; exit 2; }
+repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+owner=${repo%/*}
+name=${repo#*/}
+deadline=$((SECONDS + 5400))
+queued=false
+previous=
+
+pr_state() {
+  gh pr view "$number" -R "$repo" --json state,mergeable,mergeStateStatus,autoMergeRequest,mergeCommit,baseRefName,statusCheckRollup --jq '[.state, .mergeable, .mergeStateStatus, (.autoMergeRequest != null), (.mergeCommit.oid // "-"), .baseRefName, (.statusCheckRollup | length)] | @tsv'
+}
+queue_state() {
+  gh api graphql -f owner="$owner" -f name="$name" -F number="$number" -f query="
+    query(\$owner: String!, \$name: String!, \$number: Int!) {
+      repository(owner: \$owner, name: \$name) {
+        pullRequest(number: \$number) {
+          isInMergeQueue
+          mergeQueueEntry { state position }
+        }
+      }
+    }" --jq '.data.repository.pullRequest | [.isInMergeQueue, (.mergeQueueEntry.state // "-"), (.mergeQueueEntry.position // 0)] | @tsv'
+}
+group_run() {
+  gh run list -R "$repo" --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url,status --jq "[.[] | select(.headBranch | split(\"/\") | last | startswith(\"pr-$number-\"))][0] // empty | [.databaseId, .url, .status, .conclusion] | @tsv"
+}
+job_times() {
+  gh run view "$1" -R "$repo" --json jobs --jq '.jobs[] | [.name, (if .conclusion == "skipped" then "0s" elif .startedAt == null or .completedAt == null or .startedAt == "" or .completedAt == "" then "pending" else (((.completedAt | fromdateiso8601) - (.startedAt | fromdateiso8601)) | tostring) + "s" end), .conclusion] | @tsv'
+}
+conflicts() {
+  local ahead other files own file shared
+  own=$(gh pr view "$number" -R "$repo" --json files --jq '.files[].path')
+  ahead=$(gh api graphql --paginate -f owner="$owner" -f name="$name" -f branch="$base" -f query="
+    query(\$owner: String!, \$name: String!, \$branch: String!, \$endCursor: String) {
+      repository(owner: \$owner, name: \$name) {
+        mergeQueue(branch: \$branch) {
+          entries(first: 100, after: \$endCursor) {
+            nodes { position pullRequest { number } }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }" --jq ".data.repository.mergeQueue.entries.nodes[] | select(.position < $position) | .pullRequest.number")
+  printf 'PR #%s is UNMERGEABLE in the queue. Entries ahead:\n' "$number"
+  while IFS= read -r other; do
+    [[ -n "$other" ]] || continue
+    printf 'PR #%s; shared files:\n' "$other"
+    files=$(gh pr view "$other" -R "$repo" --json files --jq '.files[].path')
+    shared=false
+    while IFS= read -r file; do
+      [[ -n "$file" ]] || continue
+      if [[ $'\n'"$own"$'\n' == *$'\n'"$file"$'\n'* ]]; then
+        printf '  %s\n' "$file"
+        shared=true
+      fi
+    done <<< "$files"
+    if [[ "$shared" == false ]]; then echo '  (none)'; fi
+  done <<< "$ahead"
+  echo "rebase onto main once they merge, then run \`pr:land\` again"
+}
+
+initial=$(pr_state)
+IFS=$'\t' read -r state mergeable merge_status auto commit base check_count <<< "$initial"
+entry=$(queue_state)
+IFS=$'\t' read -r in_queue queue_status position <<< "$entry"
+if [[ "$in_queue" == true ]]; then queued=true; fi
+if [[ "$state" == OPEN && "$auto" == false && "$in_queue" == false ]]; then
+  gh pr merge "$number" -R "$repo" --merge --auto
+fi
+while (( SECONDS < deadline )); do
+  snapshot=$(pr_state)
+  IFS=$'\t' read -r state mergeable merge_status auto commit base check_count <<< "$snapshot"
+  entry=$(queue_state)
+  IFS=$'\t' read -r in_queue queue_status position <<< "$entry"
+  current="$snapshot $entry"
+  if [[ "$current" != "$previous" ]]; then
+    printf 'PR #%s: %s; %s; %s; auto-merge=%s; queued=%s; entry=%s; position=%s; checks=%s\n' "$number" "$state" "$mergeable" "$merge_status" "$auto" "$in_queue" "$queue_status" "$position" "$check_count"
+    previous=$current
+  fi
+  if [[ "$in_queue" == true ]]; then queued=true; fi
+  if [[ "$state" == MERGED ]]; then
+    run=$(group_run)
+    if [[ -n "$run" ]]; then
+      IFS=$'\t' read -r run_id url run_status conclusion <<< "$run"
+      if [[ "$run_status" == completed ]]; then
+        printf 'Merged PR #%s: %s\nMerge-group run: %s\n' "$number" "$commit" "$url"
+        job_times "$run_id"
+        exit 0
+      fi
+    fi
+  elif [[ "$queue_status" == UNMERGEABLE ]]; then
+    conflicts
+    exit 3
+  elif [[ "$state" == CLOSED || ( "$queued" == true && "$in_queue" == false && "$auto" == false ) ]]; then
+    run=$(group_run)
+    if [[ -n "$run" ]]; then
+      IFS=$'\t' read -r run_id url run_status conclusion <<< "$run"
+      if [[ "$run_status" == completed ]]; then
+        printf 'PR #%s dequeued or closed. Merge-group run: %s (%s)\n' "$number" "$url" "$conclusion"
+        job_times "$run_id"
+        if [[ "$conclusion" == failure ]]; then
+          gh run view "$run_id" -R "$repo" --log-failed
+        else
+          gh run view "$run_id" -R "$repo" --log
+        fi
+        exit 1
+      fi
+    else
+      printf 'PR #%s dequeued or closed without merging; no merge-group run found.\n' "$number"
+      exit 1
+    fi
+  elif [[ ( "$merge_status" == BLOCKED || "$merge_status" == UNSTABLE ) && "$check_count" != 0 ]]; then
+    check_status=0
+    failed=$(gh pr checks "$number" -R "$repo" --json bucket,name,state,link --jq '.[] | select(.bucket == "fail" or .bucket == "cancel") | [.name, .state, .link] | @tsv') || check_status=$?
+    if [[ "$check_status" != 0 && "$check_status" != 1 && "$check_status" != 8 ]]; then exit "$check_status"; fi
+    if [[ -n "$failed" ]]; then
+      logs_ready=true
+      runs=' '
+      while IFS=$'\t' read -r _check_name _check_state link; do
+        if [[ "$link" =~ /actions/runs/([0-9]+) ]]; then
+          run_id=${BASH_REMATCH[1]}
+          [[ "$runs" != *" $run_id "* ]] || continue
+          runs+="$run_id "
+          run_status=$(gh run view "$run_id" -R "$repo" --json status --jq .status)
+          if [[ "$run_status" != completed ]]; then logs_ready=false; fi
+        fi
+      done <<< "$failed"
+      if [[ "$logs_ready" == true ]]; then
+        printf 'PR #%s checks failed:\n%s\n' "$number" "$failed"
+        for run_id in $runs; do gh run view "$run_id" -R "$repo" --log-failed; done
+        exit 1
+      fi
+    fi
+  fi
+  sleep 30
+done
+printf 'Timed out after 90 minutes: PR #%s %s\n' "$number" "$previous" >&2
+exit 2
+{% endraw %}
 '''
