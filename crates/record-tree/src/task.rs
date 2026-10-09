@@ -1,7 +1,8 @@
 //! Tasks: a tree read as a task — the operator's dispatch of a brief to a
 //! seat, that seat's reports, handoffs and retirement, the verdicts judges
-//! rule on it, the verifications runners record on it and the gradings of
-//! its verdicts — and where the task stands once its commits are folded.
+//! rule on it, the verifications runners record on it, the gradings of its
+//! verdicts, and the operator's decisions and landings — and where the task
+//! stands once its commits are folded.
 //!
 //! A dispatch names the seat it puts in the task's slot and the brief
 //! ([`Brief`]): an anchor, or the hash of the brief's content
@@ -17,9 +18,14 @@
 //! current dispatch, the playbook by hash, the step by its identifier
 //! ([`StepId`]), the verifier's output by hash and how its process ended
 //! ([`Status`]); a grading names a verdict and grades each of its answers
-//! ([`Grade`]). Each is a step of the task and leaves the attempt's standing
-//! as it was: which judge or runner a task trusts, and what its checks
-//! decide, is the playbook's and the rubric's.
+//! ([`Grade`]); the operator's decision names the current dispatch and what
+//! is decided of it ([`Decision`]), and a landing the decision to land it
+//! carries out and the revision the change landed at ([`Revision`]). Each is
+//! a step of the task. A verdict moves the attempt no further; a
+//! verification, a grading, a decision and a landing each advance its
+//! [`Progress`], which ranks them in that order and never falls back: which
+//! judge or runner a task trusts, and what its checks decide, is the
+//! playbook's, the rubric's and the operator's.
 //!
 //! [`ContentHash`]: crate::id::ContentHash
 
@@ -35,6 +41,8 @@ use crate::anchor::Anchor;
 use crate::check::Grade;
 use crate::check::Status;
 use crate::check::StepId;
+use crate::decision::Decision;
+use crate::decision::Revision;
 use crate::id::ContentHash;
 use crate::id::PeerKey;
 use crate::line::Field;
@@ -262,6 +270,30 @@ pub enum Step
         /// The grades composed across the rubric.
         composed: Grade,
     },
+    /// The operator decided the attempt `dispatch` made.
+    Decide
+    {
+        /// The dispatch decided.
+        dispatch: CommitId,
+        /// The operator who decided.
+        operator: PeerKey,
+        /// What was decided.
+        decision: Decision,
+    },
+    /// The operator carried out `decided`, a decision to land the change of
+    /// `dispatch`: the repository's default branch stood at `merge` once the
+    /// change was in.
+    Landed
+    {
+        /// The dispatch whose change landed.
+        dispatch: CommitId,
+        /// The decision carried out.
+        decided: CommitId,
+        /// The operator who decided it, and landed it.
+        operator: PeerKey,
+        /// The revision the change landed at.
+        merge: Revision,
+    },
 }
 
 /// Who a dispatch's slot is with.
@@ -290,8 +322,81 @@ pub enum Answer
     Reported(CommitId),
 }
 
-/// The current attempt: the dispatch last in canonical order, its slot, and
-/// its report.
+/// How far an attempt has gone past its report.
+///
+/// The furthest of the verifications, gradings, decisions and landings
+/// admitted on its dispatch, ranked in that order, and within the furthest
+/// rank the one last in canonical order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Progress
+{
+    /// No verification, grading, decision or landing names the dispatch.
+    Unchecked,
+    /// A verifier ran on the dispatch: this verification.
+    Verified(CommitId),
+    /// A verdict on the dispatch was graded: this grading, composed so.
+    Graded
+    {
+        /// The grading's commit.
+        grading: CommitId,
+        /// Its grades composed across the rubric.
+        composed: Grade,
+    },
+    /// The operator decided the dispatch: this decision.
+    Decided
+    {
+        /// The decision's commit.
+        decide: CommitId,
+        /// What was decided.
+        decision: Decision,
+    },
+    /// The dispatch's change landed: this landing, at this revision.
+    Landed
+    {
+        /// The landing's commit.
+        landed: CommitId,
+        /// The revision the change landed at.
+        merge: Revision,
+    },
+}
+
+impl Progress
+{
+    /// Where the progress ranks: unchecked, then verified, graded, decided
+    /// and landed.
+    ///
+    /// # Specification
+    /// trivial.
+    const fn rank(&self) -> Rank
+    {
+        match *self {
+            | Self::Unchecked => Rank::Unchecked,
+            | Self::Verified(_) => Rank::Verified,
+            | Self::Graded { .. } => Rank::Graded,
+            | Self::Decided { .. } => Rank::Decided,
+            | Self::Landed { .. } => Rank::Landed,
+        }
+    }
+}
+
+/// The rank of a [`Progress`], in the order an attempt advances through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Rank
+{
+    /// Nothing past the report.
+    Unchecked,
+    /// A verification.
+    Verified,
+    /// A grading.
+    Graded,
+    /// A decision.
+    Decided,
+    /// A landing.
+    Landed,
+}
+
+/// The current attempt: the dispatch last in canonical order, its slot, its
+/// report, and how far past it the attempt has gone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attempt
 {
@@ -304,6 +409,8 @@ pub struct Attempt
     slot: Slot,
     /// Whether the dispatch is reported on.
     answer: Answer,
+    /// How far the attempt has gone past its report.
+    progress: Progress,
 }
 
 impl Attempt
@@ -352,6 +459,17 @@ impl Attempt
         self.answer
     }
 
+    /// How far the attempt has gone past its report.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub const fn progress(&self) -> &Progress
+    {
+        &self.progress
+    }
+
     /// The seat the slot is with: its holder, or the holder who retired from
     /// it.
     ///
@@ -363,6 +481,23 @@ impl Attempt
     {
         match self.slot {
             | Slot::Held(seat) | Slot::Retired { by: seat, .. } => seat,
+        }
+    }
+
+    /// Advance the attempt to `next` unless it has gone further already.
+    ///
+    /// # Specification
+    /// - ensures: the progress is `next` iff `next` ranks at or above the
+    ///   progress held, so a later step of the same rank replaces an earlier
+    ///   one and a lower rank never undoes a higher.
+    /// - panics: none.
+    fn advance(
+        &mut self,
+        next: Progress,
+    )
+    {
+        if next.rank() >= self.progress.rank() {
+            self.progress = next;
         }
     }
 }
@@ -380,6 +515,67 @@ pub enum Current
     Undispatched,
     /// The current attempt.
     Attempt(Attempt),
+}
+
+impl fmt::Display for Current
+{
+    /// Write where the task stands, as one line without its newline:
+    /// `undispatched`; for an attempt checked past its report, its progress —
+    /// `landed <dispatch> <landing> <merge>`, `decided <dispatch>
+    /// <decision-commit> <decision>`, `graded <dispatch> <grading>
+    /// <composed>` or `verified <dispatch> <verification>`; otherwise
+    /// `reported <dispatch> <report>`, `stalled <dispatch> <retirement>` for a
+    /// slot retired from without a report, or `dispatched <dispatch>
+    /// <holder>`.
+    ///
+    /// # Specification
+    /// - ensures: the line holds no newline: a rework's reason is escaped as
+    ///   [`Decision`]'s `Display` escapes it.
+    /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — each standing is printed as a task's last line by a
+    ///   case of its own.
+    /// - witness: `fold::tests::a_task_prints_one_line_per_step_and_its_standing`
+    #[inline]
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result
+    {
+        let Self::Attempt(ref attempt) = *self
+        else {
+            return f.write_str("undispatched");
+        };
+        let dispatch = attempt.dispatch;
+        match (&attempt.progress, attempt.answer, attempt.slot) {
+            | (&Progress::Landed { landed, merge }, ..) => {
+                write!(f, "landed {dispatch} {landed} {merge}")
+            },
+            | (
+                &Progress::Decided {
+                    decide,
+                    ref decision,
+                },
+                ..,
+            ) => write!(f, "decided {dispatch} {decide} {decision}"),
+            | (&Progress::Graded { grading, composed }, ..) => {
+                write!(f, "graded {dispatch} {grading} {composed}")
+            },
+            | (&Progress::Verified(verification), ..) => {
+                write!(f, "verified {dispatch} {verification}")
+            },
+            | (&Progress::Unchecked, Answer::Reported(report), _) => {
+                write!(f, "reported {dispatch} {report}")
+            },
+            | (&Progress::Unchecked, Answer::Awaited, Slot::Retired { at, .. }) => {
+                write!(f, "stalled {dispatch} {at}")
+            },
+            | (&Progress::Unchecked, Answer::Awaited, Slot::Held(holder)) => {
+                write!(f, "dispatched {dispatch} {holder}")
+            },
+        }
+    }
 }
 
 /// A tree read as a task: the seat receipts the fold admitted, and the
@@ -436,7 +632,8 @@ impl Task
     ///
     /// # Specification
     /// - ensures: the step is appended, and the dispatch is the current
-    ///   attempt, its slot held by `seat` and its report awaited.
+    ///   attempt, its slot held by `seat`, its report awaited and nothing past
+    ///   it checked.
     /// - panics: none.
     pub(crate) fn dispatch(
         &mut self,
@@ -450,19 +647,22 @@ impl Task
             brief: brief.clone(),
             slot: Slot::Held(seat),
             answer: Answer::Awaited,
+            progress: Progress::Unchecked,
         });
         self.steps.push((commit, Step::Dispatch { seat, brief }));
     }
 
     /// Record the admitted `step` of `commit`: a report, a handoff, a
-    /// retirement, a verdict, a verification or a grading.
+    /// retirement, a verdict, a verification, a grading, a decision or a
+    /// landing.
     ///
     /// # Specification
     /// - ensures: the step is appended; when it answers the current attempt's
     ///   dispatch, a report makes `commit` the attempt's report, a handoff puts
-    ///   its recipient in the slot, and a retirement retires the slot at
-    ///   `commit`. A verdict, a verification and a grading change no attempt,
-    ///   and a step answering an earlier dispatch changes none either: a later
+    ///   its recipient in the slot, a retirement retires the slot at `commit`,
+    ///   and a verification, a grading, a decision and a landing advance its
+    ///   progress ([`Attempt::advance`]). A verdict changes no attempt, and a
+    ///   step answering an earlier dispatch changes none either: a later
     ///   dispatch superseded it.
     pub(crate) fn answer(
         &mut self,
@@ -484,13 +684,44 @@ impl Task
                         at: commit,
                     };
                 },
+                | Step::Verified { dispatch, .. } if dispatch == attempt.dispatch => {
+                    attempt.advance(Progress::Verified(commit));
+                },
+                | Step::Graded {
+                    dispatch, composed, ..
+                } if dispatch == attempt.dispatch => {
+                    attempt.advance(Progress::Graded {
+                        grading: commit,
+                        composed,
+                    });
+                },
+                | Step::Decide {
+                    dispatch,
+                    ref decision,
+                    ..
+                } if dispatch == attempt.dispatch => {
+                    attempt.advance(Progress::Decided {
+                        decide: commit,
+                        decision: decision.clone(),
+                    });
+                },
+                | Step::Landed {
+                    dispatch, merge, ..
+                } if dispatch == attempt.dispatch => {
+                    attempt.advance(Progress::Landed {
+                        landed: commit,
+                        merge,
+                    });
+                },
                 | Step::Dispatch { .. }
                 | Step::Report { .. }
                 | Step::Handoff { .. }
                 | Step::Retire { .. }
                 | Step::Verdict { .. }
                 | Step::Verified { .. }
-                | Step::Graded { .. } => {},
+                | Step::Graded { .. }
+                | Step::Decide { .. }
+                | Step::Landed { .. } => {},
             }
         }
         self.steps.push((commit, step));
@@ -505,12 +736,11 @@ impl fmt::Display for Task
     /// `retire <commit> <dispatch> <author>`, `verdict <commit> <dispatch>
     /// <judge> <rubric> <transcript>` followed by `ruling <commit> <question>
     /// <ruling>` per question asked, `verified <commit> <dispatch> <runner>
-    /// <playbook> <step> <output> <status>`, or `graded <commit> <dispatch>
+    /// <playbook> <step> <output> <status>`, `graded <commit> <dispatch>
     /// <verdict> <rubric> <composed>` followed by `grade <commit> <question>
-    /// <grade>` per question graded — then where it stands: `undispatched`,
-    /// `reported <dispatch> <report>`, `stalled <dispatch> <retirement>` for a
-    /// slot retired from without a report, or `dispatched <dispatch>
-    /// <holder>`.
+    /// <grade>` per question graded, `decide <commit> <dispatch> <operator>
+    /// <decision>`, or `landed <commit> <dispatch> <decided> <operator>
+    /// <merge>` — then where it stands, as [`Current`]'s `Display` writes it.
     ///
     /// # Specification
     /// - ensures: every line ends in a newline, and each step stays one line: a
@@ -522,9 +752,10 @@ impl fmt::Display for Task
     /// # Adequacy
     /// - hypothesis: L3 — a task with a dispatch by anchor, a handoff, a report
     ///   whose summary holds a backslash, a retirement, a verdict with a read
-    ///   and an unread ruling, a verification, a grading of that verdict and a
-    ///   second dispatch by content is printed and compared line for line, and
-    ///   each standing is printed by a case of its own.
+    ///   and an unread ruling, a verification, a grading of that verdict, a
+    ///   decision of each kind, the rework's reason holding a backslash, a
+    ///   landing and a second dispatch by content is printed and compared line
+    ///   for line, and each standing is printed by a case of its own.
     /// - witness: `fold::tests::a_task_prints_one_line_per_step_and_its_standing`
     #[inline]
     fn fmt(
@@ -597,23 +828,24 @@ impl fmt::Display for Task
                         writeln!(f, "grade {commit} {question} {grade}")?;
                     }
                 },
+                | Step::Decide {
+                    dispatch,
+                    operator,
+                    ref decision,
+                } => {
+                    writeln!(f, "decide {commit} {dispatch} {operator} {decision}")?;
+                },
+                | Step::Landed {
+                    dispatch,
+                    decided,
+                    operator,
+                    merge,
+                } => {
+                    writeln!(f, "landed {commit} {dispatch} {decided} {operator} {merge}")?;
+                },
             }
         }
-        match self.current {
-            | Current::Undispatched => writeln!(f, "undispatched"),
-            | Current::Attempt(ref attempt) => {
-                let dispatch = attempt.dispatch;
-                match (attempt.answer, attempt.slot) {
-                    | (Answer::Reported(report), _) => writeln!(f, "reported {dispatch} {report}"),
-                    | (Answer::Awaited, Slot::Retired { at, .. }) => {
-                        writeln!(f, "stalled {dispatch} {at}")
-                    },
-                    | (Answer::Awaited, Slot::Held(holder)) => {
-                        writeln!(f, "dispatched {dispatch} {holder}")
-                    },
-                }
-            },
-        }
+        writeln!(f, "{}", self.current)
     }
 }
 

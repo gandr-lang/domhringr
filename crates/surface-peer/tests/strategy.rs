@@ -786,11 +786,12 @@ question = { rubric = "rubric.toml", question = "tested" }
                 replayed.push(format!("grade {grading} {question} {grade}"));
             }
         }
-        replayed.push(format!("dispatched {dispatch} {s_peer}"));
+        replayed.push(format!("graded {dispatch} {third_grading} unmet"));
         assert_eq!(
             finish(peer(o).args(["replay", tree.as_str(), "--local"])),
             replayed,
-            "the replay shows every verification and grading on the dispatch"
+            "the replay shows every verification and grading on the dispatch, and the attempt \
+             graded as the last grading composed"
         );
     }
 
@@ -828,6 +829,7 @@ question = { rubric = "rubric.toml", question = "tested" }
             "dispatch {} {} content {BRIEF}",
             task.dispatch, task.seat
         )];
+        let mut standing = format!("dispatched {} {}", task.dispatch, task.seat);
         for file in rubric_files() {
             let Validated {
                 name,
@@ -943,9 +945,10 @@ question = { rubric = "rubric.toml", question = "tested" }
                         .iter()
                         .map(|&(hash, (_, grade))| format!("grade {grading} {hash} {grade}")),
                 );
+                standing = format!("graded {} {grading} {composed}", task.dispatch);
             }
         }
-        replayed.push(format!("dispatched {} {}", task.dispatch, task.seat));
+        replayed.push(standing);
         assert_eq!(
             finish(peer(o).args(["replay", task.tree.as_str(), "--local"])),
             replayed,

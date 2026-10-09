@@ -41,6 +41,16 @@
 //! each only from the key it names — the judge, the runner, the verdict's
 //! judge — while its dispatch is current.
 //!
+//! The operator closes the loop on the record too. A decision on the current
+//! dispatch ([`Kind::Decide`]) names its operator and lands the change,
+//! reworks it for a reason, or abandons the task ([`Decision`]); a landing
+//! ([`Kind::Landed`]) carries out a decision to land and names the
+//! repository's [`Revision`] the change landed at. The fold admits a decision
+//! only from the operator it names, holding the operator role — the owner or
+//! a member — and a landing only from its decision's operator. The attempt's
+//! [`Progress`] is the furthest of its checks, decision and landing the fold
+//! has admitted: verified, graded, decided, landed.
+//!
 //! A tree, the paths in it and its commits are named by [`Anchor`]s,
 //! `domhringr://<authority>/<path>` and `domhringr://<authority>/.commit/<id>`,
 //! whose [`Authority`] is the tree's key, a DNS name ([`Domain`]) or a label
@@ -92,6 +102,7 @@ extern crate alloc;
 
 mod anchor;
 mod check;
+mod decision;
 mod fold;
 mod id;
 mod identity;
@@ -122,6 +133,9 @@ pub use check::ParseStepIdError;
 pub use check::Signal;
 pub use check::Status;
 pub use check::StepId;
+pub use decision::Decision;
+pub use decision::ParseRevisionError;
+pub use decision::Revision;
 pub use fold::Refusal;
 pub use fold::Unopened;
 pub use fold::Verdict;
@@ -193,6 +207,7 @@ pub use task::Attempt;
 pub use task::Brief;
 pub use task::Current;
 pub use task::ParseSummaryError;
+pub use task::Progress;
 pub use task::Slot;
 pub use task::Step;
 pub use task::Summary;

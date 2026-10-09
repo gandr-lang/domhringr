@@ -33,6 +33,10 @@
 //!                        · close                                          Verified
 //!            | open 0x0f · bytes verdict (32) · word count · grade{count} · grade
 //!                        · close                                          Graded
+//!            | open 0x10 · bytes dispatch (32) · bytes operator (32) · decision
+//!                        · close                                          Decide
+//!            | open 0x11 · bytes decided (32) · bytes merge (20 or 32)
+//!                        · close                                          Landed
 //! target    := open 0x01 · anchor · close                                 Anchor
 //!            | open 0x02 · bytes endpoint (32) · close                    Endpoint
 //!            | open 0x03 · bytes datum (UTF-8) · close                    Datum
@@ -62,15 +66,18 @@
 //!            | open 0x02 · close                                          Unmet
 //!            | open 0x03 · close                                          Undecided
 //!            | open 0x04 · close                                          Refused
+//! decision  := open 0x01 · close                                          Land
+//!            | open 0x02 · bytes reason (UTF-8) · close                   Rework
+//!            | open 0x03 · close                                          Abandon
 //! ```
 //!
 //! A tree, in the receipt's header, as an authority or as the tree
 //! introduced, and an endpoint are ed25519 verifying keys; a grantee, a
-//! withdrawn peer, a seat, a handoff's recipient, a judge and a runner are
-//! 32-byte peer ids; a commit, an anchor's or the dispatch a report, a
-//! handoff, a retirement, a verdict or a verification names, or the verdict
-//! a grading names, is its whole 32-byte id, never a prefix; a content, a
-//! rubric, a transcript, a question, a playbook and a verifier's output are
+//! withdrawn peer, a seat, a handoff's recipient, a judge, a runner and an
+//! operator are 32-byte peer ids; a commit, an anchor's or the dispatch a
+//! report, a handoff, a retirement, a verdict or a verification names, or the
+//! verdict a grading names, is its whole 32-byte id, never a prefix; a content,
+//! a rubric, a transcript, a question, a playbook and a verifier's output are
 //! their 32-byte BLAKE3 hashes; a path is its segments joined by `/`, none
 //! empty or beginning with `.`; a domain is a DNS name as [`Domain`] admits
 //! it, a label one as [`Label`] admits it, a summary one as [`Summary`]
@@ -89,20 +96,24 @@
 //! holding the most. A process's exit code and a signal's number are words
 //! holding the 32 bits of their two's-complement value. A grading lists one
 //! grade per answer of the verdict it grades, in that verdict's order, then
-//! the grades composed.
+//! the grades composed. A decision names the dispatch it decides by its whole
+//! id and the operator who decides by its peer id, and a rework's reason is
+//! one line as [`Summary`] admits it; a landing
+//! names the decision it carries out by its whole id, and the revision it
+//! landed at as the 20 or 32 bytes of a git object id ([`Revision`]).
 //!
 //! The decoder admits exactly what the encoder writes, so a receipt has one
 //! blob. A constructor whose tag or payload it does not admit — another
 //! receipt tag or version, an unknown kind, target, brief, anchor, authority,
-//! address, ruling, reason, status or grade, an id or hash of the wrong
-//! length (an abbreviated commit id among them), a tree or endpoint that is
-//! not a verifying key, text that is not UTF-8, a path with an empty or
-//! reserved segment, a malformed domain, label, summary or step, an IP
-//! address of another length, a port beyond 65535, a relay that is no
-//! canonical `http` or `https` URL or holds `@`, addresses out of order or
-//! repeated, a probability that is no probability or is negative zero, a read
-//! ruling [`Readout::new`] refuses, a code or a signal beyond 32 bits — is
-//! refused as that constructor
+//! address, ruling, reason, status, grade or decision, an id or hash of the
+//! wrong length (an abbreviated commit id among them), a revision of neither
+//! 20 nor 32 bytes, a tree or endpoint that is not a verifying key, text that
+//! is not UTF-8, a path with an empty or reserved segment, a malformed domain,
+//! label, summary, rework reason or step, an IP address of another length, a
+//! port beyond 65535, a relay that is no canonical `http` or `https` URL or
+//! holds `@`, addresses out of order or repeated, a probability that is no
+//! probability or is negative zero, a read ruling [`Readout::new`] refuses, a
+//! code or a signal beyond 32 bits — is refused as that constructor
 //! ([`ValueError::UnexpectedConstructor`] at its open record): the value
 //! plane's refusals name token shapes, and this is the one that names the
 //! constructor a codec turns away.
@@ -140,6 +151,8 @@ use crate::check::Grade;
 use crate::check::Signal;
 use crate::check::Status;
 use crate::check::StepId;
+use crate::decision::Decision;
+use crate::decision::Revision;
 use crate::id::Address;
 use crate::id::ContentHash;
 use crate::id::Endpoint;
@@ -206,6 +219,12 @@ const VERIFIED: u8 = 0x0e;
 
 /// The constructor tag of [`Kind::Graded`].
 const GRADED: u8 = 0x0f;
+
+/// The constructor tag of [`Kind::Decide`].
+const DECIDE: u8 = 0x10;
+
+/// The constructor tag of [`Kind::Landed`].
+const LANDED: u8 = 0x11;
 
 /// The constructor tag of [`Target::Anchor`].
 const ANCHOR: u8 = 0x01;
@@ -287,6 +306,15 @@ const UNDECIDED: u8 = 0x03;
 
 /// The constructor tag of [`Grade::Refused`].
 const REFUSED: u8 = 0x04;
+
+/// The constructor tag of [`Decision::Land`].
+const LAND: u8 = 0x01;
+
+/// The constructor tag of [`Decision::Rework`].
+const REWORK: u8 = 0x02;
+
+/// The constructor tag of [`Decision::Abandon`].
+const ABANDON: u8 = 0x03;
 
 /// The domain an Open proof is signed under: the first of the two 32-byte
 /// blocks of the message it signs, the owner's peer key the second.
@@ -584,6 +612,28 @@ pub enum Kind
         grades: Vec<Grade>,
         /// The grades composed across the rubric.
         composed: Grade,
+    },
+    /// The author, the operator it names, decides the attempt `dispatch`
+    /// made: land its change, rework it, or abandon the task.
+    Decide
+    {
+        /// The dispatch decided.
+        dispatch: CommitId,
+        /// The operator: the peer whose key signs the decision.
+        operator: PeerKey,
+        /// What the operator decides.
+        decision: Decision,
+    },
+    /// The author, the operator of the decision `decided`, carried out that
+    /// decision to land an attempt's change: the repository's default branch
+    /// stood at `merge` once the change was in.
+    Landed
+    {
+        /// The decision carried out.
+        decided: CommitId,
+        /// The revision the change landed at: the merge commit, or the
+        /// change's own when the branch fast-forwarded to it.
+        merge: Revision,
     },
 }
 
@@ -969,6 +1019,60 @@ impl Receipt
         }))
     }
 
+    /// A fresh [`Kind::Decide`] in `tree` on `dispatch` by `operator`:
+    /// `decision`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the decision, and carries a
+    ///   fresh fence ([`Operation::random`]); the fold admits it only from
+    ///   `operator`, only while `operator` holds the operator role — the tree's
+    ///   owner or a member — and only while `dispatch` is current in its causal
+    ///   past.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn decide(
+        tree: TreeId,
+        dispatch: CommitId,
+        operator: PeerKey,
+        decision: Decision,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Decide {
+            dispatch,
+            operator,
+            decision,
+        }))
+    }
+
+    /// A fresh [`Kind::Landed`] in `tree` of `decided`: the change landed at
+    /// `merge`.
+    ///
+    /// # Specification
+    /// - ensures: the receipt names `tree`, records the landing, and carries a
+    ///   fresh fence ([`Operation::random`]); the fold admits it only from the
+    ///   operator, with `decided` an admitted decision to land in its causal
+    ///   past whose dispatch is still current.
+    /// - fails: [`RandomError`] when no fence can be drawn.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: the random source failed.
+    #[inline]
+    pub fn landed(
+        tree: TreeId,
+        decided: CommitId,
+        merge: Revision,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Landed { decided, merge }))
+    }
+
     /// A fresh [`Kind::Withdraw`] in `tree` of the presence of `of`.
     ///
     /// # Specification
@@ -1114,9 +1218,9 @@ impl CanonicalValue for Receipt
     /// # Adequacy
     /// - hypothesis: L3 — the flat forms of a note, a bind, a claim, an
     ///   introduction, a presence, a withdrawal, a dispatch by anchor and by
-    ///   content, a report, a handoff, a retirement, a verdict, a verification
-    ///   and a grading are compared byte for byte with records written
-    ///   independently, and every kind round-trips.
+    ///   content, a report, a handoff, a retirement, a verdict, a verification,
+    ///   a grading, a decision of each kind and a landing are compared byte for
+    ///   byte with records written independently, and every kind round-trips.
     /// - witness: `receipt::tests::a_note_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_bind_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_claim_and_an_introduction_encode_to_their_fixed_layouts`
@@ -1124,6 +1228,7 @@ impl CanonicalValue for Receipt
     /// - witness: `receipt::tests::the_seat_receipts_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::a_verdict_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::a_verification_and_a_grading_encode_to_their_fixed_layouts`
+    /// - witness: `receipt::tests::a_decision_and_a_landing_encode_to_their_fixed_layouts`
     /// - witness: `receipt::tests::every_kind_round_trips`
     #[inline]
     fn emit_tokens<Sink>(
@@ -1264,6 +1369,21 @@ impl CanonicalValue for Receipt
                 }
                 composed.emit_tokens(sink)?;
             },
+            | Kind::Decide {
+                dispatch,
+                operator,
+                ref decision,
+            } => {
+                sink.open(ConstructorTag::from(DECIDE))?;
+                sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(operator.peer_id().as_bytes().as_slice()))?;
+                decision.emit_tokens(sink)?;
+            },
+            | Kind::Landed { decided, merge } => {
+                sink.open(ConstructorTag::from(LANDED))?;
+                sink.bytes(TokenBytes::from(decided.as_bytes().as_slice()))?;
+                sink.bytes(TokenBytes::from(merge.as_ref()))?;
+            },
         }
         sink.close()?;
         sink.close()
@@ -1284,16 +1404,17 @@ impl CanonicalValue for Receipt
     ///   not a verifying key, a label that is not UTF-8 or not one [`Label`]
     ///   admits, a presence's proof or a withdrawn peer of the wrong length, a
     ///   seat, a dispatch, a content hash, a handoff's recipient, a judge, a
-    ///   rubric, a transcript, a question, a runner, a playbook, an output or a
-    ///   graded verdict of the wrong length, a summary that is not UTF-8 or not
-    ///   one [`Summary`] admits, a step that is not UTF-8 or not one [`StepId`]
-    ///   admits; as [`Target`]'s decoder refuses for a bind's target,
+    ///   rubric, a transcript, a question, a runner, a playbook, an output, an
+    ///   operator, a graded verdict or a landed decision of the wrong length, a
+    ///   summary that is not UTF-8 or not one [`Summary`] admits, a step that
+    ///   is not UTF-8 or not one [`StepId`] admits, a revision of neither 20
+    ///   nor 32 bytes; as [`Target`]'s decoder refuses for a bind's target,
     ///   [`Endpoint`]'s for a presented endpoint, [`Brief`]'s for a dispatch's
     ///   brief, [`Ruling`]'s for a verdict's ruling, [`Status`]'s for a
-    ///   verification's status and [`Grade`]'s for a grade; and the reader's
-    ///   own refusals for a record of the wrong kind, fewer answers than a
-    ///   verdict's count or more, fewer grades than a grading's count or more,
-    ///   a truncated stream or an exhausted budget.
+    ///   verification's status, [`Grade`]'s for a grade and [`Decision`]'s for
+    ///   a decision; and the reader's own refusals for a record of the wrong
+    ///   kind, fewer answers than a verdict's count or more, fewer grades than
+    ///   a grading's count or more, a truncated stream or an exhausted budget.
     /// - panics: none.
     ///
     /// # Errors
@@ -1444,6 +1565,21 @@ impl CanonicalValue for Receipt
                     grades,
                     composed,
                 }
+            },
+            | DECIDE => {
+                let dispatch = opened.commit(reader)?;
+                let operator = opened.peer(reader)?;
+                let decision = Decision::decode_tokens(reader)?;
+                Kind::Decide {
+                    dispatch,
+                    operator,
+                    decision,
+                }
+            },
+            | LANDED => {
+                let decided = opened.commit(reader)?;
+                let merge = opened.revision(reader)?;
+                Kind::Landed { decided, merge }
             },
             | _unknown => return Err(opened.refused()),
         };
@@ -2276,6 +2412,82 @@ impl CanonicalValue for Grade
     }
 }
 
+impl CanonicalValue for Decision
+{
+    /// Walk the decision into `sink` in the module grammar's order.
+    ///
+    /// # Specification
+    /// - ensures: on success `sink` received exactly one balanced value: the
+    ///   decision's constructor, holding a rework's reason as one bytes record.
+    /// - fails: propagates the sink's refusal unchanged.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: the sink refused a record.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a decision of each kind is compared byte for byte
+    ///   with records written independently, and round-trips.
+    /// - witness: `receipt::tests::a_decision_and_a_landing_encode_to_their_fixed_layouts`
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    #[inline]
+    fn emit_tokens<Sink>(
+        &self,
+        sink: &mut Sink,
+    ) -> Result<(), ValueError>
+    where
+        Sink: TokenSink + ?Sized,
+    {
+        match *self {
+            | Self::Land => sink.open(ConstructorTag::from(LAND))?,
+            | Self::Rework { ref reason } => {
+                sink.open(ConstructorTag::from(REWORK))?;
+                let reason: &str = reason.as_ref();
+                sink.bytes(TokenBytes::from(reason.as_bytes()))?;
+            },
+            | Self::Abandon => sink.open(ConstructorTag::from(ABANDON))?,
+        }
+        sink.close()
+    }
+
+    /// Read one decision from `reader`.
+    ///
+    /// # Specification
+    /// - ensures: on success the decision whose emission the records are, and
+    ///   the reader stands after the decision's close.
+    /// - fails: [`ValueError::UnexpectedConstructor`] at the decision's open
+    ///   record for an unknown decision and for a reason that is not UTF-8 or
+    ///   not one [`Summary`] admits; and the reader's own refusals for any
+    ///   other record or none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — witnessed through the receipt decoder: every decision
+    ///   round-trips, and an unknown decision and an empty reason each meet
+    ///   their refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    #[inline]
+    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    {
+        let opened = Opened::read(reader)?;
+        let decision = match u8::from(opened.tag) {
+            | LAND => Self::Land,
+            | REWORK => {
+                let reason = opened.summary(reader)?;
+                Self::Rework { reason }
+            },
+            | ABANDON => Self::Abandon,
+            | _unknown => return Err(opened.refused()),
+        };
+        reader.read_close()?;
+        Ok(decision)
+    }
+}
+
 /// A constructor's open record, as the receipt decoder read it.
 #[derive(Clone, Copy, Debug)]
 struct Opened
@@ -2532,6 +2744,27 @@ impl Opened
         step.parse::<StepId>().map_err(|_not_a_step| self.refused())
     }
 
+    /// Read the next record as a git object id in this constructor: 20 or
+    /// 32 bytes.
+    ///
+    /// # Specification
+    /// - ensures: on success the revision the bytes record spells.
+    /// - fails: this constructor's refusal ([`Opened::refused`]) for bytes of
+    ///   any other length, and the reader's refusals for any other record or
+    ///   none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    fn revision(
+        self,
+        reader: &mut TokenReader<'_>,
+    ) -> Result<Revision, ValueError>
+    {
+        let revision = <&[u8]>::from(reader.read_bytes()?);
+        Revision::try_from(revision).map_err(|_wrong_length| self.refused())
+    }
+
     /// The refusal of this constructor: its tag or its payload is not one the
     /// receipt grammar admits.
     ///
@@ -2580,6 +2813,8 @@ mod tests
     use crate::check::Signal;
     use crate::check::Status;
     use crate::check::StepId;
+    use crate::decision::Decision;
+    use crate::decision::Revision;
     use crate::id::ContentHash;
     use crate::id::Endpoint;
     use crate::id::EndpointKey;
@@ -2715,6 +2950,22 @@ mod tests
         let grades = vec![Grade::Met, Grade::Unmet, Grade::Undecided, Grade::Refused];
         for (graded, composed) in [(vec![], Grade::Met), (grades, Grade::Refused)] {
             receipts.push(Receipt::graded(tree(), dispatch, graded, composed).unwrap());
+        }
+        for decision in [
+            Decision::Land,
+            Decision::Rework {
+                reason: "gates red: größer".parse().unwrap(),
+            },
+            Decision::Abandon,
+        ] {
+            receipts.push(Receipt::decide(tree(), dispatch, peer, decision).unwrap());
+        }
+        for merge in [
+            "0123456789abcdef0123456789abcdef01234567",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ] {
+            let merge = merge.parse::<Revision>().unwrap();
+            receipts.push(Receipt::landed(tree(), dispatch, merge).unwrap());
         }
         let secret = iroh::SecretKey::from_bytes(&[7; 32]);
         let proof = EndpointProof::sign(&secret, peer);
@@ -3218,10 +3469,10 @@ mod tests
         receipt[3] = bytes(&[0x0f; 17]);
         assert_eq!(refused(&receipt), Err(constructor(1, 0)), "a long fence");
         let mut receipt = note(b"hi");
-        receipt[4] = open(16);
+        receipt[4] = open(18);
         assert_eq!(
             refused(&receipt),
-            Err(constructor(16, 4)),
+            Err(constructor(18, 4)),
             "an unknown kind"
         );
         let mut receipt = note(b"hi");
@@ -3815,6 +4066,84 @@ mod tests
             ),
             "a count above the grades given"
         );
+        let decide = |dispatch: &[u8], operator: &[u8], decision: Vec<Vec<u8>>| {
+            seated(
+                16,
+                [vec![bytes(dispatch), bytes(operator)], decision].concat(),
+            )
+        };
+        let landed = |decided: &[u8], merge: &[u8]| seated(17, vec![bytes(decided), bytes(merge)]);
+        for (records, case) in [
+            (
+                decide(&[0x0d; 32], &peer, vec![open(1), close()]),
+                "the well-formed decision to land",
+            ),
+            (
+                decide(&[0x0d; 32], &peer, vec![
+                    open(2),
+                    bytes(b"gates red"),
+                    close(),
+                ]),
+                "the well-formed decision to rework",
+            ),
+            (
+                decide(&[0x0d; 32], &peer, vec![open(3), close()]),
+                "the well-formed decision to abandon",
+            ),
+            (
+                landed(&[0x0d; 32], &[0x0e; 20]),
+                "the well-formed SHA-1 landing",
+            ),
+            (
+                landed(&[0x0d; 32], &[0x0e; 32]),
+                "the well-formed SHA-256 landing",
+            ),
+        ] {
+            assert!(refused(&records).is_ok(), "{case} decodes");
+        }
+        for (records, refusal, case) in [
+            (
+                decide(&[0x0d; 31], &peer, vec![open(1), close()]),
+                constructor(16, 4),
+                "a decision on a short dispatch",
+            ),
+            (
+                decide(&[0x0d; 32], &peer[.. 31], vec![open(1), close()]),
+                constructor(16, 4),
+                "a decision by a short operator",
+            ),
+            (
+                decide(&[0x0d; 32], &peer, vec![open(4), close()]),
+                constructor(4, 7),
+                "an unknown decision",
+            ),
+            (
+                decide(&[0x0d; 32], &peer, vec![open(2), bytes(b""), close()]),
+                constructor(2, 7),
+                "a rework for no reason",
+            ),
+            (
+                decide(&[0x0d; 32], &peer, vec![
+                    open(2),
+                    bytes(b"two\nlines"),
+                    close(),
+                ]),
+                constructor(2, 7),
+                "a rework whose reason breaks its line",
+            ),
+            (
+                landed(&[0x0d; 31], &[0x0e; 20]),
+                constructor(17, 4),
+                "a landing of a short decision",
+            ),
+            (
+                landed(&[0x0d; 32], &[0x0e; 21]),
+                constructor(17, 4),
+                "a landing at a revision of 21 bytes",
+            ),
+        ] {
+            assert_eq!(refused(&records), Err(refusal), "{case}");
+        }
     }
 
     #[test]
@@ -3897,6 +4226,84 @@ mod tests
              met, unmet, undecided and refused each an empty constructor, the composed \
              grade, two closes"
         );
+    }
+
+    #[test]
+    fn a_decision_and_a_landing_encode_to_their_fixed_layouts()
+    {
+        let bytes = |payload: &[u8]| {
+            let length = u64::try_from(payload.len()).unwrap().to_le_bytes();
+            [&[0x03_u8][..], &length, payload].concat()
+        };
+        let peer = PEER.parse::<PeerKey>().unwrap();
+        let header = [
+            vec![0x01_u8, 0x01],
+            vec![0x02, 2, 0, 0, 0, 0, 0, 0, 0],
+            bytes(tree().key().as_bytes()),
+            bytes(&[0x0f; 16]),
+        ]
+        .concat();
+        for (decision, encoded, case) in [
+            (
+                Decision::Land,
+                vec![0x01, 0x01, 0x05],
+                "land, an empty constructor",
+            ),
+            (
+                Decision::Rework {
+                    reason: "red".parse().unwrap(),
+                },
+                [vec![0x01, 0x02], bytes(b"red"), vec![0x05]].concat(),
+                "rework, holding its reason's bytes",
+            ),
+            (
+                Decision::Abandon,
+                vec![0x01, 0x03, 0x05],
+                "abandon, an empty constructor",
+            ),
+        ] {
+            let receipt = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Decide {
+                dispatch: CommitId::new([0x0d; 32]),
+                operator: peer,
+                decision,
+            });
+            let expected = [
+                header.clone(),
+                vec![0x01, 0x10],
+                bytes(&[0x0d; 32]),
+                bytes(peer.peer_id().as_bytes()),
+                encoded,
+                vec![0x05, 0x05],
+            ]
+            .concat();
+            assert_eq!(
+                receipt.encode().unwrap().as_slice(),
+                expected,
+                "open receipt, version word, tree, fence, open decision, dispatch, \
+                 operator, the decision: {case}; two closes"
+            );
+        }
+        for width in [20, 32] {
+            let merge = Revision::try_from(vec![0x0e; width].as_slice()).unwrap();
+            let receipt = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Landed {
+                decided: CommitId::new([0x0d; 32]),
+                merge,
+            });
+            let expected = [
+                header.clone(),
+                vec![0x01, 0x11],
+                bytes(&[0x0d; 32]),
+                bytes(&vec![0x0e; width]),
+                vec![0x05, 0x05],
+            ]
+            .concat();
+            assert_eq!(
+                receipt.encode().unwrap().as_slice(),
+                expected,
+                "open receipt, version word, tree, fence, open landing, decision, the \
+                 {width}-byte revision, two closes"
+            );
+        }
     }
 
     #[test]

@@ -109,9 +109,13 @@
 //! attempt's seat, or `--peer`, as `sync` does — the task's owner when no
 //! dispatch is admitted — syncs the task, and prints the `source` line, one
 //! line per seat receipt the fold admitted and where the task stands:
-//! `undispatched`, `dispatched <dispatch-id> <holder>`, `reported
-//! <dispatch-id> <report-id>`, or `stalled <dispatch-id> <retirement-id>`;
-//! `--local` prints the local store's task alone.
+//! `undispatched`; the furthest of a verification, a grading, a decision and
+//! a landing on the current dispatch, `verified <dispatch-id>
+//! <verification-id>`, `graded <dispatch-id> <grading-id> <composed>`,
+//! `decided <dispatch-id> <decision-id> <decision>` or `landed <dispatch-id>
+//! <landing-id> <revision>`; otherwise `dispatched <dispatch-id> <holder>`,
+//! `reported <dispatch-id> <report-id>`, or `stalled <dispatch-id>
+//! <retirement-id>`; `--local` prints the local store's task alone.
 //!
 //! A judge rules on a task's current dispatch. `judge ask` asks one question
 //! about a transcript — the content at `--transcript-file`, or the content

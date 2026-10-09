@@ -18,7 +18,7 @@ The record plane stores signed receipts in sedimentrees, folds them into views, 
 
 ## Synopsis
 
-**What.** `domhringr-record-tree` is the record plane's durable, replicated receipt store. It provides one sedimentree per tree, named by the tree's own verifying key, a view of each tree's owner, delegated write authority, admitted notes, bound paths, claimed DNS names, introduced trees, the book of which member is reachable at which endpoint, the task its seat receipts, judges' verdicts, runners' verifications and verdicts' gradings make of the tree, and admitted and refused commits, and the resolution against those views of an anchor naming a tree, a path in it, `domhringr://<authority>/<path>`, or a commit in it, `domhringr://<authority>/.commit/<commit-id>`, whose authority takes three forms: the tree's key, a DNS name, or a label.
+**What.** `domhringr-record-tree` is the record plane's durable, replicated receipt store. It provides one sedimentree per tree, named by the tree's own verifying key, a view of each tree's owner, delegated write authority, admitted notes, bound paths, claimed DNS names, introduced trees, the book of which member is reachable at which endpoint, the task its seat receipts, judges' verdicts, runners' verifications, verdicts' gradings and the operator's decisions and landings make of the tree, and admitted and refused commits, and the resolution against those views of an anchor naming a tree, a path in it, `domhringr://<authority>/<path>`, or a commit in it, `domhringr://<authority>/.commit/<commit-id>`, whose authority takes three forms: the tree's key, a DNS name, or a label.
 
 **Why.** Peers need the same interpretation of signed operations regardless of arrival order. Authority depends on a commit's causal past; retaining refused commits lets peers replicate the same evidence without treating every stored write as authorized.
 
@@ -40,8 +40,8 @@ The record plane stores signed receipts in sedimentrees, folds them into views, 
 ## Provided features
 
 - Persistent endpoint and signing identities in a state directory, and one minted key per tree opened.
-- Durable commits carrying `Open`, `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, `Retire`, `Verdict`, `Verified` or `Graded` receipts; an `Open` carries the tree key's proof, a `Present` the presented endpoint key's.
-- Canonical views with causal authority checks, path bindings, owner-only name claims, label introductions, a book of each member's own presented endpoint, a task of seat receipts, verdicts, verifications and gradings with its current attempt, and explicit refusals.
+- Durable commits carrying `Open`, `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, `Retire`, `Verdict`, `Verified`, `Graded`, `Decide` or `Landed` receipts; an `Open` carries the tree key's proof, a `Present` the presented endpoint key's.
+- Canonical views with causal authority checks, path bindings, owner-only name claims, label introductions, a book of each member's own presented endpoint, a task of seat receipts, verdicts, verifications, gradings, decisions and landings with its current attempt and how far it has progressed, and explicit refusals.
 - A judge's `Ruling` on a lettered question: read, as the answer `Letter` and each option's `Probability` with the mass outside the options (`Readout`), or unread for a named reason (`Unread`).
 - Anchors naming a tree, a path in it, or a commit in it by key, by DNS name, or by label, resolved by fold to a binding, to unbound, to a commit's verdict, to unknown, or to a named refusal; a `Reference` may abbreviate a commit id to a unique prefix of at least eight hex digits.
 - A `Witness` trait for a DNS name's candidate trees, with the `Dns` witness over `_domhringr.<domain>` TXT records and the `Static` witness supplied by hand.
@@ -156,7 +156,7 @@ Reversal: a book that cannot go stale, as when a dial that fails at a presence f
 
 ## Tasks
 
-A tree is also a task. A `Dispatch { seat, brief }` names the peer that is to act and the brief it acts on — an anchor, or a content hash; a `Report { dispatch, content, summary }` answers a dispatch with the BLAKE3 hash of what the seat produced and a one-line summary of at most 256 bytes; a `Handoff { dispatch, to }` moves the dispatch's slot to another peer; a `Retire { dispatch }` gives the slot up. `View::task` holds every admitted seat receipt in canonical order and the current attempt — the admitted dispatch last in canonical order, its slot, held or retired, and its answer, awaited or reported — and prints as one line per step and one saying where the task stands: `undispatched`, `dispatched <dispatch> <holder>`, `reported <dispatch> <report>` or `stalled <dispatch> <retirement>`.
+A tree is also a task. A `Dispatch { seat, brief }` names the peer that is to act and the brief it acts on — an anchor, or a content hash; a `Report { dispatch, content, summary }` answers a dispatch with the BLAKE3 hash of what the seat produced and a one-line summary of at most 256 bytes; a `Handoff { dispatch, to }` moves the dispatch's slot to another peer; a `Retire { dispatch }` gives the slot up. `View::task` holds every admitted seat receipt in canonical order and the current attempt — the admitted dispatch last in canonical order, its slot, held or retired, its answer, awaited or reported, and its progress past the report, as the decisions below state it — and prints as one line per step and one saying where the task stands: `undispatched`; for an attempt checked past its report, `verified <dispatch> <verification>`, `graded <dispatch> <grading> <composed>`, `decided <dispatch> <decision-commit> <decision>` or `landed <dispatch> <landing> <revision>`; otherwise `dispatched <dispatch> <holder>`, `reported <dispatch> <report>` or `stalled <dispatch> <retirement>`.
 
 **A dispatch is admitted from the owner or a member; a report, a handoff and a retirement from the dispatch's holder alone, on the current dispatch, both judged in the receipt's causal past.** The fold carries, beside a commit's grantees and seats, the course of the task in its causal past: the latest dispatch there and who holds its slot. A receipt naming another dispatch is refused `not current`, and one whose author does not hold the slot there `not holder`; so a report on a superseded dispatch, a second report after a handoff, and a report after the slot was retired are refused alike, whatever order they arrive in, while a report concurrent with a later dispatch is admitted as a step that answers nothing current. A dispatched seat may present its endpoint and withdraw its own presence without a grant: the seat is reached through the task's book, and it holds no other authority in the tree.
 
@@ -185,7 +185,7 @@ Reversal: a content store reachable from the record — a blob plane — when a 
 
 Reversal: a verdict that settles the task — accepting or reopening the attempt — which needs the judge's authority in the course.
 
-**A runner's verification is admitted from the runner alone, on the current dispatch.** A `Verified { dispatch, runner, playbook, step, output, status }` records that the runner ran a playbook step's verifier on the dispatch: the BLAKE3 hash of the playbook, the step's identifier in it (`StepId`: 1 to 64 lowercase ASCII letters, digits and hyphens, beginning with a letter), the hash of what the process wrote to its output and error streams, and how the process ended (`Status`): `exit <code>` or `signal <number>`. A verification whose author is not the runner it names is refused `not runner`, one on another dispatch `not current`; an admitted one is a step of the task, printed `verified <commit> <dispatch> <runner> <playbook> <step> <output> <status>`, and changes no attempt: a failing verifier is recorded as it ended, and the operator acts on it.
+**A runner's verification is admitted from the runner alone, on the current dispatch.** A `Verified { dispatch, runner, playbook, step, output, status }` records that the runner ran a playbook step's verifier on the dispatch: the BLAKE3 hash of the playbook, the step's identifier in it (`StepId`: 1 to 64 lowercase ASCII letters, digits and hyphens, beginning with a letter), the hash of what the process wrote to its output and error streams, and how the process ended (`Status`): `exit <code>` or `signal <number>`. A verification whose author is not the runner it names is refused `not runner`, one on another dispatch `not current`; an admitted one is a step of the task, printed `verified <commit> <dispatch> <runner> <playbook> <step> <output> <status>`, and advances the attempt to verified: a failing verifier is recorded as it ended, and the operator acts on it.
 
 - the step without its playbook: a step's identifier names it only within its playbook, so two playbooks' `test` steps would read as one check.
 - a pass or fail flag: a process ended by a signal would read as one that failed its check, and what a nonzero code means is the verifier's to say.
@@ -193,7 +193,7 @@ Reversal: a verdict that settles the task — accepting or reopening the attempt
 
 Reversal: a check that reads another's output, which needs the bytes reachable from the record — the content store a report's hash waits on.
 
-**A grading is admitted from its verdict's judge alone, of a verdict in its causal past.** A `Graded { verdict, grades, composed }` names the verdict it grades and gives one `Grade` per answer, in the verdict's order — `met`, `unmet`, `undecided`, or `refused` for an unread ruling — and the grades composed across the rubric. The task, the rubric and the questions are the verdict's, so the grading names them through it rather than again. A grading naming no admitted verdict among its ancestors is refused `no verdict`, one whose author is not that verdict's judge `not judge`, one whose grades number other than the answers or are refused other than exactly where the ruling is unread `misgraded`, and one whose verdict's dispatch is no longer current `not current`; an admitted grading is a step of the task, printed `graded <commit> <dispatch> <verdict> <rubric> <composed>` and one `grade <commit> <question> <grade>` line per answer. The fold checks that a grade answers its ruling, never where the ruling stands against the band or how the grades compose: the band and the composition are the rubric's, which the record names by hash and does not hold.
+**A grading is admitted from its verdict's judge alone, of a verdict in its causal past.** A `Graded { verdict, grades, composed }` names the verdict it grades and gives one `Grade` per answer, in the verdict's order — `met`, `unmet`, `undecided`, or `refused` for an unread ruling — and the grades composed across the rubric. The task, the rubric and the questions are the verdict's, so the grading names them through it rather than again. A grading naming no admitted verdict among its ancestors is refused `no verdict`, one whose author is not that verdict's judge `not judge`, one whose grades number other than the answers or are refused other than exactly where the ruling is unread `misgraded`, and one whose verdict's dispatch is no longer current `not current`; an admitted grading is a step of the task, printed `graded <commit> <dispatch> <verdict> <rubric> <composed>` and one `grade <commit> <question> <grade>` line per answer, and advances the attempt to graded. The fold checks that a grade answers its ruling, never where the ruling stands against the band or how the grades compose: the band and the composition are the rubric's, which the record names by hash and does not hold.
 
 - the task and the rubric in the grading: a second statement of what the verdict records, free to disagree with it.
 - the grades inside the verdict: the judge's readout and the rubric's band are two acts, and a band revised later grades the same readout again without asking the judge again.
@@ -201,6 +201,34 @@ Reversal: a check that reads another's output, which needs the bytes reachable f
 - the fold recomputing grades and composition: it needs the rubric's band and rule, which are not in the record.
 
 Reversal: a rubric reachable from the record, when the fold can recompute each grade from the band and the readout and refuse a grading that misstates one.
+
+**A decision is admitted from the operator it names, on the current dispatch.** A `Decide { dispatch, operator, decision }` records what the operator decides of the attempt the dispatch made: `land` its change, `rework <reason>`, the reason one line as a report's summary is, or `abandon` the task. The operator is a role, the one that dispatches — the owner or a member — and the receipt names the key in that role that decided, as a verdict names its judge: one owner per choice. A decision whose author holds no operator role is refused `no authority`, one whose author is not the operator it names `not operator`, one on another dispatch `not current`; an admitted decision is a step of the task, printed `decide <commit> <dispatch> <operator> <decision>`, and advances the attempt to decided. A later decision on the same dispatch replaces an earlier one as the attempt's progress.
+
+The receipt the design sketched was `Decide { task, verdict }`. A tree is the task, so the receipt names the attempt it decides, its dispatch, as a report and a verdict do; and `verdict` already names the judge's receipt, so what the operator decides is a `decision`.
+
+- the signer alone, no operator field: the decision would say who made it only through the commit, unlike every other ruling the fold admits from the key it names.
+- the decision as a verdict or a grading: a judge rules and grades, and its key holds no authority over the attempt; deciding on those readings is the operator's act.
+- one decision per dispatch, a second refused: an operator who reconsiders — reworks, then lands after a check by hand — would need a fresh dispatch to say so.
+
+Reversal: a decision that binds once made, which needs the fold to refuse a second on the same dispatch.
+
+**A landing is admitted from its decision's operator alone, carrying out a decision to land in its causal past.** A `Landed { decided, merge }` names the decision it carries out by commit and the revision the repository's default branch stood at once the change was in: the merge commit, or the change's own commit when the branch fast-forwarded to it, as git's object id (`Revision`, 20 bytes in a SHA-1 repository, 32 in a SHA-256 one, printed as 40 or 64 lowercase hex digits). A landing naming no admitted decision among its ancestors is refused `no decision`, one whose author is not that decision's operator `not operator`, one whose decision is to rework or abandon `not land`, and one whose decision's dispatch is no longer current `not current`; an admitted landing is a step of the task, printed `landed <commit> <dispatch> <decision> <operator> <revision>`, and advances the attempt to landed. The landing names its operator through the decision, as a grading names its judge through the verdict. The fold never checks that the revision holds the change: the repository is not in the record.
+
+The receipt the design sketched was `Landed { task, merge }`; it names the decision instead, for the first reason below.
+
+- the landing naming the task or the dispatch: two decisions on one dispatch would leave unsaid which one it carries out, and a landing could not be told from one made after a rework.
+- a landing from any operator: two operators could land one decision, and the landing would not be the deciding key's.
+- the revision as text: a second spelling of a fixed-width id, and a parser in the decoder.
+- the repository or the branch in the receipt: where the repository lives is the operator's configuration, never the record's.
+
+Reversal: a repository the record can reach, when the fold checks that the revision holds the reported change.
+
+**An attempt's progress only advances.** A verification, a grading, a decision and a landing on the current dispatch each advance its progress, ranked in that order; within a rank the latest in canonical order holds, and a lower rank never undoes a higher, so a verification after a grading leaves the attempt graded, and a decision after a landing leaves it landed. The standing line prints the furthest. A verdict moves nothing: it is graded before it counts. A new dispatch is a new attempt, unchecked.
+
+- the latest of any kind: a verifier run after a landing would read the task as no longer landed.
+- one standing per kind: a reader would rebuild the lifecycle the fold already orders.
+
+Reversal: a lifecycle that goes back — a landing reverted — which needs a receipt that undoes a step and a rank to fall to.
 
 ## Networking
 
@@ -257,6 +285,13 @@ Reversal: a change to the readout's form — another number of options, a log-pr
 - one word carrying a flag bit beside the number: a case named by a bit rather than by a constructor, as the grammar names every other case.
 
 Reversal: a platform whose exit status does not fit 32 bits, which needs a new constructor.
+
+**A decision and a landing are new kinds under receipt version 2, with a decision constructor and a revision of either git width.** `Decide` and `Landed` follow the grading for the same reason. A `Decide` writes its dispatch, its operator's 32-byte peer id, then the decision: a constructor, land and abandon empty, rework holding its reason as one bytes record that parses as a `Summary`; a `Landed` writes its decision, then the revision as one bytes record of 20 or 32 bytes. The decoder refuses a decision it does not know, a reason `Summary` refuses, and a revision of any other length.
+
+- a revision padded to 32 bytes: a padded SHA-1 id reads back as a SHA-256 one.
+- the reason as a field of every decision, empty for land and abandon: an absence named by an empty value, which a decoder must then refuse elsewhere.
+
+Reversal: a version control system whose ids are neither width, which needs a revision constructor per system.
 
 ## Dependencies
 
