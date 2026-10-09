@@ -19,7 +19,7 @@ cargo build-dist       # the shipped binary: fat LTO, size-optimized std
 
 Use `mise run test -- <nextest args>` for test runs; on macOS, setting `CODESIGN_IDENTITY` signs rebuilt executables before they run.
 
-`mise run ci:act` runs the committed Linux CI workflow in a disposable checkout. Each invocation uses distinct container names, so gates can run concurrently across repositories and worktrees. Cached actions run without GitHub fetches; missing actions download on first use.
+`mise run ci:act` runs the committed Linux CI workflow in a disposable checkout. Two host-wide slots bound concurrent gates across repositories and worktrees; further invocations wait until a slot frees. Dead holders are reclaimed. Each invocation uses distinct container names. Cached actions run without GitHub fetches; missing actions download on first use.
 
 Completed and interrupted gates remove their containers, networks and volumes. Before starting, each gate reaps resources from abandoned runs whose workflow process is gone; live runs and the shared `act-toolcache` volume remain untouched.
 
@@ -27,15 +27,26 @@ Each gate snapshots the shared action cache. Successful gates publish only new c
 
 ## Landing changes
 
-Install the hooks with `mise exec -- prek install`. Sign every commit and pass commitlint locally; the ruleset requires signatures on every commit in the pull request range. Run `mise run check` before opening the pull request.
+Install the hooks with `mise exec -- prek install`. Run `mise run check`, then sign the commit and pass commitlint locally; the ruleset requires signatures on every commit in the pull request range. For changes to `.github/` (including `.github/docker/`) or `.config/mise/tasks/`, also run `mise run ci:act` after committing. Other changes use the native gates and the hosted merge queue.
 
-Push the branch to `origin`, open a pull request against `main`, then enable automatic merging:
+Push the branch, open a pull request, then wait for its landing:
 
 ```sh
 git push -u origin <branch>
 gh pr create --base main --fill
-gh pr merge --merge --auto <n>
+mise run pr:land
 ```
+
+`pr:land [<n>]` defaults to the current branch's pull request. It enables auto-merge and watches both the pull request and its queue entry every 30 seconds, printing state changes.
+
+| Outcome | Exit | Output |
+| ------- | ---- | ------ |
+| Merged | `0` | Merge commit, merge-group run URL and each job's wall time |
+| Failed checks or dequeue | `1` | Failing run's logs |
+| 90-minute timeout | `2` | Last observed state |
+| `UNMERGEABLE` queue entry | `3` | Entries ahead and shared files |
+
+For an `UNMERGEABLE` entry, rebase onto `main` after the entries ahead merge, then run the task again.
 
 The merge queue runs the merge-group lanes and lands the change by merge commit. The repository allows only merge commits and deletes the branch after merging.
 
