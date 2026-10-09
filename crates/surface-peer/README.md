@@ -1,6 +1,6 @@
 # domhringr-surface-peer
 
-The `domhringr-peer` binary manages and synchronizes a record-plane peer over a state directory.
+The `domhringr-peer` binary manages and synchronizes a record-plane peer over a state directory, and checks a concepts tree against the checkouts that cite it and hold its pages.
 
 - [Synopsis](#synopsis)
 - [References](#references)
@@ -10,15 +10,16 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 - [Identifiers and state](#identifiers-and-state)
 - [Output](#output)
 - [Networking](#networking)
+- [Drift](#drift)
 - [License](#license)
 
 ## Synopsis
 
-**What.** `domhringr-surface-peer` provides the `domhringr-peer` command-line binary. It opens sedimentrees, delegates write authority, writes notes, binds paths, claims DNS names for a tree, introduces other trees by label, resolves anchors and commits by key, by DNS name, or by label, reads views and heads, and synchronizes a tree with another peer.
+**What.** `domhringr-surface-peer` provides the `domhringr-peer` command-line binary. It opens sedimentrees, delegates write authority, writes notes, binds paths, claims DNS names for a tree, introduces other trees by label, resolves anchors and commits by key, by DNS name, or by label, reads views and heads, synchronizes a tree with another peer, and reports where a concepts tree has drifted from a public checkout and a vault.
 
-**Why.** A peer needs a persistent identity and a command-line surface for operating its trees and inspecting their interpretation. Separate state directories let peers retain independent keys and stores while exchanging the same signed commits.
+**Why.** A peer needs a persistent identity and a command-line surface for operating its trees and inspecting their interpretation. Separate state directories let peers retain independent keys and stores while exchanging the same signed commits. Public text that cites private pages by anchor stays in step with them only if something checks each citation against its binding and each binding against its page.
 
-**How.** Commands use `domhringr-record-tree` for identity, storage, receipt construction, folding, resolution, and synchronization. `whence` asks DNS for a DNS name's `_domhringr.<domain>` TXT records unless `--witness` names the candidate trees, and reads a label in the `--in` tree. `serve` accepts connections over iroh; `sync` dials one remote, by endpoint id or at a direct address, exchanges one tree in a batch round, and disconnects.
+**How.** Commands use `domhringr-record-tree` for identity, storage, receipt construction, folding, resolution, and synchronization. `whence` asks DNS for a DNS name's `_domhringr.<domain>` TXT records unless `--witness` names the candidate trees, and reads a label in the `--in` tree. `serve` accepts connections over iroh; `sync` dials one remote, by endpoint id or at a direct address, exchanges one tree in a batch round, and disconnects. `drift` folds the concepts tree from the local store and reads both checkouts with the `git` binary: `git grep` for the tree's anchor over the public checkout's tracked files, and one `git cat-file --batch-check` for every bound page's blob at the vault's `HEAD` and at its bound commit.
 
 ## References
 
@@ -34,6 +35,7 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 - Resolution of a tree, a path, or a commit in the key, DNS, and label forms, a commit by its whole id or a unique prefix of it, with DNS witnesses or witnesses supplied by hand; canonical views; and sorted tree heads.
 - Serving on an ephemeral or fixed UDP port.
 - Single-tree synchronization, optionally at the remote's direct address, and selected-path reporting.
+- A drift check of a concepts tree against a public and a vault checkout: unbound citations, drifted, missing and orphaned bindings, and malformed data and citations, one line each in anchor order, with an exit status a gate can read.
 
 ## Expected features
 
@@ -43,6 +45,7 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 - Network access for iroh discovery and transport; a fixed port must be available for binding.
 - For a DNS-form anchor, DNS resolvers reaching the name's `_domhringr.<domain>` TXT records, unless `--witness` names its trees; and in the local store, the witnessed tree whose root claims the name.
 - For a label-form anchor, the tree that introduced the label, named by `--in` and held in the local store.
+- For `drift`, the `git` binary on `PATH`, both checkouts local, each a directory in a git working tree, and the concepts tree in the local store; a `sync` brings it there, since `drift` dials no one.
 
 ## Examples
 
@@ -86,9 +89,10 @@ domhringr-peer --state <dir> whence <name> [--witness <domain>=<tree-id>]... [--
 domhringr-peer --state <dir> view <tree>                           # the view, one line per fact
 domhringr-peer --state <dir> heads <tree>                          # the heads, one sorted hex line each
 domhringr-peer --state <dir> sync <endpoint-id> <peer-id> <tree> [--at <ip:port>]  # the heads after sync, then its path
+domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>  # one line per finding, nothing when consistent
 ```
 
-Run the crate's tests, including two-process synchronization:
+Run the crate's tests, including two-process synchronization and a drift check over throwaway git repositories:
 
 ```sh
 mise exec -- cargo nextest run -p domhringr-surface-peer
@@ -119,13 +123,35 @@ Only `whence` and a bind's target anchor read the DNS and label forms, and only 
 
 `open` prints the new tree's anchor. For a path, `whence` prints the target the path is bound to in the local view of the tree its name resolves to, as `view` writes it, or `unbound`; for a bare DNS-form or label-form name, `anchor <tree>` naming by key the tree it names; and for a commit, `commit <commit-id> admitted`, `commit <commit-id> refused <reason>`, or `unknown` when that tree holds no commit by the id, the id printed whole however it was abbreviated. It reads the local store and syncs nothing, and asks DNS only for a DNS-form name with no `--witness`. A name that does not resolve fails the command with one of `unwitnessed <domain>` (the witness names no tree), `unclaimed <domain>` (no witnessed tree in the store claims it), `ambiguous <domain>` (more than one does), `unscoped <label>` (no `--in`), `unintroduced <label>` (the `--in` tree did not introduce it), `cannot read the witness of <domain>` (the DNS lookup failed), `cannot fold the tree <tree-id>` (a tree the resolution reads is not in the store), or `ambiguous commit <prefix>` (more than one commit of the tree begins with the prefix), each followed by its cause where it has one. `serve` prints its endpoint id, peer id, and `listening`, then `accepted <peer-id>` and the selected path for each admitted peer. `sync` prints sorted heads followed by its selected path.
 
-The exit status is 0 on success, 1 when the command fails, and 2 for a command line that cannot be run. Diagnostics go to standard error.
+The exit status is 0 on success, 1 when the command fails, 2 for a command line that cannot be run, and 3 when `drift` reports a finding. Diagnostics go to standard error.
 
 ## Networking
 
 `serve --port` binds iroh's IPv4 and IPv6 UDP sockets at that port so a firewall rule can name it; without it the port is ephemeral. `sync --at <ip:port>` dials the remote at that address as well as through iroh's lookups, so a dial on one host or at first contact does not wait for the remote's address to be published. A path line reads `path <peer-id> direct <address>`, `path <peer-id> relay <url>`, or `path <peer-id> pending`.
 
 `serve` reports the path selected when it admits a peer. `sync` reports the path once its round ends, giving iroh up to five seconds to move a relayed connection to a direct path. iroh does not promise that move, even between two peers on one host, so a sync can end relayed.
+
+## Drift
+
+`drift` checks one concepts tree, named by its key, against two git checkouts. The tree binds each concept, a path in it, to the vault page its public derivative was written or last confirmed against; the public checkout cites each concept by its anchor; the vault holds the pages.
+
+A binding's target is a datum `vault:<path>@<commit>`. `<path>` is the page's path from the vault repository's top: one or more `/`-separated segments, none empty, `.` or `..`, holding no control character. `<commit>` is the vault commit the page was confirmed at, 40 lowercase hex digits. The path ends at the datum's last `@`, so a path may hold one. Any other target is malformed.
+
+A citation is an occurrence of the tree's anchor, `domhringr://<tree-id>/`, in a tracked text file of the public checkout, and runs to the first whitespace, control character, or one of `` ` `` `"` `'` `<` `>` `(` `)` `[` `]` `{` `}` `|` `\`, less any `.` `,` `:` `;` `!` `?` that ends it, so a citation stands in backticks, angle brackets, a Markdown link, or at the end of a sentence. A citation naming a path cites that concept; one naming the bare tree or a commit in it cites no concept and is not reported; one that is no anchor is malformed. Binary files are skipped, and files are named from the repository's top.
+
+The report holds one line per finding, `<state> <anchor> <file>:<line>` for a citation and `<state> <anchor> <vault path>@<commit>` for a binding, a binding whose target is no page datum naming the target as `view` writes it:
+
+| State | Finding |
+| ----- | ------- |
+| `unbound` | A cited concept no binding names, once per line citing it. |
+| `drifted` | A binding whose page is at the vault's `HEAD` with a blob other than its blob at the bound commit, or that commit holds no such page. A rebind at the current revision clears it. |
+| `missing` | A binding whose page is not at the vault's `HEAD`: renamed, deleted, or not a file. |
+| `orphaned` | A binding whose concept nothing in the public checkout cites. |
+| `malformed` | A binding whose target is no page datum, or a citation that reads as no anchor. |
+
+A binding can be both orphaned and drifted, missing or malformed, and then has a line for each. Lines are in anchor order, then in the state order of the table, then by place: a citing file by name and its lines by number, before a page, before a target. Anchors escape backslashes, control characters, and spaces as paths do in `view`; file and page paths escape backslashes and control characters. A consistent pair prints nothing and exits 0; any finding exits 3, with nothing written to standard error. A checkout git cannot read fails the command with exit status 1.
+
+Each checkout is read as the repository at its path whatever repository the environment names: `drift` clears the variables git itself clears before running a command in another repository, such as `GIT_DIR` and `GIT_INDEX_FILE`, so it reads the right repositories inside another repository's hook.
 
 ## License
 

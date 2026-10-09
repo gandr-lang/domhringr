@@ -29,7 +29,7 @@ One row per directory: the directory, its package, and what it is.
 crates/
 ├── record-tree/      domhringr-record-tree    the sedimentree: receipts, the fold to a view, anchors naming a tree, a path or a commit by key, DNS name or label, a tree stored in redb and synced over iroh
 ├── surface-driver/   domhringr                the `domhringr` driver: installs components
-└── surface-peer/     domhringr-surface-peer   the `domhringr-peer` binary: opens, grants on, notes to, binds in, claims names for, introduces, resolves, views, reads and syncs a tree
+└── surface-peer/     domhringr-surface-peer   the `domhringr-peer` binary: opens, grants on, notes to, binds in, claims names for, introduces, resolves, views, reads and syncs a tree, and checks a concepts tree for drift
 ```
 
 ## Crate README shape

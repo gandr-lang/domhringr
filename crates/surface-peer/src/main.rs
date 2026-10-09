@@ -3,7 +3,8 @@
 //! writes notes to it, binds paths in it, claims DNS names for it, introduces
 //! other trees in it by label, resolves an anchor or a commit to what it
 //! names, prints the view every peer holding the same commits folds them to,
-//! reads the tree's heads, and syncs the tree with another peer over iroh.
+//! reads the tree's heads, syncs the tree with another peer over iroh, and
+//! checks a concepts tree's bindings against a public and a vault checkout.
 //!
 //! ```text
 //! domhringr-peer --state <dir> id
@@ -18,6 +19,7 @@
 //! domhringr-peer --state <dir> view <tree>
 //! domhringr-peer --state <dir> heads <tree>
 //! domhringr-peer --state <dir> sync <endpoint-id> <peer-id> <tree> [--at <ip:port>]
+//! domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
 //! ```
 //!
 //! A tree is named by its anchor, `domhringr://<tree-id>/`, whose tree id is
@@ -45,8 +47,18 @@
 //! `serve` runs on the same directory; `id` reads only the keys and runs beside
 //! it.
 //!
-//! The exit status is 0 on success, 1 when the command fails, and 2 for a
-//! command line that cannot be run; diagnostics go to standard error.
+//! `drift` folds a concepts tree, whose paths are bound to data
+//! `vault:<path>@<commit>`, and reads two git checkouts with the `git`
+//! binary: the public one, whose tracked text cites the tree's paths by
+//! their key-form anchors, and the vault, which holds the pages. It prints one
+//! line per finding in anchor order — `unbound`, `drifted`, `missing`,
+//! `orphaned` or `malformed`, the anchor, and the citing `<file>:<line>` or
+//! the bound `<vault path>@<commit>` — and prints nothing for a consistent
+//! pair. It syncs nothing and dials no one.
+//!
+//! The exit status is 0 on success, 1 when the command fails, 2 for a
+//! command line that cannot be run, and 3 when `drift` reports a finding;
+//! diagnostics go to standard error.
 
 // The opt-in quenchant lints: absence named by `Maybe` in signatures and in
 // fields outside wire form, arithmetic on nominal types. Selected here because
@@ -56,6 +68,10 @@
     dylint_lib = "quenchant_dylints",
     deny(option_signature, option_field, primitive_arithmetic)
 )]
+
+extern crate alloc;
+
+mod drift;
 
 use core::error::Error;
 use core::fmt;
@@ -119,6 +135,7 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> view <tree>
        domhringr-peer --state <dir> heads <tree>
        domhringr-peer --state <dir> sync <endpoint-id> <peer-id> <tree> [--at <ip:port>]
+       domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
 where  <tree>   is domhringr://<tree-id>/
        <anchor> is domhringr://<tree-id>/<segment>/.../<segment>
        <commit> is domhringr://<tree-id>/.commit/<commit-id>, the id whole, or for whence
@@ -128,11 +145,15 @@ where  <tree>   is domhringr://<tree-id>/
                 resolved through its witness and the tree's claim; or by label, <label>
                 in place of <tree-id>: a name without a dot, resolved in the --in tree
        <target> is anchor <name> | endpoint <endpoint-id> | datum <text>
+       <checkout> is a directory in a git working tree, read as its whole repository
 A segment beginning with . is reserved for the forms above: no path holds one.
 ";
 
 /// The exit status of a command line that cannot be run.
 const USAGE_STATUS: u8 = 2;
+
+/// The exit status of a `drift` that reported a finding.
+const DRIFT_STATUS: u8 = 3;
 
 /// The command a command line names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,6 +183,8 @@ enum Verb
     Heads,
     /// Sync a tree with a remote peer.
     Sync,
+    /// Check a concepts tree against a public and a vault checkout.
+    Drift,
 }
 
 impl fmt::Display for Verb
@@ -188,6 +211,7 @@ impl fmt::Display for Verb
             | Self::View => "view <tree>",
             | Self::Heads => "heads <tree>",
             | Self::Sync => "sync <endpoint-id> <peer-id> <tree> [--at <ip:port>]",
+            | Self::Drift => "drift --public <checkout> --vault <checkout> <tree>",
         })
     }
 }
@@ -325,6 +349,17 @@ enum Command
         /// The tree synced.
         tree: TreeId,
     },
+    /// Check `tree`'s bindings against the checkouts at `public` and `vault`,
+    /// and print one line per finding.
+    Drift
+    {
+        /// The public checkout, whose tracked text cites the tree's paths.
+        public: PathBuf,
+        /// The vault checkout, which holds the pages the paths are bound to.
+        vault: PathBuf,
+        /// The concepts tree.
+        tree: TreeId,
+    },
 }
 
 /// What names a DNS name's candidate trees for one `whence`.
@@ -347,6 +382,16 @@ struct Invocation
     command: Command,
 }
 
+/// How a command that ran to completion exits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Completion
+{
+    /// With status 0.
+    Success,
+    /// With [`DRIFT_STATUS`]: `drift` reported a finding.
+    Drifted,
+}
+
 /// Why a command line cannot be run.
 #[derive(Debug, thiserror::Error)]
 enum UsageError
@@ -363,6 +408,9 @@ enum UsageError
     /// `--state` is absent.
     #[error("no state directory given: --state <dir>")]
     State,
+    /// `drift`'s `--public` or `--vault` is absent.
+    #[error("no {0} checkout given: --{0} <checkout>")]
+    NoCheckout(drift::Checkout),
     /// The command has too few or too many operands.
     #[error("expected: {0}")]
     Operands(Verb),
@@ -456,6 +504,9 @@ enum RunError
     /// The sync failed.
     #[error(transparent)]
     Sync(#[from] SyncError),
+    /// A checkout cannot be read for `drift`.
+    #[error(transparent)]
+    Drift(#[from] drift::CheckError),
     /// Standard output cannot be written.
     #[error("cannot write to standard output")]
     Output(#[source] std::io::Error),
@@ -469,13 +520,13 @@ enum RunError
 /// # Specification
 /// - ensures: accepts `--state <dir>` (or `--state=<dir>`; the last one given
 ///   wins) followed by a verb and exactly the operands that verb takes, or, for
-///   `serve`, the options [`serve_port`] reads, or, for `sync` and `whence`,
-///   what [`sync_command`] and [`whence_command`] read. Other verbs' operands
-///   are taken verbatim, so a note's text or a datum beginning with `-` is a
-///   text, not an option. A tree operand is a bare anchor in the key form,
-///   `bind`'s anchor names a path in the key form, `claim`'s DNS name and
-///   `introduce`'s label are read as [`read_name`] reads them, and `bind`'s
-///   target is read as [`read_target`] reads it.
+///   `serve`, the options [`serve_port`] reads, or, for `sync`, `whence` and
+///   `drift`, what [`sync_command`], [`whence_command`] and [`drift_command`]
+///   read. Other verbs' operands are taken verbatim, so a note's text or a
+///   datum beginning with `-` is a text, not an option. A tree operand is a
+///   bare anchor in the key form, `bind`'s anchor names a path in the key form,
+///   `claim`'s DNS name and `introduce`'s label are read as [`read_name`] reads
+///   them, and `bind`'s target is read as [`read_target`] reads it.
 /// - fails: [`UsageError::Arguments`] for any option but `--state` or for
 ///   `--state` without a value, [`UsageError::NoCommand`] when no verb follows
 ///   the options, [`UsageError::Command`] for an unknown verb,
@@ -490,7 +541,8 @@ enum RunError
 ///   text, a DNS name or a label that is not UTF-8, [`UsageError::Domain`] and
 ///   [`UsageError::Label`] for a DNS name or a label that does not parse, as
 ///   [`read_target`] for `bind`'s target, as [`serve_port`] for `serve`, and as
-///   [`sync_command`] and [`whence_command`] for `sync` and `whence`.
+///   [`sync_command`], [`whence_command`] and [`drift_command`] for `sync`,
+///   `whence` and `drift`.
 /// - panics: none.
 ///
 /// # Errors
@@ -498,6 +550,7 @@ enum RunError
 /// - [`UsageError::NoCommand`]: no verb follows the options.
 /// - [`UsageError::Command`]: the verb is unknown.
 /// - [`UsageError::State`]: `--state` is absent.
+/// - [`UsageError::NoCheckout`]: `drift`'s `--public` or `--vault` is absent.
 /// - [`UsageError::Operands`]: the verb's operand count is wrong.
 /// - [`UsageError::Operand`]: an operand is not an id.
 /// - [`UsageError::Anchor`]: an operand is not an anchor.
@@ -519,10 +572,10 @@ enum RunError
 ///   bare, a path and a commit anchor to resolve in each of the three forms and
 ///   an abbreviated commit, both `--state` spellings, `serve` with and without
 ///   a port, `sync` with and without an address, `whence` with and without
-///   witnesses and a scope, and a dash-leading note and datum separate the
-///   accepted lines, and one line per refusal pins which refusal each
-///   malformation gets, including an arity error that wins over a malformed
-///   operand.
+///   witnesses and a scope, `drift` with its options before and after its
+///   operand, and a dash-leading note and datum separate the accepted lines,
+///   and one line per refusal pins which refusal each malformation gets,
+///   including an arity error that wins over a malformed operand.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
@@ -549,6 +602,10 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     }
     if verb == Verb::Whence {
         let command = whence_command(&mut arguments)?;
+        return Ok(Invocation { state, command });
+    }
+    if verb == Verb::Drift {
+        let command = drift_command(&mut arguments)?;
         return Ok(Invocation { state, command });
     }
     let mut raw = arguments.raw_args()?;
@@ -744,6 +801,70 @@ fn whence_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     }
 }
 
+/// Read `drift`'s operand and options from what follows the verb.
+///
+/// # Specification
+/// - ensures: accepts one tree anchor in the key form, the concepts tree, with
+///   `--public <checkout>` and `--vault <checkout>` (or `--public=<checkout>`
+///   and `--vault=<checkout>`; the last one given of each wins) anywhere around
+///   it, naming the public and the vault checkout.
+/// - fails: [`UsageError::Arguments`] for any other option or for an option
+///   without a value, [`UsageError::Operands`] for other than one operand,
+///   checked first, then [`UsageError::NoCheckout`] naming `--public` and then
+///   `--vault` when it is absent, and as [`read_tree`] for an operand that is
+///   no key-form tree anchor.
+/// - panics: none.
+///
+/// # Errors
+/// - [`UsageError::Arguments`]: an unknown option, or an option lacks a value.
+/// - [`UsageError::Operands`]: there is not one operand.
+/// - [`UsageError::NoCheckout`]: `--public` or `--vault` is absent.
+/// - [`UsageError::Anchor`], [`UsageError::NotTree`], [`UsageError::NotKey`]:
+///   as [`read_tree`] for the tree.
+///
+/// # Adequacy
+/// - hypothesis: L3 — both options before the operand, both after it in the `=`
+///   spelling with `--public` repeated, are read to their command; a missing
+///   `--public`, a missing `--vault`, no operand with neither option, a surplus
+///   operand, a path and a DNS-form tree, an option without a value and an
+///   unknown option each meet their own refusal.
+/// - witness: `tests::every_verb_reads_its_operands`
+/// - witness: `tests::a_malformed_command_line_is_refused`
+fn drift_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
+{
+    let (mut public, mut vault) = (None, None);
+    let mut operands = Vec::new();
+    while let Some(argument) = arguments.next()? {
+        match argument {
+            | lexopt::Arg::Long("public") => {
+                let value = arguments.value()?;
+                public = Some(PathBuf::from(value));
+            },
+            | lexopt::Arg::Long("vault") => {
+                let value = arguments.value()?;
+                vault = Some(PathBuf::from(value));
+            },
+            | lexopt::Arg::Value(operand) => operands.push(operand),
+            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+                return Err(UsageError::from(other.unexpected()));
+            },
+        }
+    }
+    let mut operands = operands.into_iter();
+    let (Some(tree), None) = (operands.next(), operands.next())
+    else {
+        return Err(UsageError::Operands(Verb::Drift));
+    };
+    let public = public.ok_or(UsageError::NoCheckout(drift::Checkout::Public))?;
+    let vault = vault.ok_or(UsageError::NoCheckout(drift::Checkout::Vault))?;
+    let tree = read_tree(&tree)?;
+    Ok(Command::Drift {
+        public,
+        vault,
+        tree,
+    })
+}
+
 /// Read the DNS name and the tree a `--witness` value pairs.
 ///
 /// # Specification
@@ -821,7 +942,8 @@ fn serve_port(arguments: &mut lexopt::Parser) -> Result<BindPort, UsageError>
 ///
 /// # Specification
 /// - ensures: `id`, `serve`, `open`, `grant`, `note`, `bind`, `claim`,
-///   `introduce`, `whence`, `view`, `heads` and `sync` name their verbs.
+///   `introduce`, `whence`, `view`, `heads`, `sync` and `drift` name their
+///   verbs.
 /// - fails: [`UsageError::Command`] for any other word, carrying it.
 /// - panics: none.
 ///
@@ -848,6 +970,7 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
         | Some("view") => Ok(Verb::View),
         | Some("heads") => Ok(Verb::Heads),
         | Some("sync") => Ok(Verb::Sync),
+        | Some("drift") => Ok(Verb::Drift),
         | Some(_) | None => Err(UsageError::Command(word)),
     }
 }
@@ -1017,8 +1140,9 @@ fn read_target(
 /// Run `invocation` to completion on a fresh multi-threaded runtime.
 ///
 /// # Specification
-/// - ensures: the command runs as [`execute`] specifies; the runtime, and every
-///   task the command left running on it, is gone on return.
+/// - ensures: the command runs as [`execute`] specifies and ends as it says;
+///   the runtime, and every task the command left running on it, is gone on
+///   return.
 /// - fails: [`RunError::Runtime`] when the runtime cannot start, otherwise as
 ///   [`execute`].
 /// - panics: none.
@@ -1031,7 +1155,8 @@ fn read_target(
 /// - hypothesis: L3 — the process test runs every command through this function
 ///   and observes its output.
 /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
-fn run(invocation: Invocation) -> Result<(), RunError>
+/// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
+fn run(invocation: Invocation) -> Result<Completion, RunError>
 {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -1062,12 +1187,17 @@ fn run(invocation: Invocation) -> Result<(), RunError>
 ///   the remote, at its direct address when `--at` named one, writes the heads
 ///   after the sync the same way, then `path <peer-id> <path>` for the path the
 ///   connection took, having closed its endpoint. `serve` runs as [`serve`]
-///   specifies.
+///   specifies. `drift` folds the concepts tree in the local store, closes the
+///   store, and writes [`drift::check`]'s report of it against the two
+///   checkouts, one line per finding. Every command ends in
+///   [`Completion::Success`] but a `drift` whose report holds a finding, which
+///   ends in [`Completion::Drifted`].
 /// - fails: [`RunError::Identity`], [`RunError::Open`], [`RunError::Bind`],
 ///   [`RunError::Random`], [`RunError::Commit`], [`RunError::View`],
 ///   [`RunError::Whence`], [`RunError::Heads`] and [`RunError::Sync`] as the
-///   record library reports them, and [`RunError::Output`] when standard output
-///   cannot be written. A failed sync still closes the endpoint.
+///   record library reports them, [`RunError::Drift`] as [`drift::check`]
+///   reports it, and [`RunError::Output`] when standard output cannot be
+///   written. A failed sync still closes the endpoint.
 /// - panics: none.
 ///
 /// # Errors
@@ -1082,6 +1212,7 @@ fn run(invocation: Invocation) -> Result<(), RunError>
 ///   is unclaimed, its label unintroduced or its commit prefix ambiguous.
 /// - [`RunError::Heads`]: the heads cannot be read.
 /// - [`RunError::Sync`]: the sync failed.
+/// - [`RunError::Drift`]: a checkout cannot be read.
 /// - [`RunError::Output`]: standard output cannot be written.
 /// - [`RunError::Closed`], [`RunError::Diagnostics`]: as [`serve`].
 ///
@@ -1093,17 +1224,19 @@ fn run(invocation: Invocation) -> Result<(), RunError>
 ///   in both directions; views are compared byte for byte across processes and
 ///   with the expected facts, resolutions with the commit bound, across forms
 ///   and with each commit's verdict, refusals by their diagnostic, and each
-///   sync's path line is parsed.
+///   sync's path line is parsed; `drift` over a fixture pair prints its four
+///   findings exactly and exits 3, then nothing and exits 0.
 /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
 /// - witness: `sync::tests::two_peers_sync_one_tree_to_identical_heads`
 /// - witness: `sync::tests::an_anchor_resolves_alike_on_both_peers`
 /// - witness: `sync::tests::a_named_anchor_resolves_through_its_claim_or_introduction`
 /// - witness: `sync::tests::a_commit_resolves_to_its_verdict_on_both_peers`
-async fn execute(invocation: Invocation) -> Result<(), RunError>
+/// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
+async fn execute(invocation: Invocation) -> Result<Completion, RunError>
 {
     let Invocation { state, command } = invocation;
     let identity = Identity::load_or_create(&state)?;
-    match command {
+    let emitted = match command {
         | Command::Id => emit(&format_args!(
             "{}\n{}\n",
             identity.endpoint_key(),
@@ -1178,7 +1311,23 @@ async fn execute(invocation: Invocation) -> Result<(), RunError>
                 synced.path()
             ))
         },
-    }
+        | Command::Drift {
+            public,
+            vault,
+            tree,
+        } => {
+            let view = Peer::open(&state, identity)?.view(tree).await?;
+            let report = drift::check(tree, &view, &public, &vault)?;
+            emit(&report)?;
+            return Ok(if report.findings().is_empty() {
+                Completion::Success
+            }
+            else {
+                Completion::Drifted
+            });
+        },
+    };
+    emitted.map(|()| Completion::Success)
 }
 
 /// Commit `receipt` to `tree` on `peer` and write the commit id line.
@@ -1298,7 +1447,9 @@ fn report(error: &dyn Error) -> std::io::Result<()>
 /// Entry point.
 ///
 /// # Specification
-/// - ensures: runs the command line as [`run`] specifies and exits 0.
+/// - ensures: runs the command line as [`run`] specifies and exits 0, or
+///   [`DRIFT_STATUS`] when it ends in [`Completion::Drifted`], having written
+///   nothing to standard error.
 /// - fails: exits 2 after writing the reason and the synopsis to standard error
 ///   when the command line cannot be run ([`parse`]), and exits 1 after writing
 ///   the reason when the command fails. When standard error cannot be written
@@ -1317,7 +1468,8 @@ fn main() -> ExitCode
         },
     };
     match run(invocation) {
-        | Ok(()) => ExitCode::SUCCESS,
+        | Ok(Completion::Success) => ExitCode::SUCCESS,
+        | Ok(Completion::Drifted) => ExitCode::from(DRIFT_STATUS),
         | Err(error) => match report(&error) {
             | Ok(()) | Err(_) => ExitCode::FAILURE,
         },
@@ -1360,6 +1512,7 @@ mod tests
     use super::UsageError;
     use super::Verb;
     use super::Witnessing;
+    use super::drift;
     use super::parse;
 
     /// The id of the tree the command lines name: the all-zero key's.
@@ -1605,6 +1758,32 @@ mod tests
                 ],
                 Command::Sync {
                     remote: direct,
+                    tree,
+                },
+            ),
+            (
+                vec![
+                    "--state", "dir", "drift", "--public", "public", "--vault", "vault", TREE,
+                ],
+                Command::Drift {
+                    public: PathBuf::from("public"),
+                    vault: PathBuf::from("vault"),
+                    tree,
+                },
+            ),
+            (
+                vec![
+                    "--state",
+                    "dir",
+                    "drift",
+                    TREE,
+                    "--vault=vault",
+                    "--public=elsewhere",
+                    "--public=public",
+                ],
+                Command::Drift {
+                    public: PathBuf::from("public"),
+                    vault: PathBuf::from("vault"),
                     tree,
                 },
             ),
@@ -2015,6 +2194,70 @@ mod tests
                 "{port:?} is not a port"
             );
         }
+        let refused_drift = |words: &[&str]| {
+            let mut command_line = line(&["--state", "dir", "drift"]);
+            command_line.extend(line(words));
+            refused(command_line)
+        };
+        assert!(
+            matches!(
+                refused_drift(&["--vault", "vault", TREE]),
+                UsageError::NoCheckout(drift::Checkout::Public)
+            ),
+            "drift names the absent public checkout"
+        );
+        assert!(
+            matches!(
+                refused_drift(&["--public", "public", TREE]),
+                UsageError::NoCheckout(drift::Checkout::Vault)
+            ),
+            "drift names the absent vault checkout"
+        );
+        assert!(
+            matches!(refused_drift(&[]), UsageError::Operands(Verb::Drift)),
+            "an arity error wins over the absent checkouts"
+        );
+        assert!(
+            matches!(
+                refused_drift(&["--public", "public", "--vault", "vault", TREE, TREE]),
+                UsageError::Operands(Verb::Drift)
+            ),
+            "drift reads one tree"
+        );
+        assert!(
+            matches!(
+                refused_drift(&["--public", "public", "--vault", "vault", PATH]),
+                UsageError::NotTree
+            ),
+            "drift's tree names no path"
+        );
+        assert!(
+            matches!(
+                refused_drift(&[
+                    "--public",
+                    "public",
+                    "--vault",
+                    "vault",
+                    "domhringr://example.test/"
+                ]),
+                UsageError::NotKey
+            ),
+            "drift reads its tree by key"
+        );
+        assert!(
+            matches!(
+                refused_drift(&["--vault", "vault", TREE, "--public"]),
+                UsageError::Arguments(_)
+            ),
+            "--public takes a value"
+        );
+        assert!(
+            matches!(
+                refused_drift(&["--public", "public", "--vault", "vault", TREE, "--dial"]),
+                UsageError::Arguments(_)
+            ),
+            "drift has no other option"
+        );
         let not_utf8 = || std::os::unix::ffi::OsStringExt::from_vec(vec![0xff]);
         let mut invalid = line(&["--state", "dir", "note", TREE]);
         invalid.push(not_utf8());
