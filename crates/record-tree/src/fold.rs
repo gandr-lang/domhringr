@@ -27,6 +27,7 @@ use crate::anchor::Anchor;
 use crate::anchor::Path;
 use crate::anchor::Resolution;
 use crate::anchor::Target;
+use crate::id::CommitPrefix;
 use crate::id::PeerKey;
 use crate::id::TreeId;
 use crate::line::Field;
@@ -37,9 +38,11 @@ use crate::receipt::Kind;
 use crate::receipt::Operation;
 use crate::receipt::Receipt;
 
-/// What a peer makes of a tree: its owner, the peers granted write authority,
-/// the admitted notes, the paths bound, the DNS names claimed, the trees
-/// introduced, and the commits refused.
+/// What a peer makes of a tree.
+///
+/// Its owner, the peers granted write authority, the admitted notes, the paths
+/// bound, the DNS names claimed, the trees introduced, the commits admitted,
+/// and the commits refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View
 {
@@ -57,6 +60,8 @@ pub struct View
     /// Each introduced label's introduction: the admitted introduction last in
     /// canonical order, its author and the tree it names.
     introductions: BTreeMap<Label, (PeerKey, TreeId)>,
+    /// The admitted commits' ids.
+    admitted: BTreeSet<CommitId>,
     /// The refused commits and why, in canonical order.
     refused: Vec<(CommitId, Refusal)>,
 }
@@ -136,6 +141,77 @@ impl View
         }
     }
 
+    /// What the commit `commit` resolves to in this view.
+    ///
+    /// # Specification
+    /// - ensures: [`Resolution::Commit`] with [`Verdict::Admitted`] when the
+    ///   fold admitted a commit with this id; with [`Verdict::Refused`] and the
+    ///   first refusal in canonical order when it refused one and admitted
+    ///   none; and [`Resolution::Unknown`] when the tree holds no commit with
+    ///   this id, never [`Resolution::Unbound`].
+    /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — through resolution, an admitted commit, a commit
+    ///   refused for want of authority, an undecodable commit, and a commit of
+    ///   another tree are each located to their own answer.
+    /// - witness: `store::tests::a_commit_resolves_by_its_anchor_to_its_verdict`
+    /// - witness: `store::tests::an_ambiguous_prefix_is_refused_naming_it`
+    #[inline]
+    #[must_use]
+    pub fn locate(
+        &self,
+        commit: CommitId,
+    ) -> Resolution
+    {
+        if self.admitted.contains(&commit) {
+            return Resolution::Commit {
+                id: commit,
+                verdict: Verdict::Admitted,
+            };
+        }
+        match self.refused.iter().find(|&&(refused, _)| refused == commit) {
+            | Some(&(_, ref refusal)) => Resolution::Commit {
+                id: commit,
+                verdict: Verdict::Refused(refusal.clone()),
+            },
+            | None => Resolution::Unknown,
+        }
+    }
+
+    /// The ids of the commits the tree holds that `prefix` abbreviates, in id
+    /// order.
+    ///
+    /// # Specification
+    /// - ensures: every commit the fold admitted or refused whose id begins
+    ///   with the prefix's digits, each once, and no other.
+    /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — through resolution, prefixes of an admitted and of a
+    ///   refused commit expand to that commit alone, a prefix two refused
+    ///   commits share expands to both and one digit more to one, and a prefix
+    ///   no commit begins with expands to none.
+    /// - witness: `store::tests::a_commit_resolves_by_its_anchor_to_its_verdict`
+    /// - witness: `store::tests::an_ambiguous_prefix_is_refused_naming_it`
+    #[inline]
+    #[must_use]
+    pub fn expand(
+        &self,
+        prefix: &CommitPrefix,
+    ) -> BTreeSet<CommitId>
+    {
+        let span = prefix.span();
+        let mut commits: BTreeSet<CommitId> = self.admitted.range(span.clone()).copied().collect();
+        commits.extend(
+            self.refused
+                .iter()
+                .map(|&(commit, _)| commit)
+                .filter(|commit| span.contains(commit)),
+        );
+        commits
+    }
+
     /// The DNS names the tree's owner claims, in name order.
     ///
     /// # Specification
@@ -183,17 +259,19 @@ impl fmt::Display for View
     ///
     /// # Specification
     /// - ensures: every line ends in a newline, and each fact stays one line: a
-    ///   backslash in a note, a path, a label or a datum is written `\\` and a
-    ///   control character as its Rust escape (`\n`, `\u{7}`), and a space in a
-    ///   path or a label as `\u{20}`, so equal views print equal bytes and
-    ///   distinct facts print distinct lines.
+    ///   backslash in a note, a path, a label, a datum or an anchor target is
+    ///   written `\\` and a control character as its Rust escape (`\n`,
+    ///   `\u{7}`), and a space in a path or a label as `\u{20}`, so equal views
+    ///   print equal bytes and distinct facts print distinct lines.
     /// - panics: none.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a view with a member, notes, a multi-line note, a
-    ///   path with a space bound to a datum with a newline, two claims, two
-    ///   introductions, one by a label with a space, and a refusal is printed
-    ///   and compared line for line.
+    ///   path with a space bound to a datum with a newline, a path bound to a
+    ///   commit in another tree, a path bound to an anchor whose label holds a
+    ///   space and whose path holds a newline, two claims, two introductions,
+    ///   one by a label with a space, and a refusal is printed and compared
+    ///   line for line.
     /// - witness: `fold::tests::a_view_prints_one_line_per_fact`
     #[inline]
     fn fmt(
@@ -285,6 +363,36 @@ impl fmt::Display for Refusal
     }
 }
 
+/// The fold's verdict on a commit the tree holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Verdict
+{
+    /// The fold admitted the commit.
+    Admitted,
+    /// The fold refused the commit, for this reason.
+    Refused(Refusal),
+}
+
+impl fmt::Display for Verdict
+{
+    /// Write `admitted`, or `refused` followed by the reason as the view
+    /// prints it.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result
+    {
+        match *self {
+            | Self::Admitted => f.write_str("admitted"),
+            | Self::Refused(ref refusal) => write!(f, "refused {refusal}"),
+        }
+    }
+}
+
 /// Why a tree has no view: no commit in it is the tree's Open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("the tree holds no Open receipt, so it has no owner")]
@@ -346,8 +454,8 @@ struct Carry
 ///   grant, a note, a bind or an introduction.
 /// - ensures: each path's binding is the admitted bind of that path last in
 ///   canonical order, each label's introduction the admitted introduction of
-///   that label last in canonical order, and the claims the domains of every
-///   admitted claim.
+///   that label last in canonical order, the claims the domains of every
+///   admitted claim, and the admitted commits the ids of every commit admitted.
 /// - fails: [`Unopened`] when no commit is the tree's Open.
 /// - panics: none.
 /// - intension: when parents claim a cycle no topological order exists; the
@@ -466,6 +574,7 @@ pub fn fold(
         bindings: BTreeMap::new(),
         claims: BTreeSet::new(),
         introductions: BTreeMap::new(),
+        admitted: BTreeSet::new(),
         refused: Vec::new(),
     };
     let mut ready: BTreeSet<Position> = nodes
@@ -546,8 +655,11 @@ pub fn fold(
                 }
             },
         };
-        if let Some(refusal) = refusal {
-            view.refused.push((node.commit, refusal));
+        match refusal {
+            | Some(refusal) => view.refused.push((node.commit, refusal)),
+            | None => {
+                let _first_admission = view.admitted.insert(node.commit);
+            },
         }
         let readers: BTreeSet<Position> = node
             .children
@@ -650,6 +762,8 @@ mod tests
     use super::Unopened;
     use super::View;
     use super::fold;
+    use crate::anchor::Anchor;
+    use crate::anchor::Authority;
     use crate::anchor::Path;
     use crate::anchor::Resolution;
     use crate::anchor::Target;
@@ -997,7 +1111,7 @@ mod tests
         let (x, y) = ("x".parse::<Path>().unwrap(), "y".parse::<Path>().unwrap());
         runtime().block_on(async {
             let opened = commit(&a, tree(), &[], &open(&a)).await;
-            let target = Target::Commit(id(&opened));
+            let target = Target::Anchor(Anchor::commit(tree(), id(&opened)));
             let first = commit(&a, tree(), &[&opened], &bind(&x, target)).await;
             let rebound = Target::Datum(String::from("rebound"));
             let second = commit(&a, tree(), &[&first], &bind(&x, rebound.clone())).await;
@@ -1044,7 +1158,7 @@ mod tests
         let (x, y) = ("x".parse::<Path>().unwrap(), "y".parse::<Path>().unwrap());
         runtime().block_on(async {
             let opened = commit(&a, tree(), &[], &open(&a)).await;
-            let target = Target::Commit(id(&opened));
+            let target = Target::Anchor(Anchor::commit(tree(), id(&opened)));
             let bound = commit(&a, tree(), &[&opened], &bind(&x, target.clone())).await;
             let squat = Target::Datum(String::from("squat"));
             let squat = commit(&b, tree(), &[&bound], &bind(&x, squat)).await;
@@ -1248,7 +1362,17 @@ mod tests
                 ),
                 (
                     "x".parse::<Path>().unwrap(),
-                    (member, Target::Commit(bound)),
+                    (member, Target::Anchor(Anchor::commit(elsewhere, bound))),
+                ),
+                (
+                    "y".parse::<Path>().unwrap(),
+                    (
+                        author,
+                        Target::Anchor(Anchor::Path {
+                            authority: Authority::Label("my friend".parse().unwrap()),
+                            path: "line\none".parse().unwrap(),
+                        }),
+                    ),
                 ),
             ]),
             claims: BTreeSet::from([
@@ -1259,6 +1383,7 @@ mod tests
                 ("my friend".parse::<Label>().unwrap(), (member, elsewhere)),
                 ("b".parse::<Label>().unwrap(), (author, tree())),
             ]),
+            admitted: BTreeSet::new(),
             refused: vec![(refused, Refusal::NoAuthority)],
         };
         let (mine, theirs) = (tree(), elsewhere);
@@ -1267,7 +1392,8 @@ mod tests
             format!(
                 "owner {author}\nmember {member}\nnote {author} plain text\nnote {member} \
                  two\\nlines, a \\\\ and a bell\\u{{7}}\nbind a\\u{{20}}b/c datum \
-                 one\\nline, spaced\nbind x commit {bound}\nclaim a.example.test\nclaim \
+                 one\\nline, spaced\nbind x anchor domhringr://{theirs}/.commit/{bound}\nbind y \
+                 anchor domhringr://my friend/line\\none\nclaim a.example.test\nclaim \
                  example.test\nintroduce b domhringr://{mine}/\nintroduce my\\u{{20}}friend \
                  domhringr://{theirs}/\nrefused {refused} no authority\n"
             ),

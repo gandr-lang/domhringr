@@ -3,8 +3,10 @@
 //! identical heads, the serving peer's store survives a kill, two peers that
 //! exchange a tree's commits fold them to byte-identical views in which a note
 //! is admitted only under a grant in its causal past, a path bound in a tree
-//! resolves alike on both peers through its anchor, and a DNS name or a label
-//! in an anchor's place resolves only through a claim or an introduction.
+//! resolves alike on both peers through its anchor, a DNS name or a label in
+//! an anchor's place resolves only through a claim or an introduction, and a
+//! commit resolves through its anchor, by its whole id or a prefix of it, to
+//! the fold's verdict on it.
 
 #[cfg(test)]
 mod tests
@@ -627,15 +629,15 @@ mod tests
     ///
     /// # Specification
     /// - ensures: A opens a tree, whose printed anchor parses, writes a note
-    ///   and binds `x` to the note's commit; B syncs from A and its `whence` of
-    ///   `x` prints the same commit. B, not a member, binds `x` on its copy; A
-    ///   syncs from B, A's `whence` of `x` is unchanged, and A's view lists B's
-    ///   bind as refused for want of authority. A grants B; B syncs the grant,
-    ///   writes a note and binds `x` to it; A syncs, resolves `x` to B's note,
-    ///   writes a note of its own and re-binds `x` to it; B syncs, and both
-    ///   peers' `whence` of `x` print A's target. `whence` of `y`, which nobody
-    ///   bound, prints `unbound` on both. Every sync names the remote's direct
-    ///   address.
+    ///   and binds `x` to the note's commit anchor; B syncs from A and its
+    ///   `whence` of `x` prints that anchor. B, not a member, binds `x` on its
+    ///   copy; A syncs from B, A's `whence` of `x` is unchanged, and A's view
+    ///   lists B's bind as refused for want of authority. A grants B; B syncs
+    ///   the grant, writes a note and binds `x` to it; A syncs, resolves `x` to
+    ///   B's note, writes a note of its own and re-binds `x` to it; B syncs,
+    ///   and both peers' `whence` of `x` print A's target. `whence` of `y`,
+    ///   which nobody bound, prints `unbound` on both. Every sync names the
+    ///   remote's direct address.
     /// - panics: on any contract violation.
     #[test]
     fn an_anchor_resolves_alike_on_both_peers()
@@ -652,8 +654,14 @@ mod tests
             id.assert_ids();
             id.only().clone()
         };
-        let bind = |state: &Path, kind: &str, target: &str| {
-            let id = finish(peer(state).args(["bind", x.as_str(), kind, target]));
+        let bind = |state: &Path, commit: &str| {
+            let target = format!("{tree}.commit/{commit}");
+            let id = finish(peer(state).args(["bind", x.as_str(), "anchor", target.as_str()]));
+            id.assert_ids();
+            id.only().clone()
+        };
+        let squat_on = |state: &Path| {
+            let id = finish(peer(state).args(["bind", x.as_str(), "datum", "squat"]));
             id.assert_ids();
             id.only().clone()
         };
@@ -662,16 +670,16 @@ mod tests
         };
 
         let a1 = note(a, "a1");
-        let _bound = bind(a, "commit", &a1);
+        let _bound = bind(a, &a1);
         pull((b, &b_id), (a, &a_id), &a_port, anchored);
-        let first = format!("commit {a1}");
+        let first = format!("anchor {tree}.commit/{a1}");
         assert_eq!(
             whence(b, &x),
             first,
-            "the synced bind resolves on the dialer to the same commit"
+            "the synced bind resolves on the dialer to the same commit anchor"
         );
 
-        let squat = bind(b, "datum", "squat");
+        let squat = squat_on(b);
         pull((a, &a_id), (b, &b_id), &b_port, anchored);
         assert_eq!(
             whence(a, &x),
@@ -688,17 +696,17 @@ mod tests
         granted.assert_ids();
         pull((b, &b_id), (a, &a_id), &a_port, anchored);
         let b1 = note(b, "b1");
-        let _rebound = bind(b, "commit", &b1);
+        let _rebound = bind(b, &b1);
         pull((a, &a_id), (b, &b_id), &b_port, anchored);
         assert_eq!(
             whence(a, &x),
-            format!("commit {b1}"),
+            format!("anchor {tree}.commit/{b1}"),
             "a member's bind under the grant rebinds the path"
         );
         let a2 = note(a, "a2");
-        let _rebound = bind(a, "commit", &a2);
+        let _rebound = bind(a, &a2);
         pull((b, &b_id), (a, &a_id), &a_port, anchored);
-        let last = format!("commit {a2}");
+        let last = format!("anchor {tree}.commit/{a2}");
         for state in [a, b] {
             assert_eq!(
                 whence(state, &x),
@@ -719,13 +727,14 @@ mod tests
     ///
     /// # Specification
     /// - ensures: A opens a tree, claims `example.test` for it, writes a note
-    ///   and binds `x` to it; B pulls the tree, and B's `whence` of
-    ///   `domhringr://example.test/x`, witnessed by hand by A's tree, prints
-    ///   what the key form prints, the note's commit, while the bare name
-    ///   prints `tree` and A's anchor. B opens a tree of its own, which claims
+    ///   and binds `x` to the note's commit anchor; B pulls the tree, and B's
+    ///   `whence` of `domhringr://example.test/x`, witnessed by hand by A's
+    ///   tree, prints what the key form prints, that anchor, while the bare
+    ///   name prints `anchor` and A's anchor, and the name's commit form prints
+    ///   the note's commit admitted. B opens a tree of its own, which claims
     ///   nothing; witnessed by it the name exits 1 with `domhringr-peer:
     ///   unclaimed example.test`. A introduces B's tree as `b` in its own, and
-    ///   A's `whence` of `domhringr://b/` in A's tree prints `tree` and B's
+    ///   A's `whence` of `domhringr://b/` in A's tree prints `anchor` and B's
     ///   anchor; read in no tree it exits 1. A pulls B's tree; read in it,
     ///   which introduced nothing, `domhringr://b/` exits 1 with
     ///   `domhringr-peer: unintroduced b`. A's view lists the claim and the
@@ -744,7 +753,8 @@ mod tests
         let noted = finish(peer(a).args(["note", tree.as_str(), "named"]));
         noted.assert_ids();
         let x = format!("{tree}x");
-        let bound = finish(peer(a).args(["bind", x.as_str(), "commit", noted.only()]));
+        let commit = format!("{tree}.commit/{}", noted.only());
+        let bound = finish(peer(a).args(["bind", x.as_str(), "anchor", commit.as_str()]));
         bound.assert_ids();
         pull((b, &b_id), (a, &a_id), &a_port, OsStr::new(&tree));
 
@@ -757,7 +767,7 @@ mod tests
         let by_key = finish(peer(b).args(["whence", x.as_str()]));
         assert_eq!(
             by_key.only(),
-            &format!("commit {}", noted.only()),
+            &format!("anchor {commit}"),
             "the key form resolves to the bound note"
         );
         assert_eq!(
@@ -767,8 +777,14 @@ mod tests
         );
         assert_eq!(
             finish(&mut witnessed("domhringr://example.test/", &tree)).only(),
-            &format!("tree {tree}"),
+            &format!("anchor {tree}"),
             "the bare name resolves to the claiming tree"
+        );
+        let named_commit = format!("domhringr://example.test/.commit/{}", noted.only());
+        assert_eq!(
+            finish(&mut witnessed(&named_commit, &tree)).only(),
+            &format!("commit {} admitted", noted.only()),
+            "a commit under the name resolves in the claiming tree to its verdict"
         );
         let fresh = open(b);
         assert_eq!(
@@ -786,7 +802,7 @@ mod tests
         };
         assert_eq!(
             finish(&mut label(&tree)).only(),
-            &format!("tree {fresh}"),
+            &format!("anchor {fresh}"),
             "read in the tree that introduced it, the label names the introduced tree"
         );
         assert_eq!(
@@ -807,5 +823,80 @@ mod tests
         ] {
             assert!(view.0.contains(&fact), "the view lists {fact:?}: {view:?}");
         }
+    }
+
+    /// A commit resolves through its anchor to the fold's verdict on it, alike
+    /// on both peers, by its whole id or by a prefix of it.
+    ///
+    /// # Specification
+    /// - ensures: A opens a tree and writes a note; B pulls it, and B's
+    ///   `whence` of the note's commit anchor, its id abbreviated to 12 digits,
+    ///   prints `commit`, the whole id and `admitted`. B, not a member, writes
+    ///   a note; A pulls it, and A's `whence` of its anchor prints `commit`,
+    ///   its id and `refused no authority`. A binds `x` to its own note's
+    ///   commit anchor; B pulls, B's `whence` of `x` prints `anchor` and that
+    ///   commit anchor, and B's view lists the bind with it. A commit id of 64
+    ///   zeros, which the tree does not hold, prints `unknown`. Every sync
+    ///   names the remote's direct address.
+    /// - panics: on any contract violation.
+    #[test]
+    fn a_commit_resolves_to_its_verdict_on_both_peers()
+    {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (a, b) = (a.path(), b.path());
+        let (a_id, b_id) = (finish(peer(a).arg("id")), finish(peer(b).arg("id")));
+        let (a_port, b_port) = (free_port(), free_port());
+        let tree = open(a);
+        let anchored = OsStr::new(&tree);
+        let note = |state: &Path, text: &str| {
+            let id = finish(peer(state).args(["note", tree.as_str(), text]));
+            id.assert_ids();
+            id.only().clone()
+        };
+        let commit = |digits: &str| format!("{tree}.commit/{digits}");
+        let whence = |state: &Path, reference: &str| {
+            finish(peer(state).args(["whence", reference]))
+                .only()
+                .clone()
+        };
+
+        let a1 = note(a, "a1");
+        pull((b, &b_id), (a, &a_id), &a_port, anchored);
+        let prefix = a1.chars().take(12).collect::<String>();
+        assert_eq!(
+            whence(b, &commit(&prefix)),
+            format!("commit {a1} admitted"),
+            "a synced commit resolves by a prefix of its id to its whole id and its verdict"
+        );
+
+        let b1 = note(b, "b1 before any grant");
+        pull((a, &a_id), (b, &b_id), &b_port, anchored);
+        assert_eq!(
+            whence(a, &commit(&b1)),
+            format!("commit {b1} refused no authority"),
+            "a non-member's commit resolves to its refusal with the reason"
+        );
+
+        let x = format!("{tree}x");
+        let target = commit(&a1);
+        let bound = finish(peer(a).args(["bind", x.as_str(), "anchor", target.as_str()]));
+        bound.assert_ids();
+        pull((b, &b_id), (a, &a_id), &a_port, anchored);
+        let resolved = format!("anchor {target}");
+        assert_eq!(
+            whence(b, &x),
+            resolved,
+            "a path bound to a commit resolves to its anchor"
+        );
+        let view = finish(peer(b).args(["view", tree.as_str()]));
+        assert!(
+            view.0.contains(&format!("bind x {resolved}")),
+            "the view lists the bind with its target anchor: {view:?}"
+        );
+        assert_eq!(
+            whence(a, &commit(&"0".repeat(64))),
+            "unknown",
+            "a commit the tree does not hold is unknown"
+        );
     }
 }

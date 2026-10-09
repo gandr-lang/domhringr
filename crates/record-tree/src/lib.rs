@@ -14,15 +14,20 @@
 //! holding the same commits folds them into the same [`View`]
 //! ([`Peer::view`]): the tree's owner, the peers granted write authority, the
 //! admitted notes, the paths bound, the DNS names claimed, the trees
-//! introduced, and the commits refused with their [`Refusal`]. A receipt is
-//! admitted only from an author with authority in its causal past, and a
-//! claim only from the owner.
+//! introduced, the commits admitted, and the commits refused with their
+//! [`Refusal`]. A receipt is admitted only from an author with authority in
+//! its causal past, and a claim only from the owner.
 //!
-//! A tree and the paths in it are named by [`Anchor`]s,
-//! `domhringr://<authority>/<path>`, whose [`Authority`] is the tree's key, a
-//! DNS name ([`Domain`]) or a label ([`Label`]). [`Peer::whence`] resolves one
-//! by fold to the [`Target`] its path is bound to, or to unbound
-//! ([`Resolution`]): a DNS name through a [`Witness`] — the DNS records
+//! A tree, the paths in it and its commits are named by [`Anchor`]s,
+//! `domhringr://<authority>/<path>` and `domhringr://<authority>/.commit/<id>`,
+//! whose [`Authority`] is the tree's key, a DNS name ([`Domain`]) or a label
+//! ([`Label`]). A segment beginning with `.` is reserved for the forms the
+//! scheme names, so no path holds one. An anchor names a commit by its whole
+//! id; a [`Reference`], what a reader types, may abbreviate it to a unique
+//! prefix of at least eight hex digits ([`CommitPrefix`]). [`Peer::whence`]
+//! resolves a reference by fold ([`Resolution`]): a path to the [`Target`] it
+//! is bound to, or to unbound; a commit to the fold's [`Verdict`] on it, or to
+//! unknown. A DNS name resolves through a [`Witness`] — the DNS records
 //! ([`Dns`]) or a map supplied by hand ([`Static`]) — together with the
 //! owner's claim in the witnessed tree, and a label through the introductions
 //! of the tree it is read in ([`Scope`]).
@@ -74,14 +79,16 @@ pub use anchor::Anchor;
 pub use anchor::Authority;
 pub use anchor::ParseAnchorError;
 pub use anchor::Path;
+pub use anchor::Reference;
 pub use anchor::Resolution;
 pub use anchor::Scope;
 pub use anchor::Target;
 pub use fold::Refusal;
 pub use fold::Unopened;
+pub use fold::Verdict;
 pub use fold::View;
 pub use id::Address;
-pub use id::CommitHex;
+pub use id::CommitPrefix;
 pub use id::EndpointKey;
 pub use id::ParseIdError;
 pub use id::PeerKey;

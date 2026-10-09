@@ -1,9 +1,13 @@
-//! The identifiers a tree is named by, a peer is addressed by and a commit is
-//! read by: a tree id in the z-base-32 form an anchor's authority carries, the
-//! others in the hex form the peer binary reads and prints.
+//! The identifiers a tree is named by, a commit is located by and a peer is
+//! addressed by: a tree id in the z-base-32 form an anchor's authority
+//! carries, a commit id in the lowercase hex an anchor's commit form carries,
+//! whole or abbreviated by hand to a prefix, and the peer and endpoint keys in
+//! the hex form the peer binary reads and prints.
 
+use alloc::string::String;
 use core::fmt;
 use core::net::SocketAddr;
+use core::ops::RangeInclusive;
 use core::str::FromStr;
 
 use sedimentree_core::id::SedimentreeId;
@@ -12,6 +16,9 @@ use subduction_core::peer::id::PeerId;
 
 /// Hex digits in the text form of a 32-byte id.
 const HEX_DIGITS: usize = 64;
+
+/// Hex digits in the shortest prefix a commit id is abbreviated to.
+const COMMIT_PREFIX_DIGITS: usize = 8;
 
 /// Characters in the text form of a tree id.
 pub const TREE_CHARACTERS: usize = 52;
@@ -269,53 +276,131 @@ impl fmt::Display for EndpointKey
     }
 }
 
-/// A commit id read from the 64 hex digits the peer binary prints it as.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct CommitHex(CommitId);
-
-impl CommitHex
+/// A commit id abbreviated by hand to a prefix of its lowercase hex digits.
+///
+/// It holds at least 8 digits and fewer than 64, and names the one commit in a
+/// tree whose id begins with it; it is neither self-verifying nor stable as the
+/// tree grows, so a receipt never carries one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitPrefix
 {
-    /// The commit id the digits spell.
+    /// The digits, as written.
+    digits: String,
+    /// The smallest commit id the digits begin: the digits padded with `0`s.
+    first: CommitId,
+    /// The largest commit id the digits begin: the digits padded with `f`s.
+    last: CommitId,
+}
+
+impl CommitPrefix
+{
+    /// The commit ids the prefix abbreviates, in id order.
+    ///
+    /// # Specification
+    /// - ensures: a commit id lies in the range iff its lowercase hex begins
+    ///   with the prefix's digits: the range runs from the digits padded with
+    ///   `0`s to the digits padded with `f`s, and lowercase hex of equal length
+    ///   sorts as the bytes it spells.
+    /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — an 8-digit prefix's range is compared with the ids
+    ///   its two paddings spell, and the ids one below and one above it fall
+    ///   outside; through resolution, prefixes matching one, two and no commit
+    ///   of a tree are read to that commit, to an ambiguity and to unknown.
+    /// - witness: `id::tests::a_prefix_spans_the_ids_it_begins`
+    /// - witness: `store::tests::a_commit_resolves_by_its_anchor_to_its_verdict`
+    /// - witness: `store::tests::an_ambiguous_prefix_is_refused_naming_it`
+    pub(crate) const fn span(&self) -> RangeInclusive<CommitId>
+    {
+        RangeInclusive::new(self.first, self.last)
+    }
+}
+
+impl fmt::Display for CommitPrefix
+{
+    /// Write the digits as written.
     ///
     /// # Specification
     /// trivial.
     #[inline]
-    #[must_use]
-    pub const fn id(self) -> CommitId
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result
     {
-        self.0
+        f.write_str(&self.digits)
     }
 }
 
-impl FromStr for CommitHex
+/// A commit id as the last segment of an anchor's commit form spells it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommitDigits
+{
+    /// All 64 digits: the commit id itself.
+    Full(CommitId),
+    /// 8 to 63 digits: a prefix of the id.
+    Abbreviated(CommitPrefix),
+}
+
+impl FromStr for CommitDigits
 {
     type Err = ParseIdError;
 
-    /// Read a commit id from its hex text.
+    /// Read a commit id, whole or abbreviated, from its lowercase hex digits.
     ///
     /// # Specification
-    /// - ensures: accepts exactly 64 hex digits, either case, and yields the
-    ///   commit id whose bytes they spell, so a commit id's `Display` reads
-    ///   back to itself.
-    /// - fails: [`ParseIdError::Length`] for text of any other byte length,
-    ///   [`ParseIdError::Digit`] for a non-hex character.
+    /// - ensures: 64 lowercase hex digits read as the commit id they spell
+    ///   ([`CommitDigits::Full`]), whose `Display` writes the same digits back;
+    ///   8 to 63 read as a prefix ([`CommitDigits::Abbreviated`]) keeping the
+    ///   digits as written.
+    /// - fails: [`ParseIdError::CommitShort`] for fewer than 8 bytes,
+    ///   [`ParseIdError::CommitLong`] for more than 64, and
+    ///   [`ParseIdError::CommitDigit`] for a byte that is not a lowercase hex
+    ///   digit, an uppercase one among them, in that order.
     /// - panics: none.
     ///
     /// # Errors
-    /// - [`ParseIdError::Length`]: the text is not 64 bytes long.
-    /// - [`ParseIdError::Digit`]: a character is not a hex digit.
+    /// - [`ParseIdError::CommitShort`]: fewer than 8 digits.
+    /// - [`ParseIdError::CommitLong`]: more than 64 digits.
+    /// - [`ParseIdError::CommitDigit`]: a byte is not a lowercase hex digit.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — the commit id shares the peer key's decoder; a round
-    ///   trip through the commit id's `Display` pins that it carries the
-    ///   decoded bytes unchanged.
-    /// - witness: `id::tests::a_commit_id_round_trips_through_its_hex_text`
-    #[inline]
+    /// - hypothesis: L3 — witnessed through the anchor parser: 64 digits
+    ///   round-trip as a commit anchor, 8 and 63 read as a prefix, and 7, 65,
+    ///   an uppercase and a non-hex digit each meet their own refusal.
+    /// - witness: `anchor::tests::an_anchor_round_trips_through_its_text`
+    /// - witness: `anchor::tests::a_commit_reference_may_abbreviate_its_id`
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
-        let bytes = text.parse::<HexBytes>()?;
-        Ok(Self(CommitId::new(bytes.0)))
+        if text.len() < COMMIT_PREFIX_DIGITS {
+            return Err(ParseIdError::CommitShort);
+        }
+        if text.len() > HEX_DIGITS {
+            return Err(ParseIdError::CommitLong);
+        }
+        let (mut first, mut last) = ([b'0'; HEX_DIGITS], [b'f'; HEX_DIGITS]);
+        for ((low, high), digit) in first.iter_mut().zip(last.iter_mut()).zip(text.bytes()) {
+            *low = digit;
+            *high = digit;
+        }
+        let spell = |digits: [u8; HEX_DIGITS]| -> Result<CommitId, ParseIdError> {
+            let mut bytes = [0_u8; 32];
+            data_encoding::HEXLOWER
+                .decode_mut(&digits, &mut bytes)
+                .map_err(|partial| ParseIdError::CommitDigit(partial.error))?;
+            Ok(CommitId::new(bytes))
+        };
+        let first = spell(first)?;
+        let last = spell(last)?;
+        if text.len() == HEX_DIGITS {
+            return Ok(Self::Full(first));
+        }
+        Ok(Self::Abbreviated(CommitPrefix {
+            digits: text.into(),
+            first,
+            last,
+        }))
     }
 }
 
@@ -421,6 +506,15 @@ pub enum ParseIdError
     /// The text spells no ed25519 verifying key, or not canonically.
     #[error("not a tree id: no ed25519 verifying key is spelled so")]
     TreeKey(#[source] iroh::KeyParsingError),
+    /// The commit id is abbreviated to fewer than 8 hex digits.
+    #[error("a commit id is abbreviated to {COMMIT_PREFIX_DIGITS} hex digits at the fewest")]
+    CommitShort,
+    /// The commit id has more than 64 hex digits.
+    #[error("a commit id is {HEX_DIGITS} hex digits at most")]
+    CommitLong,
+    /// A byte of the commit id is not a lowercase hex digit.
+    #[error("a commit id is written in lowercase hex digits")]
+    CommitDigit(#[source] data_encoding::DecodeError),
 }
 
 /// Thirty-two bytes decoded from hex text.
@@ -464,9 +558,7 @@ impl FromStr for HexBytes
 #[cfg(test)]
 mod tests
 {
-    use sedimentree_core::loose_commit::id::CommitId;
-
-    use super::CommitHex;
+    use super::CommitDigits;
     use super::EndpointKey;
     use super::ParseIdError;
     use super::PeerKey;
@@ -568,23 +660,40 @@ mod tests
     }
 
     #[test]
-    fn a_commit_id_round_trips_through_its_hex_text()
+    fn a_prefix_spans_the_ids_it_begins()
     {
-        let commit = ID.parse::<CommitHex>().unwrap().id();
+        let Ok(CommitDigits::Abbreviated(prefix)) = "0123abcd".parse::<CommitDigits>()
+        else {
+            panic!("eight digits are a prefix");
+        };
         assert_eq!(
-            commit.as_bytes()[0],
-            0x00,
-            "the first digit pair is the first byte"
+            prefix.to_string(),
+            "0123abcd",
+            "a prefix displays as written"
         );
-        assert_eq!(commit.to_string(), ID, "display reads back");
+        let whole = |text: String| match text.parse::<CommitDigits>() {
+            | Ok(CommitDigits::Full(commit)) => commit,
+            | other => panic!("not a whole commit id: {text}: {other:?}"),
+        };
+        let (zeros, fs) = ("0".repeat(56), "f".repeat(56));
+        let span = prefix.span();
         assert_eq!(
-            CommitId::new([0xab; 32])
-                .to_string()
-                .parse::<CommitHex>()
-                .unwrap()
-                .id(),
-            CommitId::new([0xab; 32]),
-            "a commit id's display reads back to it"
+            *span.start(),
+            whole(format!("0123abcd{zeros}")),
+            "the span begins at the digits padded with zeros"
+        );
+        assert_eq!(
+            *span.end(),
+            whole(format!("0123abcd{fs}")),
+            "and ends at the digits padded with fs"
+        );
+        assert!(
+            !span.contains(&whole(format!("0123abcc{fs}"))),
+            "the id just below lies outside"
+        );
+        assert!(
+            !span.contains(&whole(format!("0123abce{zeros}"))),
+            "the id just above lies outside"
         );
     }
 

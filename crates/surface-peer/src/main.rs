@@ -1,9 +1,9 @@
 //! `domhringr-peer`: one record-plane peer over a state directory. It opens a
 //! sedimentree under a key of the tree's own, grants write authority on it,
 //! writes notes to it, binds paths in it, claims DNS names for it, introduces
-//! other trees in it by label, resolves an anchor to what it names, prints the
-//! view every peer holding the same commits folds them to, reads the tree's
-//! heads, and syncs the tree with another peer over iroh.
+//! other trees in it by label, resolves an anchor or a commit to what it
+//! names, prints the view every peer holding the same commits folds them to,
+//! reads the tree's heads, and syncs the tree with another peer over iroh.
 //!
 //! ```text
 //! domhringr-peer --state <dir> id
@@ -22,15 +22,22 @@
 //!
 //! A tree is named by its anchor, `domhringr://<tree-id>/`, whose tree id is
 //! the tree key's 52 z-base-32 characters; a path in the tree by
-//! `domhringr://<tree-id>/<segment>/…/<segment>`. `whence` reads both in
-//! three forms: the key form above; the DNS form, `domhringr://<domain>/…`,
-//! whose DNS name contains a dot and resolves to the one tree that both its
-//! witness names and whose root claims it — the `_domhringr.<domain>` TXT
-//! records, or the trees `--witness` names in their place; and the label
-//! form, `domhringr://<label>/…`, whose label has no dot and resolves through
-//! the introductions of the `--in` tree alone. A target is `commit
-//! <commit-id>`, `tree <tree>`, `endpoint <endpoint-id>` or `datum <text>`.
-//! Peer, endpoint and commit ids are 64 hex digits.
+//! `domhringr://<tree-id>/<segment>/…/<segment>`; and a commit in it by
+//! `domhringr://<tree-id>/.commit/<commit-id>`. A segment beginning with `.`
+//! is reserved for forms the scheme names, so no path holds one. `whence`
+//! reads each in three forms: the key form above; the DNS form,
+//! `domhringr://<domain>/…`, whose DNS name contains a dot and resolves to the
+//! one tree that both its witness names and whose root claims it — the
+//! `_domhringr.<domain>` TXT records, or the trees `--witness` names in their
+//! place; and the label form, `domhringr://<label>/…`, whose label has no dot
+//! and resolves through the introductions of the `--in` tree alone. `whence`
+//! also reads a commit id abbreviated to a prefix of at least 8 of its hex
+//! digits that no other commit of the tree begins with, and prints a commit as
+//! `commit <commit-id> admitted`, `commit <commit-id> refused <reason>`, or
+//! `unknown` when the tree holds no such commit. A target is `anchor
+//! <anchor>`, a tree, a path or a commit in any of the three forms with the
+//! commit id whole, `endpoint <endpoint-id>` or `datum <text>`. Peer, endpoint
+//! and commit ids are 64 hex digits.
 //!
 //! The state directory holds the peer's two keys, the key of each tree it
 //! opened, and its tree store, all created on first use. A command holds the
@@ -68,7 +75,6 @@ use domhringr_record_tree::Authority;
 use domhringr_record_tree::BindError;
 use domhringr_record_tree::BindPort;
 use domhringr_record_tree::CommitError;
-use domhringr_record_tree::CommitHex;
 use domhringr_record_tree::Dns;
 use domhringr_record_tree::Domain;
 use domhringr_record_tree::HeadsError;
@@ -86,6 +92,7 @@ use domhringr_record_tree::Peer;
 use domhringr_record_tree::PeerKey;
 use domhringr_record_tree::RandomError;
 use domhringr_record_tree::Receipt;
+use domhringr_record_tree::Reference;
 use domhringr_record_tree::RemotePeer;
 use domhringr_record_tree::Scope;
 use domhringr_record_tree::StateDir;
@@ -114,11 +121,14 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> sync <endpoint-id> <peer-id> <tree> [--at <ip:port>]
 where  <tree>   is domhringr://<tree-id>/
        <anchor> is domhringr://<tree-id>/<segment>/.../<segment>
-       <name>   is a <tree> or an <anchor> in one of three forms: by key, as above;
-                by DNS name, <domain> in place of <tree-id>: a name with a dot, resolved
-                through its witness and the tree's claim; or by label, <label> in place of
-                <tree-id>: a name without a dot, resolved in the --in tree
-       <target> is commit <commit-id> | tree <tree> | endpoint <endpoint-id> | datum <text>
+       <commit> is domhringr://<tree-id>/.commit/<commit-id>, the id whole, or for whence
+                a prefix of at least 8 hex digits no other commit of the tree begins with
+       <name>   is a <tree>, an <anchor> or a <commit> in one of three forms: by key, as
+                above; by DNS name, <domain> in place of <tree-id>: a name with a dot,
+                resolved through its witness and the tree's claim; or by label, <label>
+                in place of <tree-id>: a name without a dot, resolved in the --in tree
+       <target> is anchor <name> | endpoint <endpoint-id> | datum <text>
+A segment beginning with . is reserved for the forms above: no path holds one.
 ";
 
 /// The exit status of a command line that cannot be run.
@@ -144,7 +154,7 @@ enum Verb
     Claim,
     /// Introduce a tree by a label in another.
     Introduce,
-    /// Print what an anchor resolves to.
+    /// Print what an anchor or a commit resolves to.
     Whence,
     /// Print a tree's view.
     View,
@@ -171,7 +181,7 @@ impl fmt::Display for Verb
             | Self::Open => "open",
             | Self::Grant => "grant <tree> <peer-id>",
             | Self::Note => "note <tree> <text>",
-            | Self::Bind => "bind <anchor> commit|tree|endpoint|datum <target>",
+            | Self::Bind => "bind <anchor> anchor|endpoint|datum <target>",
             | Self::Claim => "claim <tree> <domain>",
             | Self::Introduce => "introduce <tree> <label> <tree>",
             | Self::Whence => "whence <name> [--witness <domain>=<tree-id>]... [--in <tree>]",
@@ -187,16 +197,16 @@ impl fmt::Display for Verb
 enum Operand
 {
     /// The tree to grant on, write to, claim for, introduce in, read, sync,
-    /// or read a label in, a bind's target tree, or the tree introduced.
+    /// or read a label in, or the tree introduced.
     Tree,
     /// The anchor to bind or resolve.
     Anchor,
+    /// A bind's target anchor.
+    Target,
     /// The remote's iroh endpoint id, or a bind's target endpoint.
     Endpoint,
     /// The remote's or the grantee's subduction peer id.
     Peer,
-    /// A bind's target commit.
-    Commit,
     /// The tree a witness supplied by hand names.
     Witness,
 }
@@ -215,9 +225,9 @@ impl fmt::Display for Operand
         f.write_str(match *self {
             | Self::Tree => "tree anchor",
             | Self::Anchor => "anchor",
+            | Self::Target => "target anchor",
             | Self::Endpoint => "endpoint id",
             | Self::Peer => "peer id",
-            | Self::Commit => "commit id",
             | Self::Witness => "witness's tree id",
         })
     }
@@ -284,12 +294,12 @@ enum Command
         /// The tree the label names.
         introduced: TreeId,
     },
-    /// Print what `anchor` resolves to, asking `witnessing` for a DNS name's
+    /// Print what `reference` resolves to, asking `witnessing` for a DNS name's
     /// candidates and reading a label in `scope`.
     Whence
     {
-        /// The anchor resolved.
-        anchor: Anchor,
+        /// The anchor or the commit resolved.
+        reference: Reference,
         /// What names a DNS name's candidate trees.
         witnessing: Witnessing,
         /// The tree a label is read in.
@@ -376,14 +386,14 @@ enum UsageError
         #[source]
         source: ParseAnchorError,
     },
-    /// A tree operand is an anchor naming a path.
-    #[error("the tree anchor names a path: expected domhringr://<tree-id>/")]
+    /// A tree operand is an anchor naming a path or a commit.
+    #[error("the tree anchor names a path or a commit: expected domhringr://<tree-id>/")]
     NotTree,
     /// A tree operand names its tree by a DNS name or a label where only the
     /// key form is read.
     #[error("the tree is named by its key here: expected domhringr://<tree-id>/")]
     NotKey,
-    /// The anchor to bind names no path.
+    /// The anchor to bind names no path: it is bare or names a commit.
     #[error("the anchor names no path to bind: expected domhringr://<tree-id>/<path>")]
     NoPath,
     /// A DNS name operand is not a DNS name.
@@ -396,7 +406,7 @@ enum UsageError
     #[error("a witness is <domain>=<tree-id>")]
     Witness,
     /// A bind's target kind is not one this binary has.
-    #[error("unknown target kind {0:?}: expected commit, tree, endpoint or datum")]
+    #[error("unknown target kind {0:?}: expected anchor, endpoint or datum")]
     Target(OsString),
     /// A note's text, a datum, a DNS name or a label is not UTF-8.
     #[error("the text is not UTF-8: {0:?}")]
@@ -473,14 +483,14 @@ enum RunError
 ///   for too few or too many operands, checked before any operand is read,
 ///   [`UsageError::Operand`] for an id that does not parse,
 ///   [`UsageError::Anchor`] for an anchor that does not parse,
-///   [`UsageError::NotTree`] for a tree operand naming a path,
+///   [`UsageError::NotTree`] for a tree operand naming a path or a commit,
 ///   [`UsageError::NotKey`] for a tree operand or an anchor to bind naming its
-///   tree by a DNS name or a label, [`UsageError::NoPath`] for a bare anchor to
-///   bind, [`UsageError::Text`] for a note's text, a DNS name or a label that
-///   is not UTF-8, [`UsageError::Domain`] and [`UsageError::Label`] for a DNS
-///   name or a label that does not parse, as [`read_target`] for `bind`'s
-///   target, as [`serve_port`] for `serve`, and as [`sync_command`] and
-///   [`whence_command`] for `sync` and `whence`.
+///   tree by a DNS name or a label, [`UsageError::NoPath`] for an anchor to
+///   bind that is bare or names a commit, [`UsageError::Text`] for a note's
+///   text, a DNS name or a label that is not UTF-8, [`UsageError::Domain`] and
+///   [`UsageError::Label`] for a DNS name or a label that does not parse, as
+///   [`read_target`] for `bind`'s target, as [`serve_port`] for `serve`, and as
+///   [`sync_command`] and [`whence_command`] for `sync` and `whence`.
 /// - panics: none.
 ///
 /// # Errors
@@ -491,7 +501,7 @@ enum RunError
 /// - [`UsageError::Operands`]: the verb's operand count is wrong.
 /// - [`UsageError::Operand`]: an operand is not an id.
 /// - [`UsageError::Anchor`]: an operand is not an anchor.
-/// - [`UsageError::NotTree`]: a tree operand names a path.
+/// - [`UsageError::NotTree`]: a tree operand names a path or a commit.
 /// - [`UsageError::NotKey`]: a tree operand or the anchor to bind is not in the
 ///   key form.
 /// - [`UsageError::NoPath`]: the anchor to bind names no path.
@@ -506,12 +516,13 @@ enum RunError
 ///
 /// # Adequacy
 /// - hypothesis: L3 — each verb with its operands, every bind target kind, a
-///   bare and a path anchor to resolve in each of the three forms, both
-///   `--state` spellings, `serve` with and without a port, `sync` with and
-///   without an address, `whence` with and without witnesses and a scope, and a
-///   dash-leading note and datum separate the accepted lines, and one line per
-///   refusal pins which refusal each malformation gets, including an arity
-///   error that wins over a malformed operand.
+///   bare, a path and a commit anchor to resolve in each of the three forms and
+///   an abbreviated commit, both `--state` spellings, `serve` with and without
+///   a port, `sync` with and without an address, `whence` with and without
+///   witnesses and a scope, and a dash-leading note and datum separate the
+///   accepted lines, and one line per refusal pins which refusal each
+///   malformation gets, including an arity error that wins over a malformed
+///   operand.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
@@ -558,7 +569,7 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
             text: text.into_string().map_err(UsageError::Text)?,
         },
         | (Verb::Bind, (Some(anchor), Some(kind), Some(value), None)) => {
-            let anchor = read_anchor(&anchor, Operand::Anchor)?;
+            let anchor = read_anchor::<Anchor>(&anchor, Operand::Anchor)?;
             let Anchor::Path { authority, path } = anchor
             else {
                 return Err(UsageError::NoPath);
@@ -661,8 +672,9 @@ fn sync_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 /// Read `whence`'s operand and options from what follows the verb.
 ///
 /// # Specification
-/// - ensures: accepts one anchor, in any of its three forms, with any number of
-///   `--witness <domain>=<tree-id>` and at most one effective `--in <tree>` (or
+/// - ensures: accepts one reference, an anchor or a commit in any of the three
+///   forms, the commit's id whole or abbreviated, with any number of `--witness
+///   <domain>=<tree-id>` and at most one effective `--in <tree>` (or
 ///   `--in=<tree>`; the last one given wins) anywhere around it. With no
 ///   `--witness`, a DNS name's candidates are its `_domhringr.<domain>` TXT
 ///   records; with any, they are the trees the `--witness` values name for it,
@@ -673,8 +685,8 @@ fn sync_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 ///   a malformed witness, [`UsageError::Anchor`], [`UsageError::NotTree`] and
 ///   [`UsageError::NotKey`] as [`read_tree`] for a malformed `--in`,
 ///   [`UsageError::Operands`] for other than one operand, checked before the
-///   operand is read, and [`UsageError::Anchor`] for an operand that is not an
-///   anchor.
+///   operand is read, and [`UsageError::Anchor`] for an operand that is not a
+///   reference.
 /// - panics: none.
 ///
 /// # Errors
@@ -684,13 +696,14 @@ fn sync_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 /// - [`UsageError::NotTree`], [`UsageError::NotKey`]: as [`read_tree`] for
 ///   `--in`.
 /// - [`UsageError::Operands`]: there is not one operand.
-/// - [`UsageError::Anchor`]: the anchor or `--in`'s tree does not parse.
+/// - [`UsageError::Anchor`]: the reference or `--in`'s tree does not parse.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — a key, a DNS and a label anchor, two witnesses for one
-///   name and a repeated `--in` are read to their command, and a witness
-///   without `=`, with a malformed name or tree id, an `--in` naming a path, a
-///   missing operand and a surplus one each meet their own refusal.
+/// - hypothesis: L3 — a key, a DNS and a label anchor, a commit whole and
+///   abbreviated, two witnesses for one name and a repeated `--in` are read to
+///   their command, and a witness without `=`, with a malformed name or tree
+///   id, an `--in` naming a path, a reserved segment, a commit id too short to
+///   read, a missing operand and a surplus one each meet their own refusal.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn whence_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
@@ -722,8 +735,8 @@ fn whence_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     };
     let mut operands = operands.into_iter();
     match (operands.next(), operands.next()) {
-        | (Some(anchor), None) => Ok(Command::Whence {
-            anchor: read_anchor(&anchor, Operand::Anchor)?,
+        | (Some(reference), None) => Ok(Command::Whence {
+            reference: read_anchor(&reference, Operand::Anchor)?,
             witnessing,
             scope,
         }),
@@ -852,8 +865,8 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
 /// - [`UsageError::Operand`]: the text is not an id.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — a malformed peer id, endpoint id and commit id are
-///   refused under their own operand names.
+/// - hypothesis: L3 — a malformed peer id and endpoint id are refused under
+///   their own operand names.
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn read_id<T>(
     text: &OsStr,
@@ -867,31 +880,36 @@ where
         .map_err(|source| UsageError::Operand { operand, source })
 }
 
-/// Read the anchor `text` spells, for the operand `operand`.
+/// Read the anchor or the reference `text` spells, for the operand `operand`.
 ///
 /// # Specification
-/// - ensures: yields the anchor [`Anchor`]'s parser reads from `text`, bare or
-///   naming a path, in any of its three forms; text that is not UTF-8 is read
-///   with replacement characters, which no anchor's authority accepts.
+/// - ensures: yields what `T`'s parser reads from `text`: for an [`Anchor`], a
+///   tree, a path or a commit by its whole id, and for a [`Reference`] also a
+///   commit by a prefix of its id, in any of the three forms; text that is not
+///   UTF-8 is read with replacement characters, which no anchor's authority
+///   accepts.
 /// - fails: [`UsageError::Anchor`] naming `operand` and carrying the parser's
 ///   reason.
 /// - panics: none.
 ///
 /// # Errors
-/// - [`UsageError::Anchor`]: the text is not an anchor.
+/// - [`UsageError::Anchor`]: the text is not what `T` reads.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — a hex tree id where a tree anchor stands and an empty
-///   segment in an anchor to resolve are refused under their own operand names,
-///   each with the parser's reason.
+/// - hypothesis: L3 — a hex tree id where a tree anchor stands, an empty and a
+///   reserved segment and a commit id too short to read in a reference to
+///   resolve, and an abbreviated commit id in a target anchor are refused under
+///   their own operand names, each with the parser's reason.
 /// - witness: `tests::a_malformed_command_line_is_refused`
-fn read_anchor(
+fn read_anchor<T>(
     text: &OsStr,
     operand: Operand,
-) -> Result<Anchor, UsageError>
+) -> Result<T, UsageError>
+where
+    T: FromStr<Err = ParseAnchorError>,
 {
     text.to_string_lossy()
-        .parse::<Anchor>()
+        .parse::<T>()
         .map_err(|source| UsageError::Anchor { operand, source })
 }
 
@@ -900,28 +918,28 @@ fn read_anchor(
 /// # Specification
 /// - ensures: yields the tree of the bare anchor `domhringr://<tree-id>/`.
 /// - fails: as [`read_anchor`] for the tree operand, [`UsageError::NotTree`]
-///   for an anchor naming a path, and [`UsageError::NotKey`] for a bare anchor
-///   naming its tree by a DNS name or a label.
+///   for an anchor naming a path or a commit, and [`UsageError::NotKey`] for a
+///   bare anchor naming its tree by a DNS name or a label.
 /// - panics: none.
 ///
 /// # Errors
 /// - [`UsageError::Anchor`]: the text is not an anchor.
-/// - [`UsageError::NotTree`]: the anchor names a path.
+/// - [`UsageError::NotTree`]: the anchor names a path or a commit.
 /// - [`UsageError::NotKey`]: the anchor is not in the key form.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — a bare anchor is read to its tree wherever a tree stands,
-///   a path anchor in its place is refused as no tree, and a bare DNS or label
-///   anchor as no key.
+///   a path or a commit anchor in its place is refused as no tree, and a bare
+///   DNS or label anchor as no key.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn read_tree(text: &OsStr) -> Result<TreeId, UsageError>
 {
-    let anchor = read_anchor(text, Operand::Tree)?;
+    let anchor = read_anchor::<Anchor>(text, Operand::Tree)?;
     match anchor {
         | Anchor::Tree(Authority::Key(tree)) => Ok(tree),
         | Anchor::Tree(Authority::Domain(_) | Authority::Label(_)) => Err(UsageError::NotKey),
-        | Anchor::Path { .. } => Err(UsageError::NotTree),
+        | Anchor::Path { .. } | Anchor::Commit { .. } => Err(UsageError::NotTree),
     }
 }
 
@@ -957,23 +975,26 @@ where
 /// Read a bind's target from its kind and its value.
 ///
 /// # Specification
-/// - ensures: `commit` reads the value as a commit id, `tree` as a bare tree
-///   anchor, `endpoint` as an endpoint id, and `datum` takes it verbatim.
+/// - ensures: `anchor` reads the value as an anchor — a tree, a path or a
+///   commit by its whole id, in any of the three forms — `endpoint` as an
+///   endpoint id, and `datum` takes it verbatim.
 /// - fails: [`UsageError::Target`] for any other kind, carrying it,
-///   [`UsageError::Operand`] for a commit or endpoint id that does not parse,
-///   as [`read_tree`] for a tree, and [`UsageError::Text`] for a datum that is
-///   not UTF-8.
+///   [`UsageError::Anchor`] naming the target anchor for an anchor that does
+///   not parse or abbreviates its commit id, [`UsageError::Operand`] for an
+///   endpoint id that does not parse, and [`UsageError::Text`] for a datum that
+///   is not UTF-8.
 /// - panics: none.
 ///
 /// # Errors
 /// - [`UsageError::Target`]: the kind is unknown.
-/// - [`UsageError::Operand`]: the commit or endpoint id does not parse.
-/// - [`UsageError::Anchor`], [`UsageError::NotTree`]: as [`read_tree`].
+/// - [`UsageError::Anchor`]: the anchor does not parse.
+/// - [`UsageError::Operand`]: the endpoint id does not parse.
 /// - [`UsageError::Text`]: the datum is not UTF-8.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — each kind is read to its target, a dash-leading datum
-///   among them, and an unknown kind, a malformed commit id and a datum that is
+/// - hypothesis: L3 — each kind is read to its target, an anchor in each of its
+///   forms and a dash-leading datum among them, and an unknown kind, among them
+///   the names of an anchor's forms, an abbreviated commit, and a datum that is
 ///   not UTF-8 each meet their own refusal.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
@@ -983,11 +1004,7 @@ fn read_target(
 ) -> Result<Target, UsageError>
 {
     match kind.to_str() {
-        | Some("commit") => {
-            let commit = read_id::<CommitHex>(&value, Operand::Commit)?;
-            Ok(Target::Commit(commit.id()))
-        },
-        | Some("tree") => read_tree(&value).map(Target::Tree),
+        | Some("anchor") => read_anchor(&value, Operand::Target).map(Target::Anchor),
         | Some("endpoint") => read_id(&value, Operand::Endpoint).map(Target::Endpoint),
         | Some("datum") => value
             .into_string()
@@ -1033,9 +1050,13 @@ fn run(invocation: Invocation) -> Result<(), RunError>
 ///   tree's Open proved by that key for this peer, and writes the tree's anchor
 ///   line. `grant`, `note`, `bind`, `claim` and `introduce` commit their
 ///   receipt, under a fresh operation fence, and write the new commit's id
-///   line. `whence` writes what the anchor resolves to in the local views
+///   line. `whence` writes what the reference resolves to in the local views
 ///   ([`Peer::whence`]), asking DNS for a DNS name's candidate trees unless
-///   `--witness` named them: the target, or `unbound`. `view` writes the tree's
+///   `--witness` named them: for a path the target bound to it (`anchor
+///   <anchor>`, `endpoint <endpoint-id>` or `datum <text>`) or `unbound`; for a
+///   bare DNS or label anchor the anchor of the tree it names by key; for a
+///   commit `commit <commit-id> admitted`, `commit <commit-id> refused
+///   <reason>`, or `unknown` when the tree holds none. `view` writes the tree's
 ///   view, one line per fact ([`domhringr_record_tree::View`]'s display).
 ///   `heads` writes the tree's heads, one sorted hex line each. `sync` dials
 ///   the remote, at its direct address when `--at` named one, writes the heads
@@ -1057,8 +1078,8 @@ fn run(invocation: Invocation) -> Result<(), RunError>
 /// - [`RunError::Random`]: no operation fence can be drawn.
 /// - [`RunError::Commit`]: the commit cannot be appended.
 /// - [`RunError::View`]: the tree is unopened or its commits cannot be read.
-/// - [`RunError::Whence`]: the anchor does not resolve, as when its DNS name is
-///   unclaimed or its label unintroduced.
+/// - [`RunError::Whence`]: the reference does not resolve, as when its DNS name
+///   is unclaimed, its label unintroduced or its commit prefix ambiguous.
 /// - [`RunError::Heads`]: the heads cannot be read.
 /// - [`RunError::Sync`]: the sync failed.
 /// - [`RunError::Output`]: standard output cannot be written.
@@ -1067,15 +1088,17 @@ fn run(invocation: Invocation) -> Result<(), RunError>
 /// # Adequacy
 /// - hypothesis: L3 — two processes exchange ids, open a tree and parse its
 ///   anchor, grant, write notes, bind paths, claim a DNS name, introduce a tree
-///   by a label, resolve anchors in all three forms, read heads and views, and
-///   sync at each other's direct address in both directions; views are compared
-///   byte for byte across processes and with the expected facts, resolutions
-///   with the commit bound and across forms, refusals by their diagnostic, and
-///   each sync's path line is parsed.
+///   by a label, resolve anchors in all three forms and commits whole and
+///   abbreviated, read heads and views, and sync at each other's direct address
+///   in both directions; views are compared byte for byte across processes and
+///   with the expected facts, resolutions with the commit bound, across forms
+///   and with each commit's verdict, refusals by their diagnostic, and each
+///   sync's path line is parsed.
 /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
 /// - witness: `sync::tests::two_peers_sync_one_tree_to_identical_heads`
 /// - witness: `sync::tests::an_anchor_resolves_alike_on_both_peers`
 /// - witness: `sync::tests::a_named_anchor_resolves_through_its_claim_or_introduction`
+/// - witness: `sync::tests::a_commit_resolves_to_its_verdict_on_both_peers`
 async fn execute(invocation: Invocation) -> Result<(), RunError>
 {
     let Invocation { state, command } = invocation;
@@ -1120,14 +1143,14 @@ async fn execute(invocation: Invocation) -> Result<(), RunError>
             record(&peer, tree, Receipt::introduce(tree, label, introduced)?).await
         },
         | Command::Whence {
-            anchor,
+            reference,
             witnessing,
             scope,
         } => {
             let peer = Peer::open(&state, identity)?;
             let resolution = match witnessing {
-                | Witnessing::Dns => peer.whence(&anchor, &Dns::system(), scope).await?,
-                | Witnessing::ByHand(witness) => peer.whence(&anchor, &witness, scope).await?,
+                | Witnessing::Dns => peer.whence(&reference, &Dns::system(), scope).await?,
+                | Witnessing::ByHand(witness) => peer.whence(&reference, &witness, scope).await?,
             };
             drop(peer);
             emit(&format_args!("{resolution}\n"))
@@ -1313,14 +1336,15 @@ mod tests
     use domhringr_record_tree::Anchor;
     use domhringr_record_tree::Authority;
     use domhringr_record_tree::BindPort;
-    use domhringr_record_tree::CommitHex;
     use domhringr_record_tree::Domain;
     use domhringr_record_tree::Identity;
     use domhringr_record_tree::Label;
     use domhringr_record_tree::ParseAnchorError;
     use domhringr_record_tree::ParseDomainError;
+    use domhringr_record_tree::ParseIdError;
     use domhringr_record_tree::ParseLabelError;
     use domhringr_record_tree::Path;
+    use domhringr_record_tree::Reference;
     use domhringr_record_tree::RemotePeer;
     use domhringr_record_tree::Scope;
     use domhringr_record_tree::StateDir;
@@ -1347,7 +1371,7 @@ mod tests
     /// A path in that tree.
     const PATH: &str = "domhringr://yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy/a/b";
 
-    /// A commit id, which is also the form a tree id took before anchors.
+    /// A commit id: 64 hex digits, which no anchor reads where a tree stands.
     const COMMIT: &str = "0707070707070707070707070707070707070707070707070707070707070707";
 
     /// The DNS name the command lines claim and witness.
@@ -1401,7 +1425,7 @@ mod tests
             format!("--in={other_anchor}"),
         );
         let whence = |anchor: Anchor| Command::Whence {
-            anchor,
+            reference: Reference::from(anchor),
             witnessing: Witnessing::Dns,
             scope: Scope::Unscoped,
         };
@@ -1409,7 +1433,8 @@ mod tests
             PATH.parse::<Anchor>().unwrap(),
             "a/b".parse::<Path>().unwrap(),
         );
-        let commit = COMMIT.parse::<CommitHex>().unwrap().id();
+        let commit_text = format!("{TREE}.commit/{COMMIT}");
+        let commit = commit_text.parse::<Anchor>().unwrap();
         let state = StateDir::from(PathBuf::from("dir"));
         let remote = remote();
         let (endpoint, peer) = (remote.endpoint().to_string(), remote.peer().to_string());
@@ -1457,12 +1482,19 @@ mod tests
                 },
             ),
             (
-                vec!["--state", "dir", "bind", PATH, "commit", COMMIT],
-                bind(Target::Commit(commit)),
+                vec!["--state", "dir", "bind", PATH, "anchor", &commit_text],
+                bind(Target::Anchor(commit.clone())),
             ),
             (
-                vec!["--state", "dir", "bind", PATH, "tree", TREE],
-                bind(Target::Tree(tree)),
+                vec!["--state", "dir", "bind", PATH, "anchor", TREE],
+                bind(Target::Anchor(Anchor::key(tree))),
+            ),
+            (
+                vec!["--state", "dir", "bind", PATH, "anchor", "domhringr://b/x"],
+                bind(Target::Anchor(Anchor::Path {
+                    authority: Authority::Label(b.clone()),
+                    path: "x".parse().unwrap(),
+                })),
             ),
             (
                 vec!["--state", "dir", "bind", PATH, "endpoint", &endpoint],
@@ -1493,6 +1525,10 @@ mod tests
                 whence(Anchor::key(tree)),
             ),
             (
+                vec!["--state", "dir", "whence", &commit_text],
+                whence(commit),
+            ),
+            (
                 vec![
                     "--state",
                     "dir",
@@ -1503,10 +1539,10 @@ mod tests
                     &witnessed_other,
                 ],
                 Command::Whence {
-                    anchor: Anchor::Path {
+                    reference: Reference::from(Anchor::Path {
                         authority: Authority::Domain(example()),
                         path: path.clone(),
-                    },
+                    }),
                     witnessing: Witnessing::ByHand(
                         [(example(), tree), (example(), other)]
                             .into_iter()
@@ -1526,7 +1562,7 @@ mod tests
                     &scoped,
                 ],
                 Command::Whence {
-                    anchor: Anchor::Tree(Authority::Label(b)),
+                    reference: Reference::from(Anchor::Tree(Authority::Label(b))),
                     witnessing: Witnessing::Dns,
                     scope: Scope::In(other),
                 },
@@ -1584,6 +1620,28 @@ mod tests
                 "{line:?}"
             );
         }
+        let prefix = format!("{TREE}.commit/07070707");
+        let abbreviated = parse(lexopt::Parser::from_args(vec![
+            "--state",
+            "dir",
+            "whence",
+            prefix.as_str(),
+        ]))
+        .unwrap();
+        assert!(
+            matches!(
+                abbreviated.command,
+                Command::Whence {
+                    reference: Reference::Abbreviated {
+                        authority: Authority::Key(read),
+                        ref prefix,
+                    },
+                    witnessing: Witnessing::Dns,
+                    scope: Scope::Unscoped,
+                } if read == tree && prefix.to_string() == "07070707"
+            ),
+            "whence reads a commit id abbreviated to eight digits as a prefix"
+        );
     }
 
     #[test]
@@ -1593,6 +1651,7 @@ mod tests
         let (endpoint, peer) = (remote.endpoint().to_string(), remote.peer().to_string());
         let refused = |line: Vec<OsString>| parse(lexopt::Parser::from_args(line)).unwrap_err();
         let line = |words: &[&str]| words.iter().map(OsString::from).collect::<Vec<_>>();
+        let commit_text = format!("{TREE}.commit/{COMMIT}");
         assert!(matches!(refused(line(&[])), UsageError::NoCommand));
         assert!(matches!(
             refused(line(&["--state"])),
@@ -1640,7 +1699,7 @@ mod tests
                     source: ParseAnchorError::Scheme,
                 }
             ),
-            "a hex tree id is no longer read"
+            "a hex id is no tree anchor"
         );
         assert!(matches!(
             refused(line(&["--state", "dir", "view", PATH])),
@@ -1708,38 +1767,104 @@ mod tests
             }
         ));
         assert!(matches!(
-            refused(line(&["--state", "dir", "bind", PATH, "commit"])),
+            refused(line(&["--state", "dir", "bind", PATH, "anchor"])),
             UsageError::Operands(Verb::Bind)
         ));
+        for bound in [TREE, commit_text.as_str()] {
+            assert!(
+                matches!(
+                    refused(line(&["--state", "dir", "bind", bound, "anchor", TREE])),
+                    UsageError::NoPath
+                ),
+                "{bound} names no path to bind"
+            );
+        }
+        for kind in ["commit", "tree", "tag"] {
+            assert!(
+                matches!(refused(line(&["--state", "dir", "bind", PATH, kind, TREE])), UsageError::Target(read) if read == kind),
+                "{kind} is no target kind"
+            );
+        }
+        let abbreviated = format!("{TREE}.commit/07070707");
+        assert!(
+            matches!(
+                refused(line(&[
+                    "--state",
+                    "dir",
+                    "bind",
+                    PATH,
+                    "anchor",
+                    &abbreviated
+                ])),
+                UsageError::Anchor {
+                    operand: Operand::Target,
+                    source: ParseAnchorError::Abbreviated,
+                }
+            ),
+            "a target anchor carries its commit id whole"
+        );
         assert!(matches!(
-            refused(line(&["--state", "dir", "bind", TREE, "commit", COMMIT])),
-            UsageError::NoPath
-        ));
-        assert!(matches!(
-            refused(line(&["--state", "dir", "bind", PATH, "commit", "nothex"])),
-            UsageError::Operand {
-                operand: Operand::Commit,
-                ..
+            refused(line(&["--state", "dir", "bind", PATH, "anchor", COMMIT])),
+            UsageError::Anchor {
+                operand: Operand::Target,
+                source: ParseAnchorError::Scheme,
             }
         ));
-        assert!(matches!(
-            refused(line(&["--state", "dir", "bind", PATH, "tree", PATH])),
-            UsageError::NotTree
-        ));
-        assert!(
-            matches!(refused(line(&["--state", "dir", "bind", PATH, "tag", "x"])), UsageError::Target(kind) if kind == "tag")
-        );
         assert!(matches!(
             refused(line(&[
                 "--state",
                 "dir",
                 "bind",
                 "domhringr://example.test/x",
-                "commit",
-                COMMIT
+                "anchor",
+                TREE
             ])),
             UsageError::NotKey
         ));
+        assert!(
+            matches!(
+                refused(line(&["--state", "dir", "view", &commit_text])),
+                UsageError::NotTree
+            ),
+            "a commit anchor names no tree"
+        );
+        for (reference, reason) in [
+            (format!("{TREE}.x"), "a reserved first segment"),
+            (format!("{TREE}a/.commit"), "a reserved later segment"),
+        ] {
+            assert!(
+                matches!(
+                    refused(line(&["--state", "dir", "whence", &reference])),
+                    UsageError::Anchor {
+                        operand: Operand::Anchor,
+                        source: ParseAnchorError::Reserved,
+                    }
+                ),
+                "{reason}"
+            );
+        }
+        let trailing = format!("{commit_text}/x");
+        assert!(
+            matches!(
+                refused(line(&["--state", "dir", "whence", &trailing])),
+                UsageError::Anchor {
+                    operand: Operand::Anchor,
+                    source: ParseAnchorError::CommitForm,
+                }
+            ),
+            "a commit form with a path after its id"
+        );
+        let short = format!("{TREE}.commit/0707070");
+        assert!(
+            matches!(
+                refused(line(&["--state", "dir", "whence", &short])),
+                UsageError::Anchor {
+                    operand: Operand::Anchor,
+                    source: ParseAnchorError::Commit(ParseIdError::CommitShort),
+                }
+            ),
+            "seven digits are too few to abbreviate a commit id"
+        );
         assert!(matches!(
             refused(line(&[
                 "--state",

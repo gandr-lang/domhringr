@@ -27,12 +27,16 @@ use subduction_redb_storage::RedbStorageError;
 
 use crate::anchor::Anchor;
 use crate::anchor::Authority;
+use crate::anchor::Locus;
+use crate::anchor::Reference;
 use crate::anchor::Resolution;
 use crate::anchor::Scope;
 use crate::anchor::Target;
+use crate::anchor::Within;
 use crate::fold::Unopened;
 use crate::fold::View;
 use crate::fold::fold;
+use crate::id::CommitPrefix;
 use crate::id::PeerKey;
 use crate::id::TreeId;
 use crate::identity::Identity;
@@ -302,23 +306,28 @@ impl Peer
         Ok(view)
     }
 
-    /// Resolve `anchor` by folding what the store holds, asking `witness` for
-    /// the candidate trees of a DNS name and reading a label in `scope`.
+    /// Resolve `reference` by folding what the store holds, asking `witness`
+    /// for the candidate trees of a DNS name and reading a label in `scope`.
     ///
     /// # Specification
-    /// - ensures: the anchor's authority names a tree first. A key names its
+    /// - ensures: the reference's authority names a tree first. A key names its
     ///   own tree. A DNS name names the one tree, among those `witness` names
     ///   for it, whose local view holds the owner's claim of it
     ///   ([`View::claims`]); a tree the store does not hold claims nothing
     ///   here. A label names the tree the introductions of `scope`'s tree name
     ///   for it ([`View::introductions`]), and the introductions of no other
     ///   tree are read.
-    /// - ensures: then a path anchor resolves to what its path resolves to in
-    ///   the named tree's view ([`View::resolve`]): the binding the fold
-    ///   admitted last in canonical order, or [`Resolution::Unbound`]. A bare
-    ///   anchor named by a DNS name or a label resolves to the claim or the
-    ///   introduction naming its tree: [`Resolution::Bound`] to
-    ///   [`Target::Tree`], under the owner who claimed or the author who
+    /// - ensures: then a path resolves to what it resolves to in the named
+    ///   tree's view ([`View::resolve`]): the binding the fold admitted last in
+    ///   canonical order, or [`Resolution::Unbound`]. A commit resolves to what
+    ///   that view locates for its id ([`View::locate`]): the commit with the
+    ///   fold's verdict on it, or [`Resolution::Unknown`] when the tree does
+    ///   not hold it. An abbreviated commit resolves as the one commit of the
+    ///   tree whose id begins with its prefix ([`View::expand`]) resolves, and
+    ///   to [`Resolution::Unknown`] when no commit's does. A bare anchor named
+    ///   by a DNS name or a label resolves to the claim or the introduction
+    ///   naming its tree: [`Resolution::Bound`] to that tree's key-form anchor
+    ///   ([`Target::Anchor`]), under the owner who claimed or the author who
     ///   introduced. A bare key anchor names no path and nothing binds a key,
     ///   so it resolves to [`Resolution::Unbound`] once its tree folds.
     /// - ensures: `witness` is consulted only for a DNS name and `scope` only
@@ -330,10 +339,12 @@ impl Peer
     ///   here, [`WhenceError::Ambiguous`] when more than one does,
     ///   [`WhenceError::Unscoped`] for a label read in no tree,
     ///   [`WhenceError::Unintroduced`] for a label the scope's tree does not
-    ///   introduce, and [`WhenceError::View`] when a tree the resolution must
-    ///   fold has no view: the key's tree, the scope's tree, the tree a label
-    ///   names for a path anchor, or a witnessed tree whose commits cannot be
-    ///   read.
+    ///   introduce, [`WhenceError::View`] when a tree the resolution must fold
+    ///   has no view — the key's tree, the scope's tree, the tree a label names
+    ///   for anything but a bare anchor, or a witnessed tree whose commits
+    ///   cannot be read — and [`WhenceError::AmbiguousCommit`] when more than
+    ///   one commit of the tree has an id beginning with an abbreviated
+    ///   commit's prefix.
     /// - panics: none.
     ///
     /// # Errors
@@ -345,55 +356,69 @@ impl Peer
     /// - [`WhenceError::Unintroduced`]: the scope's tree does not introduce the
     ///   label.
     /// - [`WhenceError::View`]: a tree the resolution folds has no view.
+    /// - [`WhenceError::AmbiguousCommit`]: several commits of the tree begin
+    ///   with the prefix.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — in a store holding two trees, the key form resolves a
     ///   bound path, an unbound path and the bare tree, and an unknown tree is
     ///   refused; a DNS anchor resolves through the one witnessed tree that
-    ///   claims it, to the same binding as the key form and, bare, to that
-    ///   tree, while a witness naming an unclaiming, an unheld or no tree, or
-    ///   two claiming trees, is refused by its own reason; a label resolves in
-    ///   the tree that introduced it, bare and through a path, and is refused
-    ///   read in the introduced tree, read in no tree, or read in a tree the
-    ///   store does not hold.
+    ///   claims it, to the same binding as the key form, bare to that tree and
+    ///   in the commit form to the commit, while a witness naming an
+    ///   unclaiming, an unheld or no tree, or two claiming trees, is refused by
+    ///   its own reason; a label resolves in the tree that introduced it, bare,
+    ///   through a path and in the commit form, and is refused read in the
+    ///   introduced tree, read in no tree, or read in a tree the store does not
+    ///   hold; the commit form resolves an admitted, a refused, an undecodable
+    ///   and an absent commit, a commit of another tree, and prefixes matching
+    ///   one, two and no commit, each to its own answer.
     /// - witness: `store::tests::whence_resolves_an_anchor_by_fold`
     /// - witness: `store::tests::a_dns_anchor_resolves_through_the_claim_of_the_tree_its_witness_names`
     /// - witness: `store::tests::a_witnessed_tree_without_the_claim_is_unclaimed`
     /// - witness: `store::tests::two_witnessed_trees_claiming_one_domain_are_ambiguous`
     /// - witness: `store::tests::an_empty_witness_is_unwitnessed`
     /// - witness: `store::tests::a_label_resolves_in_the_tree_that_introduced_it_alone`
+    /// - witness: `store::tests::a_commit_resolves_by_its_anchor_to_its_verdict`
+    /// - witness: `store::tests::an_ambiguous_prefix_is_refused_naming_it`
     #[inline]
     pub async fn whence<W>(
         &self,
-        anchor: &Anchor,
+        reference: &Reference,
         witness: &W,
         scope: Scope,
     ) -> Result<Resolution, WhenceError>
     where
         W: Witness + Sync,
     {
-        match *anchor.authority() {
+        let locus = reference.locus();
+        match *reference.authority() {
             | Authority::Key(tree) => {
                 let view = self.folded(tree).await?;
-                Ok(match *anchor {
-                    | Anchor::Tree(_) => Resolution::Unbound,
-                    | Anchor::Path { ref path, .. } => view.resolve(path),
-                })
+                match locus {
+                    | Locus::Tree => Ok(Resolution::Unbound),
+                    | Locus::Within(within) => inside(&view, within),
+                }
             },
             | Authority::Domain(ref domain) => {
                 let (tree, view) = self.claimant(domain, witness).await?;
-                Ok(match *anchor {
-                    | Anchor::Tree(_) => Resolution::Bound(view.owner(), Target::Tree(tree)),
-                    | Anchor::Path { ref path, .. } => view.resolve(path),
-                })
+                match locus {
+                    | Locus::Tree => {
+                        let named = Target::Anchor(Anchor::key(tree));
+                        Ok(Resolution::Bound(view.owner(), named))
+                    },
+                    | Locus::Within(within) => inside(&view, within),
+                }
             },
             | Authority::Label(ref label) => {
                 let (introducer, tree) = self.introduced(label, scope).await?;
-                match *anchor {
-                    | Anchor::Tree(_) => Ok(Resolution::Bound(introducer, Target::Tree(tree))),
-                    | Anchor::Path { ref path, .. } => {
+                match locus {
+                    | Locus::Tree => {
+                        let named = Target::Anchor(Anchor::key(tree));
+                        Ok(Resolution::Bound(introducer, named))
+                    },
+                    | Locus::Within(within) => {
                         let view = self.folded(tree).await?;
-                        Ok(view.resolve(path))
+                        inside(&view, within)
                     },
                 }
             },
@@ -560,6 +585,49 @@ impl Peer
     }
 }
 
+/// What `within`, named in a tree, resolves to in that tree's `view`.
+///
+/// # Specification
+/// - ensures: a path resolves as [`View::resolve`] reads it and a commit as
+///   [`View::locate`] locates it; a prefix resolves to [`Resolution::Unknown`]
+///   when [`View::expand`] finds no commit beginning with it, and as its one
+///   commit locates when it finds one.
+/// - fails: [`WhenceError::AmbiguousCommit`], carrying the prefix and every
+///   commit beginning with it, when it finds more than one.
+/// - panics: none.
+///
+/// # Errors
+/// - [`WhenceError::AmbiguousCommit`]: several commits begin with the prefix.
+///
+/// # Adequacy
+/// - hypothesis: L3 — through [`Peer::whence`], a bound path, a commit by its
+///   whole id, and prefixes matching one, two and no commit each meet their own
+///   answer.
+/// - witness: `store::tests::whence_resolves_an_anchor_by_fold`
+/// - witness: `store::tests::a_commit_resolves_by_its_anchor_to_its_verdict`
+/// - witness: `store::tests::an_ambiguous_prefix_is_refused_naming_it`
+fn inside(
+    view: &View,
+    within: Within<'_>,
+) -> Result<Resolution, WhenceError>
+{
+    match within {
+        | Within::Path(path) => Ok(view.resolve(path)),
+        | Within::Commit(commit) => Ok(view.locate(commit)),
+        | Within::Prefix(prefix) => {
+            let mut matches = view.expand(prefix).into_iter();
+            match (matches.next(), matches.next()) {
+                | (None, _) => Ok(Resolution::Unknown),
+                | (Some(commit), None) => Ok(view.locate(commit)),
+                | (Some(first), Some(second)) => Err(WhenceError::AmbiguousCommit {
+                    prefix: prefix.clone(),
+                    commits: [first, second].into_iter().chain(matches).collect(),
+                }),
+            }
+        },
+    }
+}
+
 /// Why a tree store cannot be opened.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError
@@ -605,7 +673,7 @@ pub enum ViewError
     Unopened(#[from] Unopened),
 }
 
-/// Why an anchor does not resolve.
+/// Why a reference does not resolve.
 #[derive(Debug, thiserror::Error)]
 pub enum WhenceError
 {
@@ -666,6 +734,16 @@ pub enum WhenceError
         /// The tree it was read in.
         within: TreeId,
     },
+    /// More than one commit of the tree has an id beginning with the prefix an
+    /// abbreviated commit names.
+    #[error("ambiguous commit {prefix}")]
+    AmbiguousCommit
+    {
+        /// The prefix.
+        prefix: CommitPrefix,
+        /// Every commit of the tree whose id begins with it.
+        commits: BTreeSet<CommitId>,
+    },
 }
 
 /// Why a tree's heads cannot be read.
@@ -681,6 +759,9 @@ mod tests
     use alloc::string::String;
 
     use future_form::Sendable;
+    use gandr_storage_values::TokenOffset;
+    use gandr_storage_values::ValueError;
+    use sedimentree_core::blob::Blob;
     use sedimentree_core::loose_commit::id::CommitId;
     use subduction_core::storage::traits::Storage;
 
@@ -689,10 +770,12 @@ mod tests
     use super::WhenceError;
     use crate::anchor::Anchor;
     use crate::anchor::Authority;
+    use crate::anchor::Reference;
     use crate::anchor::Resolution;
     use crate::anchor::Scope;
     use crate::anchor::Target;
     use crate::fold::Refusal;
+    use crate::fold::Verdict;
     use crate::id::TreeId;
     use crate::identity::Identity;
     use crate::identity::StateDir;
@@ -934,16 +1017,18 @@ mod tests
             let opened = Receipt::open(&tree_key(), me).unwrap();
             peer.commit(tree(), opened).await.unwrap();
             let noted = peer.commit(tree(), note("bound".into())).await.unwrap();
-            let bind = Receipt::bind(tree(), "x".parse().unwrap(), Target::Commit(noted));
+            let target = Target::Anchor(Anchor::commit(tree(), noted));
+            let bind = Receipt::bind(tree(), "x".parse().unwrap(), target.clone());
             peer.commit(tree(), bind.unwrap()).await.unwrap();
             let whence = |anchor: Anchor| {
+                let reference = Reference::from(anchor);
                 let peer = &peer;
                 let nobody = &nobody;
-                async move { peer.whence(&anchor, nobody, Scope::Unscoped).await }
+                async move { peer.whence(&reference, nobody, Scope::Unscoped).await }
             };
             assert_eq!(
                 whence(path("x")).await.unwrap(),
-                Resolution::Bound(me, Target::Commit(noted)),
+                Resolution::Bound(me, target),
                 "the bound path resolves to the note's commit under the binder's key"
             );
             assert_eq!(
@@ -957,17 +1042,21 @@ mod tests
                 "the bare tree names no path, so nothing binds it"
             );
             let elsewhere = elsewhere_key().tree();
-            let unknown = Anchor::Path {
-                authority: Authority::Key(elsewhere),
-                path: "x".parse().unwrap(),
-            };
-            assert!(
-                matches!(
-                    whence(unknown).await,
-                    Err(WhenceError::View { tree, source: ViewError::Unopened(_) }) if tree == elsewhere
-                ),
-                "an anchor in a tree never seen has no view to resolve in"
-            );
+            for unknown in [
+                Anchor::Path {
+                    authority: Authority::Key(elsewhere),
+                    path: "x".parse().unwrap(),
+                },
+                Anchor::commit(elsewhere, noted),
+            ] {
+                assert!(
+                    matches!(
+                        whence(unknown).await,
+                        Err(WhenceError::View { tree, source: ViewError::Unopened(_) }) if tree == elsewhere
+                    ),
+                    "a path or a commit in a tree never seen has no view to resolve in"
+                );
+            }
             drop(peer);
         });
     }
@@ -991,19 +1080,20 @@ mod tests
                 .await
                 .unwrap();
             let noted = peer.commit(a, note("bound".into())).await.unwrap();
-            let bind = Receipt::bind(a, "x".parse().unwrap(), Target::Commit(noted));
+            let target = Target::Anchor(Anchor::commit(a, noted));
+            let bind = Receipt::bind(a, "x".parse().unwrap(), target.clone());
             peer.commit(a, bind.unwrap()).await.unwrap();
             let claim = Receipt::claim(a, example()).unwrap();
             peer.commit(a, claim).await.unwrap();
-            let whence = |anchor: &str| {
-                let anchor = anchor.parse::<Anchor>().unwrap();
+            let whence = |reference: &str| {
+                let reference = reference.parse::<Reference>().unwrap();
                 let (peer, witness) = (&peer, &witness);
-                async move { peer.whence(&anchor, witness, Scope::Unscoped).await }
+                async move { peer.whence(&reference, witness, Scope::Unscoped).await }
             };
-            let keyed = Anchor::Path {
+            let keyed = Reference::from(Anchor::Path {
                 authority: Authority::Key(a),
                 path: "x".parse().unwrap(),
-            };
+            });
             let by_key = peer
                 .whence(&keyed, &witness, Scope::Unscoped)
                 .await
@@ -1013,11 +1103,7 @@ mod tests
                 by_key,
                 "the DNS form resolves as the key form of the one witnessed tree that claims it"
             );
-            assert_eq!(
-                by_key,
-                Resolution::Bound(me, Target::Commit(noted)),
-                "to the bound note"
-            );
+            assert_eq!(by_key, Resolution::Bound(me, target), "to the bound note");
             assert_eq!(
                 whence("domhringr://example.test/y").await.unwrap(),
                 Resolution::Unbound,
@@ -1025,8 +1111,18 @@ mod tests
             );
             assert_eq!(
                 whence("domhringr://example.test/").await.unwrap(),
-                Resolution::Bound(me, Target::Tree(a)),
+                Resolution::Bound(me, Target::Anchor(Anchor::key(a))),
                 "the bare name resolves to the claiming tree under its owner"
+            );
+            assert_eq!(
+                whence(&format!("domhringr://example.test/.commit/{noted}"))
+                    .await
+                    .unwrap(),
+                Resolution::Commit {
+                    id: noted,
+                    verdict: Verdict::Admitted,
+                },
+                "a commit under the name resolves in the claiming tree"
             );
             drop(peer);
         });
@@ -1038,7 +1134,7 @@ mod tests
         let root = tempfile::tempdir().unwrap();
         let state = StateDir::from(root.path().to_path_buf());
         let a = tree();
-        let anchor = "domhringr://example.test/x".parse::<Anchor>().unwrap();
+        let reference = "domhringr://example.test/x".parse::<Reference>().unwrap();
         let unclaimed = |result: Result<Resolution, WhenceError>| matches!(result, Err(WhenceError::Unclaimed { domain }) if domain == example());
         runtime().block_on(async {
             let peer = open(&state);
@@ -1047,17 +1143,18 @@ mod tests
                 .await
                 .unwrap();
             let noted = peer.commit(a, note("bound".into())).await.unwrap();
-            let bind = Receipt::bind(a, "x".parse().unwrap(), Target::Commit(noted));
+            let target = Target::Anchor(Anchor::commit(a, noted));
+            let bind = Receipt::bind(a, "x".parse().unwrap(), target);
             peer.commit(a, bind.unwrap()).await.unwrap();
             let witness = core::iter::once((example(), a)).collect::<Static>();
             assert!(
-                unclaimed(peer.whence(&anchor, &witness, Scope::Unscoped).await),
+                unclaimed(peer.whence(&reference, &witness, Scope::Unscoped).await),
                 "a witness naming a tree that never claimed the name is refused"
             );
             let other_name = Receipt::claim(a, "other.test".parse().unwrap()).unwrap();
             peer.commit(a, other_name).await.unwrap();
             assert!(
-                unclaimed(peer.whence(&anchor, &witness, Scope::Unscoped).await),
+                unclaimed(peer.whence(&reference, &witness, Scope::Unscoped).await),
                 "a claim of another name claims nothing here"
             );
             let granted = Receipt::grant(a, key(&other())).unwrap();
@@ -1076,12 +1173,12 @@ mod tests
                 "a member's claim of the name is refused by the fold"
             );
             assert!(
-                unclaimed(peer.whence(&anchor, &witness, Scope::Unscoped).await),
+                unclaimed(peer.whence(&reference, &witness, Scope::Unscoped).await),
                 "so the member's claim does not make the name resolve"
             );
             let elsewhere = core::iter::once((example(), unheld())).collect::<Static>();
             assert!(
-                unclaimed(peer.whence(&anchor, &elsewhere, Scope::Unscoped).await),
+                unclaimed(peer.whence(&reference, &elsewhere, Scope::Unscoped).await),
                 "a witnessed tree the store does not hold claims nothing here"
             );
             drop(peer);
@@ -1094,7 +1191,7 @@ mod tests
         let root = tempfile::tempdir().unwrap();
         let state = StateDir::from(root.path().to_path_buf());
         let (a, b) = (tree(), elsewhere_key().tree());
-        let anchor = "domhringr://example.test/".parse::<Anchor>().unwrap();
+        let reference = "domhringr://example.test/".parse::<Reference>().unwrap();
         runtime().block_on(async {
             let peer = open(&state);
             let me = peer.identity().peer_key();
@@ -1113,7 +1210,7 @@ mod tests
                 .collect::<Static>();
             assert!(
                 matches!(
-                    peer.whence(&anchor, &both, Scope::Unscoped).await,
+                    peer.whence(&reference, &both, Scope::Unscoped).await,
                     Err(WhenceError::Ambiguous { domain, claimants })
                         if domain == example() && claimants == BTreeSet::from([a, b])
                 ),
@@ -1121,8 +1218,10 @@ mod tests
             );
             let one = core::iter::once((example(), b)).collect::<Static>();
             assert_eq!(
-                peer.whence(&anchor, &one, Scope::Unscoped).await.unwrap(),
-                Resolution::Bound(me, Target::Tree(b)),
+                peer.whence(&reference, &one, Scope::Unscoped)
+                    .await
+                    .unwrap(),
+                Resolution::Bound(me, Target::Anchor(Anchor::key(b))),
                 "a witness naming one of them resolves to it"
             );
             drop(peer);
@@ -1135,7 +1234,7 @@ mod tests
         let root = tempfile::tempdir().unwrap();
         let state = StateDir::from(root.path().to_path_buf());
         let a = tree();
-        let anchor = "domhringr://example.test/".parse::<Anchor>().unwrap();
+        let reference = "domhringr://example.test/".parse::<Reference>().unwrap();
         let unwitnessed = |result: Result<Resolution, WhenceError>| matches!(result, Err(WhenceError::Unwitnessed { domain }) if domain == example());
         runtime().block_on(async {
             let peer = open(&state);
@@ -1148,7 +1247,7 @@ mod tests
                 .unwrap();
             assert!(
                 unwitnessed(
-                    peer.whence(&anchor, &Static::default(), Scope::Unscoped)
+                    peer.whence(&reference, &Static::default(), Scope::Unscoped)
                         .await
                 ),
                 "a witness naming nothing refuses the name, claimed or not"
@@ -1156,7 +1255,7 @@ mod tests
             let other_name =
                 core::iter::once(("other.test".parse().unwrap(), a)).collect::<Static>();
             assert!(
-                unwitnessed(peer.whence(&anchor, &other_name, Scope::Unscoped).await),
+                unwitnessed(peer.whence(&reference, &other_name, Scope::Unscoped).await),
                 "a witness naming trees for another name alone names none for this one"
             );
             drop(peer);
@@ -1183,24 +1282,35 @@ mod tests
             let noted = peer.commit(b, Receipt::note(b, "in b".into()).unwrap())
                 .await
                 .unwrap();
-            let bind = Receipt::bind(b, "x".parse().unwrap(), Target::Commit(noted));
+            let target = Target::Anchor(Anchor::commit(b, noted));
+            let bind = Receipt::bind(b, "x".parse().unwrap(), target.clone());
             peer.commit(b, bind.unwrap()).await.unwrap();
             let introduction = Receipt::introduce(a, label("b"), b).unwrap();
             peer.commit(a, introduction).await.unwrap();
-            let whence = |anchor: &str, scope: Scope| {
-                let anchor = anchor.parse::<Anchor>().unwrap();
+            let whence = |reference: &str, scope: Scope| {
+                let reference = reference.parse::<Reference>().unwrap();
                 let (peer, nobody) = (&peer, &nobody);
-                async move { peer.whence(&anchor, nobody, scope).await }
+                async move { peer.whence(&reference, nobody, scope).await }
             };
             assert_eq!(
                 whence("domhringr://b/", Scope::In(a)).await.unwrap(),
-                Resolution::Bound(me, Target::Tree(b)),
+                Resolution::Bound(me, Target::Anchor(Anchor::key(b))),
                 "read in the tree that introduced it, the label names the introduced tree"
             );
             assert_eq!(
                 whence("domhringr://b/x", Scope::In(a)).await.unwrap(),
-                Resolution::Bound(me, Target::Commit(noted)),
+                Resolution::Bound(me, target),
                 "and a path under it resolves in the introduced tree"
+            );
+            assert_eq!(
+                whence(&format!("domhringr://b/.commit/{noted}"), Scope::In(a))
+                    .await
+                    .unwrap(),
+                Resolution::Commit {
+                    id: noted,
+                    verdict: Verdict::Admitted,
+                },
+                "and a commit under it is located in the introduced tree"
             );
             assert!(
                 matches!(
@@ -1229,6 +1339,174 @@ mod tests
                     Err(WhenceError::View { tree, source: ViewError::Unopened(_) }) if tree == unheld
                 ),
                 "a label read in a tree the store does not hold has no view to be read in"
+            );
+            drop(peer);
+        });
+    }
+
+    #[test]
+    fn a_commit_resolves_by_its_anchor_to_its_verdict()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let (a, b) = (tree(), elsewhere_key().tree());
+        let nobody = Static::default();
+        runtime().block_on(async {
+            let peer = open(&state);
+            let me = peer.identity().peer_key();
+            let opened = Receipt::open(&tree_key(), me).unwrap();
+            let opened = peer.commit(a, opened).await.unwrap();
+            peer.commit(b, Receipt::open(&elsewhere_key(), me).unwrap())
+                .await
+                .unwrap();
+            let kept = peer.commit(a, note("kept".into())).await.unwrap();
+            let in_b = peer
+                .commit(b, Receipt::note(b, "in b".into()).unwrap())
+                .await
+                .unwrap();
+            let squat = note("squat".into()).encode().unwrap();
+            let squat = seal_on(&other(), a, BTreeSet::from([kept]), squat).await;
+            Storage::<Sendable>::save_loose_commit(&peer.storage, a.sedimentree(), squat.clone())
+                .await
+                .unwrap();
+            let squat = id(&squat);
+            let elsewhere = Anchor::commit(b, in_b);
+            let bind = Receipt::bind(a, "x".parse().unwrap(), Target::Anchor(elsewhere.clone()));
+            let bound = peer.commit(a, bind.unwrap()).await.unwrap();
+            let whence = |reference: String| {
+                let reference = reference.parse::<Reference>().unwrap();
+                let (peer, nobody) = (&peer, &nobody);
+                async move { peer.whence(&reference, nobody, Scope::Unscoped).await }
+            };
+            let located = |commit: CommitId, verdict: Verdict| Resolution::Commit {
+                id: commit,
+                verdict,
+            };
+            let prefix = |commit: CommitId, digits: usize| {
+                let hex = commit.to_string().chars().take(digits).collect::<String>();
+                format!("domhringr://{a}/.commit/{hex}")
+            };
+            let refused = Verdict::Refused(Refusal::NoAuthority);
+            assert_eq!(
+                whence(Anchor::commit(a, kept).to_string()).await.unwrap(),
+                located(kept, Verdict::Admitted),
+                "an admitted commit resolves by its whole id to its verdict"
+            );
+            assert_eq!(
+                whence(Anchor::commit(a, squat).to_string()).await.unwrap(),
+                located(squat, refused.clone()),
+                "a refused commit resolves as refused, with its reason"
+            );
+            assert_eq!(
+                whence(prefix(kept, 12)).await.unwrap(),
+                located(kept, Verdict::Admitted),
+                "a prefix matching one commit resolves to it with its verdict"
+            );
+            assert_eq!(
+                whence(prefix(squat, 8)).await.unwrap(),
+                located(squat, refused),
+                "eight digits are prefix enough, and a refused commit is matched too"
+            );
+            let held = [opened, kept, squat, bound].map(|commit| commit.to_string());
+            let absent = "0123456789abcdef"
+                .chars()
+                .find(|digit| held.iter().all(|commit| !commit.starts_with(*digit)))
+                .unwrap();
+            assert_eq!(
+                whence(format!(
+                    "domhringr://{a}/.commit/{}",
+                    absent.to_string().repeat(8)
+                ))
+                .await
+                .unwrap(),
+                Resolution::Unknown,
+                "a prefix no commit of the tree begins with is unknown"
+            );
+            assert_eq!(
+                whence(Anchor::commit(a, in_b).to_string()).await.unwrap(),
+                Resolution::Unknown,
+                "a commit of another tree is unknown in this one, never unbound"
+            );
+            assert_eq!(
+                whence(elsewhere.to_string()).await.unwrap(),
+                located(in_b, Verdict::Admitted),
+                "and is located in its own"
+            );
+            assert_eq!(
+                whence(format!("{}x", Anchor::key(a))).await.unwrap(),
+                Resolution::Bound(me, Target::Anchor(elsewhere.clone())),
+                "a path bound to a commit in another tree resolves to its anchor"
+            );
+            let view = peer.view(a).await.unwrap().to_string();
+            assert!(
+                view.lines()
+                    .any(|line| line == format!("bind x anchor {elsewhere}")),
+                "the view lists the bind with its target written as an anchor: {view}"
+            );
+            drop(peer);
+        });
+    }
+
+    #[test]
+    fn an_ambiguous_prefix_is_refused_naming_it()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let a = tree();
+        let nobody = Static::default();
+        runtime().block_on(async {
+            let peer = open(&state);
+            let me = peer.identity().peer_key();
+            let opened = Receipt::open(&tree_key(), me).unwrap();
+            let opened = peer.commit(a, opened).await.unwrap();
+            // Two blobs whose BLAKE3 digests, and so their commit ids, share
+            // their first eight hex digits and part at the ninth.
+            let mut twins = BTreeSet::new();
+            for blob in [&b"ambiguous 47031"[..], b"ambiguous 58920"] {
+                let twin = Blob::new(blob.to_vec());
+                let twin = seal_on(&owner(), a, BTreeSet::from([opened]), twin).await;
+                Storage::<Sendable>::save_loose_commit(
+                    &peer.storage,
+                    a.sedimentree(),
+                    twin.clone(),
+                )
+                .await
+                .unwrap();
+                let _first_seen = twins.insert(id(&twin));
+            }
+            let shared = twins.iter().map(ToString::to_string).collect::<Vec<_>>();
+            assert!(
+                shared.iter().all(|commit| commit.starts_with("3dabbba7")),
+                "the twins share their first eight digits: {shared:?}"
+            );
+            let whence = |digits: &str| {
+                let reference = format!("domhringr://{a}/.commit/{digits}")
+                    .parse::<Reference>()
+                    .unwrap();
+                let (peer, nobody) = (&peer, &nobody);
+                async move { peer.whence(&reference, nobody, Scope::Unscoped).await }
+            };
+            assert!(
+                matches!(
+                    whence("3dabbba7").await,
+                    Err(WhenceError::AmbiguousCommit { prefix, commits })
+                        if prefix.to_string() == "3dabbba7" && commits == twins
+                ),
+                "a prefix two commits begin with is refused, naming it and both"
+            );
+            let first = twins.first().copied().unwrap();
+            assert_eq!(
+                whence(&first.to_string().chars().take(9).collect::<String>())
+                    .await
+                    .unwrap(),
+                Resolution::Commit {
+                    id: first,
+                    verdict: Verdict::Refused(Refusal::Undecodable(ValueError::UnknownTokenKind {
+                        position: TokenOffset::ZERO,
+                    })),
+                },
+                "one digit more tells them apart, and a blob that is no receipt resolves as \
+                 refused with the decoder's reason"
             );
             drop(peer);
         });

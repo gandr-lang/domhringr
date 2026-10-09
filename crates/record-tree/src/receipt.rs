@@ -11,32 +11,41 @@
 //! is:
 //!
 //! ```text
-//! receipt := open 0x01 · word 1 · bytes tree (32) · bytes operation (16) · kind · close
-//! kind    := open 0x01 · bytes proof (64) · close                       Open
-//!          | open 0x02 · bytes grantee (32) · close                     Grant
-//!          | open 0x03 · bytes text (UTF-8) · close                     Note
-//!          | open 0x04 · bytes path (UTF-8) · target · close            Bind
-//!          | open 0x05 · bytes domain (ASCII) · close                   Claim
-//!          | open 0x06 · bytes tree (32) · bytes label (UTF-8) · close  Introduce
-//! target  := open 0x01 · bytes commit (32) · close                      Commit
-//!          | open 0x02 · bytes tree (32) · close                        Tree
-//!          | open 0x03 · bytes endpoint (32) · close                    Endpoint
-//!          | open 0x04 · bytes datum (UTF-8) · close                    Datum
+//! receipt   := open 0x01 · word 2 · bytes tree (32) · bytes operation (16) · kind · close
+//! kind      := open 0x01 · bytes proof (64) · close                       Open
+//!            | open 0x02 · bytes grantee (32) · close                     Grant
+//!            | open 0x03 · bytes text (UTF-8) · close                     Note
+//!            | open 0x04 · bytes path (UTF-8) · target · close            Bind
+//!            | open 0x05 · bytes domain (ASCII) · close                   Claim
+//!            | open 0x06 · bytes tree (32) · bytes label (UTF-8) · close  Introduce
+//! target    := open 0x01 · anchor · close                                 Anchor
+//!            | open 0x02 · bytes endpoint (32) · close                    Endpoint
+//!            | open 0x03 · bytes datum (UTF-8) · close                    Datum
+//! anchor    := open 0x01 · authority · close                              Tree
+//!            | open 0x02 · authority · bytes path (UTF-8) · close         Path
+//!            | open 0x03 · authority · bytes commit (32) · close          Commit
+//! authority := open 0x01 · bytes tree (32) · close                        Key
+//!            | open 0x02 · bytes domain (ASCII) · close                   Domain
+//!            | open 0x03 · bytes label (UTF-8) · close                    Label
 //! ```
 //!
-//! A tree, in the receipt's header, as a target or as the tree introduced,
-//! and an endpoint are ed25519 verifying keys; a path is its segments joined
-//! by `/`; a domain is a DNS name as [`Domain`] admits it, and a label one as
-//! [`Label`] admits it.
+//! A tree, in the receipt's header, as an authority or as the tree
+//! introduced, and an endpoint are ed25519 verifying keys; a commit is its
+//! whole 32-byte id, never a prefix; a path is its segments joined by `/`,
+//! none empty or beginning with `.`; a domain is a DNS name as [`Domain`]
+//! admits it, and a label one as [`Label`] admits it. An anchor is written as
+//! its typed parts, so each part takes the record and the refusal it takes
+//! elsewhere in a receipt.
 //!
 //! The decoder admits exactly what the encoder writes, so a receipt has one
 //! blob. A constructor whose tag or payload it does not admit — another
-//! receipt tag or version, an unknown kind or target, an id of the wrong
-//! length, a tree or endpoint that is not a verifying key, text that is not
-//! UTF-8, a path with an empty segment, a malformed domain or label — is
-//! refused as that constructor ([`ValueError::UnexpectedConstructor`] at its
-//! open record): the value plane's refusals name token shapes, and this is the
-//! one that names the constructor a codec turns away.
+//! receipt tag or version, an unknown kind, target, anchor or authority, an id
+//! of the wrong length (an abbreviated commit id among them), a tree or
+//! endpoint that is not a verifying key, text that is not UTF-8, a path with
+//! an empty or reserved segment, a malformed domain or label — is refused as
+//! that constructor ([`ValueError::UnexpectedConstructor`] at its open
+//! record): the value plane's refusals name token shapes, and this is the one
+//! that names the constructor a codec turns away.
 
 use alloc::string::String;
 
@@ -55,6 +64,8 @@ use sedimentree_core::blob::Blob;
 use sedimentree_core::loose_commit::id::CommitId;
 use subduction_core::peer::id::PeerId;
 
+use crate::anchor::Anchor;
+use crate::anchor::Authority;
 use crate::anchor::Path;
 use crate::anchor::Target;
 use crate::id::EndpointKey;
@@ -65,7 +76,7 @@ use crate::name::Domain;
 use crate::name::Label;
 
 /// The receipt format this crate writes, and the only one it reads.
-const VERSION: u64 = 1;
+const VERSION: u64 = 2;
 
 /// The receipt's constructor tag.
 const RECEIPT: u8 = 0x01;
@@ -88,17 +99,32 @@ const CLAIM: u8 = 0x05;
 /// The constructor tag of [`Kind::Introduce`].
 const INTRODUCE: u8 = 0x06;
 
-/// The constructor tag of [`Target::Commit`].
-const COMMIT: u8 = 0x01;
-
-/// The constructor tag of [`Target::Tree`].
-const TREE: u8 = 0x02;
+/// The constructor tag of [`Target::Anchor`].
+const ANCHOR: u8 = 0x01;
 
 /// The constructor tag of [`Target::Endpoint`].
-const ENDPOINT: u8 = 0x03;
+const ENDPOINT: u8 = 0x02;
 
 /// The constructor tag of [`Target::Datum`].
-const DATUM: u8 = 0x04;
+const DATUM: u8 = 0x03;
+
+/// The constructor tag of [`Anchor::Tree`].
+const TREE: u8 = 0x01;
+
+/// The constructor tag of [`Anchor::Path`].
+const PATH: u8 = 0x02;
+
+/// The constructor tag of [`Anchor::Commit`].
+const COMMIT: u8 = 0x03;
+
+/// The constructor tag of [`Authority::Key`].
+const KEY: u8 = 0x01;
+
+/// The constructor tag of [`Authority::Domain`].
+const DOMAIN: u8 = 0x02;
+
+/// The constructor tag of [`Authority::Label`].
+const LABEL: u8 = 0x03;
 
 /// The domain an Open proof is signed under: the first of the two 32-byte
 /// blocks of the message it signs, the owner's peer key the second.
@@ -489,13 +515,15 @@ impl Receipt
     ///
     /// # Adequacy
     /// - hypothesis: L3 — the empty blob, a foreign record kind, a truncated
-    ///   receipt, a trailing record, a foreign receipt tag and version, short
-    ///   ids, a tree that is not a key, an unknown kind, a short proof,
-    ///   non-UTF-8 text, an empty or malformed path, an unknown target, a
-    ///   target that is not a key, a malformed domain, a malformed label, an
-    ///   introduced tree that is not a key, and an extra payload each meet
-    ///   their own refusal, beside the round trip of every kind and every
-    ///   target.
+    ///   receipt, a trailing record, a foreign receipt tag and the previous
+    ///   version, short ids, a tree that is not a key, an unknown kind, a short
+    ///   proof, non-UTF-8 text, an empty, reserved or malformed path, an
+    ///   unknown target, anchor and authority, an endpoint that is not a key,
+    ///   an abbreviated commit id, a key authority that is not a key, a
+    ///   malformed domain or label as authority and in a claim or an
+    ///   introduction, an introduced tree that is not a key, and an extra
+    ///   payload each meet their own refusal, beside the round trip of every
+    ///   kind, every target and every anchor under every authority.
     /// - witness: `receipt::tests::every_kind_round_trips`
     /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     pub(crate) fn decode(blob: &Blob) -> Result<Self, ValueError>
@@ -586,12 +614,12 @@ impl CanonicalValue for Receipt
     ///   length or that is not a verifying key, or a fence of the wrong length;
     ///   at the kind's open record for an unknown kind, a proof or grantee of
     ///   the wrong length, text that is not UTF-8, a path that is not UTF-8 or
-    ///   has an empty segment, a domain that is not a DNS name [`Domain`]
-    ///   admits, an introduced tree of the wrong length or that is not a
-    ///   verifying key, or a label that is not UTF-8 or not one [`Label`]
-    ///   admits; at the target's open record as [`Target`]'s decoder refuses;
-    ///   and the reader's own refusals for a record of the wrong kind, a
-    ///   truncated stream or an exhausted budget.
+    ///   has an empty or reserved segment, a domain that is not a DNS name
+    ///   [`Domain`] admits, an introduced tree of the wrong length or that is
+    ///   not a verifying key, or a label that is not UTF-8 or not one [`Label`]
+    ///   admits; as [`Target`]'s decoder refuses for a bind's target; and the
+    ///   reader's own refusals for a record of the wrong kind, a truncated
+    ///   stream or an exhausted budget.
     /// - panics: none.
     ///
     /// # Errors
@@ -636,29 +664,17 @@ impl CanonicalValue for Receipt
                 Kind::Note { text: text.into() }
             },
             | BIND => {
-                let path = <&[u8]>::from(reader.read_bytes()?);
-                let path = core::str::from_utf8(path).map_err(|_not_utf8| opened.refused())?;
-                let path = path
-                    .parse::<Path>()
-                    .map_err(|_empty_segment| opened.refused())?;
+                let path = opened.path(reader)?;
                 let target = Target::decode_tokens(reader)?;
                 Kind::Bind { path, target }
             },
             | CLAIM => {
-                let domain = <&[u8]>::from(reader.read_bytes()?);
-                let domain = core::str::from_utf8(domain).map_err(|_not_ascii| opened.refused())?;
-                let domain = domain
-                    .parse::<Domain>()
-                    .map_err(|_not_a_domain| opened.refused())?;
+                let domain = opened.domain(reader)?;
                 Kind::Claim { domain }
             },
             | INTRODUCE => {
                 let tree = opened.key(reader)?;
-                let label = <&[u8]>::from(reader.read_bytes()?);
-                let label = core::str::from_utf8(label).map_err(|_not_utf8| opened.refused())?;
-                let label = label
-                    .parse::<Label>()
-                    .map_err(|_not_a_label| opened.refused())?;
+                let label = opened.label(reader)?;
                 Kind::Introduce {
                     tree: TreeId::new(tree),
                     label,
@@ -678,7 +694,8 @@ impl CanonicalValue for Target
     ///
     /// # Specification
     /// - ensures: on success `sink` received exactly one balanced value: the
-    ///   target's constructor holding its one bytes record.
+    ///   target's constructor holding the anchor's value, or the endpoint's or
+    ///   the datum's one bytes record.
     /// - fails: propagates the sink's refusal unchanged.
     /// - panics: none.
     ///
@@ -686,8 +703,9 @@ impl CanonicalValue for Target
     /// - [`ValueError`]: the sink refused a record.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — a bind's flat form is compared byte for byte with
-    ///   records written independently, and a bind to every target round-trips.
+    /// - hypothesis: L3 — binds to an anchor, an endpoint and a datum are
+    ///   compared byte for byte with records written independently, and a bind
+    ///   to every target round-trips.
     /// - witness: `receipt::tests::a_bind_encodes_to_its_fixed_layout`
     /// - witness: `receipt::tests::every_kind_round_trips`
     #[inline]
@@ -699,13 +717,9 @@ impl CanonicalValue for Target
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Commit(commit) => {
-                sink.open(ConstructorTag::from(COMMIT))?;
-                sink.bytes(TokenBytes::from(commit.as_bytes().as_slice()))?;
-            },
-            | Self::Tree(tree) => {
-                sink.open(ConstructorTag::from(TREE))?;
-                sink.bytes(TokenBytes::from(tree.key().as_bytes().as_slice()))?;
+            | Self::Anchor(ref anchor) => {
+                sink.open(ConstructorTag::from(ANCHOR))?;
+                anchor.emit_tokens(sink)?;
             },
             | Self::Endpoint(endpoint) => {
                 sink.open(ConstructorTag::from(ENDPOINT))?;
@@ -727,9 +741,10 @@ impl CanonicalValue for Target
     /// - ensures: on success the target whose emission the records are, and the
     ///   reader stands after the target's close.
     /// - fails: [`ValueError::UnexpectedConstructor`] at the target's open
-    ///   record for an unknown target, a commit, tree or endpoint of the wrong
-    ///   length, a tree or endpoint that is not a verifying key, or a datum
-    ///   that is not UTF-8; and the reader's own refusals otherwise.
+    ///   record for an unknown target, an endpoint of the wrong length or that
+    ///   is not a verifying key, or a datum that is not UTF-8; as [`Anchor`]'s
+    ///   decoder refuses for an anchor; and the reader's own refusals
+    ///   otherwise.
     /// - panics: none.
     ///
     /// # Errors
@@ -746,15 +761,9 @@ impl CanonicalValue for Target
     {
         let opened = Opened::read(reader)?;
         let target = match u8::from(opened.tag) {
-            | COMMIT => {
-                let commit = <&[u8]>::from(reader.read_bytes()?);
-                let commit =
-                    <[u8; 32]>::try_from(commit).map_err(|_wrong_length| opened.refused())?;
-                Self::Commit(CommitId::new(commit))
-            },
-            | TREE => {
-                let key = opened.key(reader)?;
-                Self::Tree(TreeId::new(key))
+            | ANCHOR => {
+                let anchor = Anchor::decode_tokens(reader)?;
+                Self::Anchor(anchor)
             },
             | ENDPOINT => {
                 let key = opened.key(reader)?;
@@ -769,6 +778,201 @@ impl CanonicalValue for Target
         };
         reader.read_close()?;
         Ok(target)
+    }
+}
+
+impl CanonicalValue for Anchor
+{
+    /// Walk the anchor into `sink` in the module grammar's order.
+    ///
+    /// # Specification
+    /// - ensures: on success `sink` received exactly one balanced value: the
+    ///   anchor's constructor holding its authority's value and, for a path or
+    ///   a commit, the path's text or the commit id's 32 bytes.
+    /// - fails: propagates the sink's refusal unchanged.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: the sink refused a record.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — binds to a commit, a path and a bare tree anchor are
+    ///   compared byte for byte with records written independently, and a bind
+    ///   to each anchor form under each authority form round-trips.
+    /// - witness: `receipt::tests::a_bind_encodes_to_its_fixed_layout`
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    #[inline]
+    fn emit_tokens<Sink>(
+        &self,
+        sink: &mut Sink,
+    ) -> Result<(), ValueError>
+    where
+        Sink: TokenSink + ?Sized,
+    {
+        match *self {
+            | Self::Tree(ref authority) => {
+                sink.open(ConstructorTag::from(TREE))?;
+                authority.emit_tokens(sink)?;
+            },
+            | Self::Path {
+                ref authority,
+                ref path,
+            } => {
+                sink.open(ConstructorTag::from(PATH))?;
+                authority.emit_tokens(sink)?;
+                let path: &str = path.as_ref();
+                sink.bytes(TokenBytes::from(path.as_bytes()))?;
+            },
+            | Self::Commit {
+                ref authority,
+                commit,
+            } => {
+                sink.open(ConstructorTag::from(COMMIT))?;
+                authority.emit_tokens(sink)?;
+                sink.bytes(TokenBytes::from(commit.as_bytes().as_slice()))?;
+            },
+        }
+        sink.close()
+    }
+
+    /// Read one anchor from `reader`.
+    ///
+    /// # Specification
+    /// - ensures: on success the anchor whose emission the records are, and the
+    ///   reader stands after the anchor's close.
+    /// - fails: [`ValueError::UnexpectedConstructor`] at the anchor's open
+    ///   record for an unknown anchor, a path that is not UTF-8 or has an empty
+    ///   or reserved segment, or a commit id of any length but 32 bytes, an
+    ///   abbreviated one among them; as [`Authority`]'s decoder refuses for the
+    ///   authority; and the reader's own refusals otherwise.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — witnessed through the receipt decoder, which reads a
+    ///   bind's anchor target with it: every anchor form round-trips under
+    ///   every authority, and an unknown anchor, an abbreviated, a short and a
+    ///   long commit id, a reserved and an empty path segment, and a tree
+    ///   anchor carrying a payload each meet their own refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    #[inline]
+    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    {
+        let opened = Opened::read(reader)?;
+        let anchor = match u8::from(opened.tag) {
+            | TREE => {
+                let authority = Authority::decode_tokens(reader)?;
+                Self::Tree(authority)
+            },
+            | PATH => {
+                let authority = Authority::decode_tokens(reader)?;
+                let path = opened.path(reader)?;
+                Self::Path { authority, path }
+            },
+            | COMMIT => {
+                let authority = Authority::decode_tokens(reader)?;
+                let commit = opened.commit(reader)?;
+                Self::Commit { authority, commit }
+            },
+            | _unknown => return Err(opened.refused()),
+        };
+        reader.read_close()?;
+        Ok(anchor)
+    }
+}
+
+impl CanonicalValue for Authority
+{
+    /// Walk the authority into `sink` in the module grammar's order.
+    ///
+    /// # Specification
+    /// - ensures: on success `sink` received exactly one balanced value: the
+    ///   authority's constructor holding its one bytes record, the tree key's
+    ///   32 bytes or the DNS name's or the label's text.
+    /// - fails: propagates the sink's refusal unchanged.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: the sink refused a record.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — anchors under a key, a DNS name and a label are
+    ///   compared byte for byte with records written independently, and every
+    ///   anchor form under each authority round-trips.
+    /// - witness: `receipt::tests::a_bind_encodes_to_its_fixed_layout`
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    #[inline]
+    fn emit_tokens<Sink>(
+        &self,
+        sink: &mut Sink,
+    ) -> Result<(), ValueError>
+    where
+        Sink: TokenSink + ?Sized,
+    {
+        match *self {
+            | Self::Key(tree) => {
+                sink.open(ConstructorTag::from(KEY))?;
+                sink.bytes(TokenBytes::from(tree.key().as_bytes().as_slice()))?;
+            },
+            | Self::Domain(ref domain) => {
+                sink.open(ConstructorTag::from(DOMAIN))?;
+                let domain: &str = domain.as_ref();
+                sink.bytes(TokenBytes::from(domain.as_bytes()))?;
+            },
+            | Self::Label(ref label) => {
+                sink.open(ConstructorTag::from(LABEL))?;
+                let label: &str = label.as_ref();
+                sink.bytes(TokenBytes::from(label.as_bytes()))?;
+            },
+        }
+        sink.close()
+    }
+
+    /// Read one authority from `reader`.
+    ///
+    /// # Specification
+    /// - ensures: on success the authority whose emission the records are, and
+    ///   the reader stands after the authority's close.
+    /// - fails: [`ValueError::UnexpectedConstructor`] at the authority's open
+    ///   record for an unknown authority, a key of the wrong length or that is
+    ///   not a verifying key, a DNS name [`Domain`] does not admit, or a label
+    ///   [`Label`] does not admit; and the reader's own refusals otherwise.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — witnessed through the receipt decoder: each authority
+    ///   form round-trips, and an unknown authority, a short key, a key that is
+    ///   not a verifying key, an undotted DNS name, and a label spelled as a
+    ///   tree id, holding a dot or empty each meet their own refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    #[inline]
+    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    {
+        let opened = Opened::read(reader)?;
+        let authority = match u8::from(opened.tag) {
+            | KEY => {
+                let key = opened.key(reader)?;
+                Self::Key(TreeId::new(key))
+            },
+            | DOMAIN => {
+                let domain = opened.domain(reader)?;
+                Self::Domain(domain)
+            },
+            | LABEL => {
+                let label = opened.label(reader)?;
+                Self::Label(label)
+            },
+            | _unknown => return Err(opened.refused()),
+        };
+        reader.read_close()?;
+        Ok(authority)
     }
 }
 
@@ -822,6 +1026,96 @@ impl Opened
         iroh::PublicKey::from_bytes(&key).map_err(|_not_a_key| self.refused())
     }
 
+    /// Read the next record as a commit id in this constructor: its whole 32
+    /// bytes.
+    ///
+    /// # Specification
+    /// - ensures: on success the commit id the bytes record spells.
+    /// - fails: this constructor's refusal ([`Opened::refused`]) for bytes of
+    ///   another length, an abbreviated id among them, and the reader's
+    ///   refusals for any other record or none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    fn commit(
+        self,
+        reader: &mut TokenReader<'_>,
+    ) -> Result<CommitId, ValueError>
+    {
+        let commit = <&[u8]>::from(reader.read_bytes()?);
+        let commit = <[u8; 32]>::try_from(commit).map_err(|_wrong_length| self.refused())?;
+        Ok(CommitId::new(commit))
+    }
+
+    /// Read the next record as a path in this constructor.
+    ///
+    /// # Specification
+    /// - ensures: on success the path the bytes record spells.
+    /// - fails: this constructor's refusal ([`Opened::refused`]) for bytes that
+    ///   are not UTF-8 or not a path [`Path`] admits — one with an empty or a
+    ///   reserved segment — and the reader's refusals for any other record or
+    ///   none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    fn path(
+        self,
+        reader: &mut TokenReader<'_>,
+    ) -> Result<Path, ValueError>
+    {
+        let path = <&[u8]>::from(reader.read_bytes()?);
+        let path = core::str::from_utf8(path).map_err(|_not_utf8| self.refused())?;
+        path.parse::<Path>().map_err(|_not_a_path| self.refused())
+    }
+
+    /// Read the next record as a DNS name in this constructor.
+    ///
+    /// # Specification
+    /// - ensures: on success the DNS name the bytes record spells.
+    /// - fails: this constructor's refusal ([`Opened::refused`]) for bytes that
+    ///   are not UTF-8 or not a DNS name [`Domain`] admits, and the reader's
+    ///   refusals for any other record or none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    fn domain(
+        self,
+        reader: &mut TokenReader<'_>,
+    ) -> Result<Domain, ValueError>
+    {
+        let domain = <&[u8]>::from(reader.read_bytes()?);
+        let domain = core::str::from_utf8(domain).map_err(|_not_ascii| self.refused())?;
+        domain
+            .parse::<Domain>()
+            .map_err(|_not_a_domain| self.refused())
+    }
+
+    /// Read the next record as a label in this constructor.
+    ///
+    /// # Specification
+    /// - ensures: on success the label the bytes record spells.
+    /// - fails: this constructor's refusal ([`Opened::refused`]) for bytes that
+    ///   are not UTF-8 or not a label [`Label`] admits, and the reader's
+    ///   refusals for any other record or none.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ValueError`]: as listed above.
+    fn label(
+        self,
+        reader: &mut TokenReader<'_>,
+    ) -> Result<Label, ValueError>
+    {
+        let label = <&[u8]>::from(reader.read_bytes()?);
+        let label = core::str::from_utf8(label).map_err(|_not_utf8| self.refused())?;
+        label
+            .parse::<Label>()
+            .map_err(|_not_a_label| self.refused())
+    }
+
     /// The refusal of this constructor: its tag or its payload is not one the
     /// receipt grammar admits.
     ///
@@ -858,6 +1152,8 @@ mod tests
     use super::Kind;
     use super::Operation;
     use super::Receipt;
+    use crate::anchor::Anchor;
+    use crate::anchor::Authority;
     use crate::anchor::Target;
     use crate::id::EndpointKey;
     use crate::id::PeerKey;
@@ -888,12 +1184,25 @@ mod tests
     {
         let peer = PEER.parse::<PeerKey>().unwrap();
         let endpoint = EndpointKey::new(iroh::SecretKey::from_bytes(&[7; 32]).public());
-        let targets = [
-            Target::Commit(CommitId::new([9; 32])),
-            Target::Tree(elsewhere_key().tree()),
+        let mut targets = vec![
             Target::Endpoint(endpoint),
             Target::Datum(String::from("vault/page.md at 3f2a, ünïcode")),
         ];
+        for authority in [
+            Authority::Key(elsewhere_key().tree()),
+            Authority::Domain("gandr-lang.example.org".parse().unwrap()),
+            Authority::Label("my friend, größer".parse().unwrap()),
+        ] {
+            targets.push(Target::Anchor(Anchor::Tree(authority.clone())));
+            targets.push(Target::Anchor(Anchor::Path {
+                authority: authority.clone(),
+                path: "concept/größe".parse().unwrap(),
+            }));
+            targets.push(Target::Anchor(Anchor::Commit {
+                authority,
+                commit: CommitId::new([9; 32]),
+            }));
+        }
         let mut receipts = vec![
             Receipt::open(&tree_key(), peer).unwrap(),
             Receipt::grant(tree(), peer).unwrap(),
@@ -944,7 +1253,7 @@ mod tests
             text: String::from("hi"),
         });
         let mut expected = vec![0x01_u8, 0x01];
-        expected.extend_from_slice(&[0x02, 1, 0, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[0x02, 2, 0, 0, 0, 0, 0, 0, 0]);
         expected.extend_from_slice(&[0x03, 32, 0, 0, 0, 0, 0, 0, 0]);
         expected.extend_from_slice(tree().key().as_bytes());
         expected.extend_from_slice(&[0x03, 16, 0, 0, 0, 0, 0, 0, 0]);
@@ -962,28 +1271,83 @@ mod tests
     #[test]
     fn a_bind_encodes_to_its_fixed_layout()
     {
-        let receipt = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Bind {
-            path: "a/b".parse().unwrap(),
-            target: Target::Commit(CommitId::new([0x09; 32])),
-        });
-        let mut expected = vec![0x01_u8, 0x01];
-        expected.extend_from_slice(&[0x02, 1, 0, 0, 0, 0, 0, 0, 0]);
-        expected.extend_from_slice(&[0x03, 32, 0, 0, 0, 0, 0, 0, 0]);
-        expected.extend_from_slice(tree().key().as_bytes());
-        expected.extend_from_slice(&[0x03, 16, 0, 0, 0, 0, 0, 0, 0]);
-        expected.extend_from_slice(&[0x0f; 16]);
-        expected.extend_from_slice(&[0x01, 0x04]);
-        expected.extend_from_slice(&[0x03, 3, 0, 0, 0, 0, 0, 0, 0, b'a', b'/', b'b']);
-        expected.extend_from_slice(&[0x01, 0x01]);
-        expected.extend_from_slice(&[0x03, 32, 0, 0, 0, 0, 0, 0, 0]);
-        expected.extend_from_slice(&[0x09; 32]);
-        expected.extend_from_slice(&[0x05, 0x05, 0x05]);
-        assert_eq!(
-            receipt.encode().unwrap().as_slice(),
-            expected.as_slice(),
-            "open receipt, version word, tree, fence, open bind, path, open commit, commit, \
-             three closes"
-        );
+        let bytes = |payload: &[u8]| {
+            let length = u64::try_from(payload.len()).unwrap().to_le_bytes();
+            [&[0x03_u8][..], &length, payload].concat()
+        };
+        let elsewhere = elsewhere_key().tree();
+        let endpoint = EndpointKey::new(iroh::SecretKey::from_bytes(&[7; 32]).public());
+        let layouts = [
+            (
+                Target::Anchor(Anchor::commit(elsewhere, CommitId::new([0x09; 32]))),
+                [
+                    vec![0x01, 0x01, 0x01, 0x03, 0x01, 0x01],
+                    bytes(elsewhere.key().as_bytes()),
+                    vec![0x05],
+                    bytes(&[0x09; 32]),
+                    vec![0x05, 0x05],
+                ]
+                .concat(),
+                "open anchor, open commit, open key, tree, close, commit, two closes",
+            ),
+            (
+                Target::Anchor(Anchor::Path {
+                    authority: Authority::Domain("a.bc".parse().unwrap()),
+                    path: "x".parse().unwrap(),
+                }),
+                [
+                    vec![0x01, 0x01, 0x01, 0x02, 0x01, 0x02],
+                    bytes(b"a.bc"),
+                    vec![0x05],
+                    bytes(b"x"),
+                    vec![0x05, 0x05],
+                ]
+                .concat(),
+                "open anchor, open path, open domain, domain, close, path, two closes",
+            ),
+            (
+                Target::Anchor(Anchor::Tree(Authority::Label("b".parse().unwrap()))),
+                [vec![0x01, 0x01, 0x01, 0x01, 0x01, 0x03], bytes(b"b"), vec![
+                    0x05, 0x05, 0x05,
+                ]]
+                .concat(),
+                "open anchor, open tree, open label, label, three closes",
+            ),
+            (
+                Target::Endpoint(endpoint),
+                [
+                    vec![0x01, 0x02],
+                    bytes(endpoint.endpoint_id().as_bytes()),
+                    vec![0x05],
+                ]
+                .concat(),
+                "open endpoint, endpoint, close",
+            ),
+            (
+                Target::Datum(String::from("d")),
+                [vec![0x01, 0x03], bytes(b"d"), vec![0x05]].concat(),
+                "open datum, datum, close",
+            ),
+        ];
+        for (target, records, layout) in layouts {
+            let receipt = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Bind {
+                path: "a/b".parse().unwrap(),
+                target,
+            });
+            let mut expected = vec![0x01_u8, 0x01];
+            expected.extend_from_slice(&[0x02, 2, 0, 0, 0, 0, 0, 0, 0]);
+            expected.extend(bytes(tree().key().as_bytes()));
+            expected.extend(bytes(&[0x0f; 16]));
+            expected.extend_from_slice(&[0x01, 0x04]);
+            expected.extend(bytes(b"a/b"));
+            expected.extend(records);
+            expected.extend_from_slice(&[0x05, 0x05]);
+            assert_eq!(
+                receipt.encode().unwrap().as_slice(),
+                expected.as_slice(),
+                "open receipt, version word, tree, fence, open bind, path, {layout}, two closes"
+            );
+        }
     }
 
     #[test]
@@ -991,7 +1355,7 @@ mod tests
     {
         let header = || {
             let mut header = vec![0x01_u8, 0x01];
-            header.extend_from_slice(&[0x02, 1, 0, 0, 0, 0, 0, 0, 0]);
+            header.extend_from_slice(&[0x02, 2, 0, 0, 0, 0, 0, 0, 0]);
             header.extend_from_slice(&[0x03, 32, 0, 0, 0, 0, 0, 0, 0]);
             header.extend_from_slice(tree().key().as_bytes());
             header.extend_from_slice(&[0x03, 16, 0, 0, 0, 0, 0, 0, 0]);
@@ -1053,7 +1417,7 @@ mod tests
         let note = |text: &[u8]| {
             vec![
                 open(1),
-                word(1),
+                word(2),
                 bytes(&tree),
                 bytes(&fence),
                 open(3),
@@ -1065,7 +1429,7 @@ mod tests
         let bind = |path: &[u8], target: Vec<Vec<u8>>| {
             let mut records = vec![
                 open(1),
-                word(1),
+                word(2),
                 bytes(&tree),
                 bytes(&fence),
                 open(4),
@@ -1076,10 +1440,17 @@ mod tests
             records
         };
         let target = |tag: u8, payload: &[u8]| vec![open(tag), bytes(payload), close()];
+        let anchor = |form: u8, authority: u8, named: &[u8], carried: Vec<Vec<u8>>| {
+            let mut records = vec![open(1), open(form), open(authority), bytes(named), close()];
+            records.extend(carried);
+            records.extend([close(), close()]);
+            records
+        };
+        let commit = |id: &[u8]| anchor(3, 1, &tree, vec![bytes(id)]);
         let claim = |domain: &[u8]| {
             vec![
                 open(1),
-                word(1),
+                word(2),
                 bytes(&tree),
                 bytes(&fence),
                 open(5),
@@ -1091,7 +1462,7 @@ mod tests
         let introduce = |introduced: &[u8], label: &[u8]| {
             vec![
                 open(1),
-                word(1),
+                word(2),
                 bytes(&tree),
                 bytes(&fence),
                 open(6),
@@ -1107,8 +1478,20 @@ mod tests
             "the well-formed note decodes"
         );
         assert!(
-            refused(&bind(b"a/b", target(1, &[9; 32]))).is_ok(),
-            "the well-formed bind decodes"
+            refused(&bind(b"a/b", commit(&[9; 32]))).is_ok(),
+            "the well-formed bind to a commit decodes"
+        );
+        assert!(
+            refused(&bind(
+                b"a/b",
+                anchor(2, 2, b"example.test", vec![bytes(b"x")])
+            ))
+            .is_ok(),
+            "the well-formed bind to a path under a DNS name decodes"
+        );
+        assert!(
+            refused(&bind(b"a/b", anchor(1, 3, b"b", vec![]))).is_ok(),
+            "the well-formed bind to a tree by its label decodes"
         );
         assert!(
             refused(&claim(b"example.test")).is_ok(),
@@ -1136,11 +1519,11 @@ mod tests
             "a foreign receipt tag"
         );
         let mut receipt = note(b"hi");
-        receipt[1] = word(2);
+        receipt[1] = word(1);
         assert_eq!(
             refused(&receipt),
             Err(constructor(1, 0)),
-            "a foreign version"
+            "the previous version"
         );
         let mut receipt = note(b"hi");
         receipt[2] = bytes(&tree[.. 31]);
@@ -1171,34 +1554,93 @@ mod tests
             Err(constructor(3, 4)),
             "text that is not UTF-8"
         );
-        for path in [&b""[..], b"/a", b"a/", b"a//b", b"/", &[0x61, 0xff]] {
+        for path in [
+            &b""[..],
+            b"/a",
+            b"a/",
+            b"a//b",
+            b"/",
+            &[0x61, 0xff],
+            b".a",
+            b"a/.b",
+            b".",
+            b"..",
+        ] {
             assert_eq!(
-                refused(&bind(path, target(1, &[9; 32]))),
+                refused(&bind(path, commit(&[9; 32]))),
                 Err(constructor(4, 4)),
-                "the path {path:?} is empty, has an empty segment, or is not UTF-8"
+                "the path {path:?} is empty, has an empty or a reserved segment, or is not UTF-8"
             );
         }
         assert_eq!(
-            refused(&bind(b"a", target(5, &[9; 32]))),
-            Err(constructor(5, 6)),
+            refused(&bind(b"a", target(4, &[9; 32]))),
+            Err(constructor(4, 6)),
             "an unknown target"
         );
-        assert_eq!(
-            refused(&bind(b"a", target(1, &[9; 31]))),
-            Err(constructor(1, 6)),
-            "a short commit id"
-        );
-        for tag in [2, 3] {
+        for endpoint in [&[9_u8; 31][..], &not_a_key] {
             assert_eq!(
-                refused(&bind(b"a", target(tag, &not_a_key))),
-                Err(constructor(tag, 6)),
-                "a tree or endpoint target that is not a verifying key"
+                refused(&bind(b"a", target(2, endpoint))),
+                Err(constructor(2, 6)),
+                "an endpoint that is short or not a verifying key"
             );
         }
         assert_eq!(
-            refused(&bind(b"a", target(4, &[0x68, 0xff]))),
-            Err(constructor(4, 6)),
+            refused(&bind(b"a", target(3, &[0x68, 0xff]))),
+            Err(constructor(3, 6)),
             "a datum that is not UTF-8"
+        );
+        assert_eq!(
+            refused(&bind(b"a", anchor(4, 1, &tree, vec![]))),
+            Err(constructor(4, 7)),
+            "an unknown anchor"
+        );
+        for id in [&[9_u8; 4][..], &[9_u8; 31], &[9_u8; 33]] {
+            assert_eq!(
+                refused(&bind(b"a", commit(id))),
+                Err(constructor(3, 7)),
+                "the commit id {id:?} is abbreviated to eight hex digits, short or long"
+            );
+        }
+        for path in [&b""[..], b".x", b"x/.commit", b"x//y", &[0xff]] {
+            assert_eq!(
+                refused(&bind(b"a", anchor(2, 1, &tree, vec![bytes(path)]))),
+                Err(constructor(2, 7)),
+                "the anchor's path {path:?} is empty, has an empty or a reserved segment, or is \
+                 not UTF-8"
+            );
+        }
+        assert_eq!(
+            refused(&bind(b"a", anchor(1, 4, &tree, vec![]))),
+            Err(constructor(4, 8)),
+            "an unknown authority"
+        );
+        for key in [&tree[.. 31], &not_a_key] {
+            assert_eq!(
+                refused(&bind(b"a", anchor(1, 1, key, vec![]))),
+                Err(constructor(1, 8)),
+                "a key authority that is short or not a verifying key"
+            );
+        }
+        assert_eq!(
+            refused(&bind(b"a", anchor(1, 2, b"nodot", vec![]))),
+            Err(constructor(2, 8)),
+            "a DNS authority that is no DNS name"
+        );
+        for label in [&b""[..], b"a.b", ZERO.as_bytes()] {
+            assert_eq!(
+                refused(&bind(b"a", anchor(1, 3, label, vec![]))),
+                Err(constructor(3, 8)),
+                "the label authority {label:?} is empty, holds a dot, or is a tree id"
+            );
+        }
+        assert_eq!(
+            refused(&bind(b"a", anchor(1, 1, &tree, vec![bytes(b"x")]))),
+            Err(ValueError::UnexpectedToken {
+                expected: TokenKind::Close,
+                found: TokenKind::Bytes,
+                position: at(11),
+            }),
+            "a payload a tree anchor does not carry"
         );
         for domain in [
             &b"Example.test"[..],
