@@ -23,6 +23,20 @@ Use `mise run test -- <nextest args>` for test runs; on macOS, setting `CODESIGN
 
 Each gate snapshots the shared action cache. Successful gates publish only new cache entries under a directory lock; a 30-second lock timeout fails the gate.
 
+## Landing changes
+
+Install the hooks with `mise exec -- prek install`. Sign every commit and pass commitlint locally; the ruleset requires signatures on every commit in the pull request range. Run `mise run check` before opening the pull request.
+
+Push the branch to `origin`, open a pull request against `main`, then enable automatic merging:
+
+```sh
+git push -u origin <branch>
+gh pr create --base main --fill
+gh pr merge --merge --auto <n>
+```
+
+The merge queue runs the merge-group lanes and lands the change by merge commit. The repository allows only merge commits and deletes the branch after merging.
+
 ## License
 
 Apache-2.0 WITH LLVM-exception. See `LICENSE.Apache-2.0.txt` and `LICENSE.LLVM-exception.txt`.

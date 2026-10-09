@@ -95,7 +95,6 @@ jobs:
           repository: gandr-lang/gandr
           ref: ${{ steps.siblings.outputs.gandr }}
           path: vendor/gandr
-          token: ${{ secrets.GANDR_TOKEN }}
           persist-credentials: false
       # Inside the CI image the toolchain is baked; only the caches run. A
       # lane off the image's platform overrides the switch: no container runs

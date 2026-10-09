@@ -2,9 +2,3 @@
 # executable paths. Existing checkouts run the same installer during setup.
 [pre-start]
 hooks = "mise exec -- prek install"
-
-# Until the repository has hosted CI, the committed workflow is the merge
-# gate: `wt merge` runs it locally under act after the rebase and before the
-# fast-forward, and a red lane refuses the landing.
-[[pre-merge]]
-ci = "mise run ci:act"
