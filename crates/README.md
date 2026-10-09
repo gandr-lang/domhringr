@@ -32,7 +32,7 @@ crates/
 ├── seat-slot/          domhringr-seat-slot          the seat: the wake an operator sends over one stream, and a seat that answers it, presents itself, acts through a program and reports, resuming what it holds on start
 ├── strategy-document/  domhringr-strategy-document  playbooks and rubrics: TOML documents refused by field, a step's verifier run as a process and recorded by its output's hash and status, a rubric's questions asked of the judge, graded against its band and composed as a conjunction
 ├── surface-driver/     domhringr                    the `domhringr` driver: installs components
-└── surface-peer/       domhringr-surface-peer       the `domhringr-peer` binary: opens, grants on, notes to, binds in, claims names for, introduces, presents in, withdraws from, resolves, views, reads and syncs a tree, reaching peers through its book, dispatches a seat and replays its task, serves as a seat, rules on a task as its judge, and checks a concepts tree for drift
+└── surface-peer/       domhringr-surface-peer       the `domhringr-peer` binary: opens, grants on, notes to, binds in, claims names for, introduces, presents in, withdraws from, resolves, views, reads and syncs a tree, reaching peers through its book, dispatches a seat and replays its task, serves as a seat, rules on a task as its judge, runs playbooks and grades rubrics on a task, and checks a concepts tree for drift
 ```
 
 ## Crate README shape

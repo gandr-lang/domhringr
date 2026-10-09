@@ -64,6 +64,13 @@ path = "crates/record-tree"
 [workspace.dependencies.domhringr-seat-slot]
 path = "crates/seat-slot"
 
+# Playbooks and rubrics: their documents, a step's verifier run, a rubric's
+# grades.
+# consumers:
+# - surface-peer
+[workspace.dependencies.domhringr-strategy-document]
+path = "crates/strategy-document"
+
 # The `Sendable` future form subduction's runtime glue is generic over.
 # consumers:
 # - record-tree

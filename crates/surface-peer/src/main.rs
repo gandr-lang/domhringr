@@ -8,8 +8,8 @@
 //! another peer over iroh, dispatches a seat to a tree read as a task and
 //! wakes it, reports on, hands off or retires from the dispatch it holds,
 //! replays the task, judges a transcript of the task into a verdict on its
-//! dispatch, and checks a concepts tree's bindings against a public and a
-//! vault checkout.
+//! dispatch, reads playbooks and rubrics and runs them on the task, and
+//! checks a concepts tree's bindings against a public and a vault checkout.
 //!
 //! ```text
 //! domhringr-peer --state <dir> id
@@ -39,6 +39,10 @@
 //! domhringr-peer --state <dir> judge verdict <tree> --rubric <content-hash>
 //!                (--transcript <content-hash> | --transcript-file <file>)
 //!                (--question <text> --option <text>...)... [--static <file>]
+//! domhringr-peer --state <dir> playbook validate <file>
+//! domhringr-peer --state <dir> playbook run <file> <tree> [--task-state <dir>] [--static <file>]
+//! domhringr-peer --state <dir> rubric validate <file>
+//! domhringr-peer --state <dir> rubric grade <file> <tree> [--task-state <dir>] [--static <file>]
 //! ```
 //!
 //! A tree is named by its anchor, `domhringr://<tree-id>/`, whose tree id is
@@ -133,6 +137,33 @@
 //! <commit-id> <dispatch-id> <judge> <rubric> <transcript>` and one `ruling
 //! <commit-id> <question> <ruling>` line per question.
 //!
+//! A playbook and a rubric are TOML documents (`domhringr-strategy-document`
+//! states their shapes). `playbook validate` reads a playbook and each rubric
+//! its steps name, relative to its own directory, and prints `playbook <hash>
+//! <name>` and per step `step <id> verifier` or `step <id> question
+//! <rubric-hash> <question> <question-hash>`; `rubric validate` prints
+//! `rubric <hash> <name>` and per question `question <name> <hash>`, the
+//! hashes a `--static` table names. A document that does not read fails
+//! naming its file, the field at fault and why: `<file>: steps[1].why:
+//! missing field`. `playbook run` names the task's current dispatch, prints
+//! the `playbook` line, runs each verifier step in turn in `--task-state`
+//! (the working directory by default) with its output and error as one
+//! stream, commits a verification naming this peer the runner, and prints
+//! `verified <commit-id> <step> <output-hash> <status>`, the status `exit
+//! <code>` or `signal <number>`; then for each rubric its steps name it
+//! prints the `rubric` line, reads the rubric's state files into the
+//! transcript, asks the questions the steps name as `judge verdict` asks
+//! them, commits the verdict, prints `verdict <commit-id>` and `grade
+//! <question-hash> <grade>` per question — `met`, `unmet`, `undecided` or
+//! `refused` against the rubric's band — commits the grading of the verdict
+//! and prints `graded <commit-id> <composed>`. `rubric grade` grades every
+//! question of one rubric the same way. A failing verifier or an unmet grade
+//! is recorded, and the command still succeeds. `replay` prints a
+//! verification as `verified <commit-id> <dispatch-id> <runner> <playbook>
+//! <step> <output> <status>`, and a grading as `graded <commit-id>
+//! <dispatch-id> <verdict-id> <rubric> <composed>` and one `grade <commit-id>
+//! <question> <grade>` line per question.
+//!
 //! The state directory holds the peer's two keys, the key of each tree it
 //! opened, and its tree store, all created on first use. A command holds the
 //! store exclusively while it runs, so every command but `id` fails while
@@ -164,6 +195,7 @@
 extern crate alloc;
 
 mod drift;
+mod strategy;
 
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
@@ -268,6 +300,12 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> judge ask <question> <transcript> [--static <file>]
        domhringr-peer --state <dir> judge verdict <tree> --rubric <content-hash> <transcript>
                       <question>... [--static <file>]
+       domhringr-peer --state <dir> playbook validate <file>
+       domhringr-peer --state <dir> playbook run <file> <tree> [--task-state <dir>]
+                      [--static <file>]
+       domhringr-peer --state <dir> rubric validate <file>
+       domhringr-peer --state <dir> rubric grade <file> <tree> [--task-state <dir>]
+                      [--static <file>]
 where  <tree>   is domhringr://<tree-id>/
        <anchor> is domhringr://<tree-id>/<segment>/.../<segment>
        <commit> is domhringr://<tree-id>/.commit/<commit-id>, the id whole, or for whence
@@ -289,7 +327,10 @@ where  <tree>   is domhringr://<tree-id>/
        <transcript> is --transcript <content-hash> | --transcript-file <file>
        <file>   for --static holds <question-hash> <transcript-hash> <ruling> lines; without
                 it the judge asks the endpoint DOMHRINGR_JUDGE_ENDPOINT and
-                DOMHRINGR_JUDGE_MODEL name
+                DOMHRINGR_JUDGE_MODEL name; for validate, run and grade it is a playbook
+                or a rubric in TOML
+       <dir>    for --task-state is the task's state, where verifiers run and a rubric's
+                state files are read; the working directory by default
 A segment beginning with . is reserved for the forms above: no path holds one.
 ";
 
@@ -353,6 +394,21 @@ enum Verb
     /// Ask questions about a task's transcript and commit the rulings as a
     /// verdict on its current dispatch.
     Verdict,
+    /// Read a playbook, or run one on a task: `playbook` without `validate`
+    /// or `run` after it.
+    Playbook,
+    /// Read a playbook and the rubrics it names, and print them.
+    ValidatePlaybook,
+    /// Run a playbook's checks on a task's current dispatch and commit them.
+    RunPlaybook,
+    /// Read a rubric, or grade one on a task: `rubric` without `validate` or
+    /// `grade` after it.
+    Rubric,
+    /// Read a rubric and print it.
+    ValidateRubric,
+    /// Grade a rubric's questions on a task's current dispatch and commit
+    /// them.
+    GradeRubric,
 }
 
 impl fmt::Display for Verb
@@ -402,6 +458,16 @@ impl fmt::Display for Verb
                 "judge verdict <tree> --rubric <content-hash> --transcript <content-hash> | \
                  --transcript-file <file> (--question <text> --option <text>...)... [--static \
                  <file>]"
+            },
+            | Self::Playbook => "playbook validate|run",
+            | Self::ValidatePlaybook => "playbook validate <file>",
+            | Self::RunPlaybook => {
+                "playbook run <file> <tree> [--task-state <dir>] [--static <file>]"
+            },
+            | Self::Rubric => "rubric validate|grade",
+            | Self::ValidateRubric => "rubric validate <file>",
+            | Self::GradeRubric => {
+                "rubric grade <file> <tree> [--task-state <dir>] [--static <file>]"
             },
         })
     }
@@ -675,6 +741,47 @@ enum Command
         transcript: Asked,
         /// The questions, in the order asked.
         questions: Vec<Question>,
+        /// What answers.
+        judging: Judging,
+    },
+    /// Read the playbook at `file` and each rubric it names, and print
+    /// them.
+    ValidatePlaybook
+    {
+        /// The playbook's file.
+        file: PathBuf,
+    },
+    /// Run the playbook at `file` on `tree`'s current dispatch in the task's
+    /// state `directory`, its questions answered as `judging` says, and
+    /// print each receipt committed.
+    RunPlaybook
+    {
+        /// The playbook's file.
+        file: PathBuf,
+        /// The task.
+        tree: TreeId,
+        /// The task's state: where verifiers run and state files are read.
+        directory: PathBuf,
+        /// What answers.
+        judging: Judging,
+    },
+    /// Read the rubric at `file` and print it.
+    ValidateRubric
+    {
+        /// The rubric's file.
+        file: PathBuf,
+    },
+    /// Grade every question of the rubric at `file` on `tree`'s current
+    /// dispatch in the task's state `directory`, the questions answered as
+    /// `judging` says, and print each receipt committed.
+    GradeRubric
+    {
+        /// The rubric's file.
+        file: PathBuf,
+        /// The task.
+        tree: TreeId,
+        /// The task's state: where state files are read.
+        directory: PathBuf,
         /// What answers.
         judging: Judging,
     },
@@ -995,6 +1102,18 @@ enum RunError
     /// Standard error cannot be written.
     #[error("cannot write to standard error")]
     Diagnostics(#[source] std::io::Error),
+    /// A playbook or a rubric does not load.
+    #[error(transparent)]
+    Load(#[from] domhringr_strategy_document::LoadError),
+    /// A verifier does not run to its end.
+    #[error(transparent)]
+    Verify(#[from] domhringr_strategy_document::VerifyError),
+    /// A verifier's thread failed.
+    #[error("the verifier's thread failed")]
+    Join(#[source] tokio::task::JoinError),
+    /// A rubric's state file cannot be read into its transcript.
+    #[error(transparent)]
+    State(#[from] domhringr_strategy_document::StateError),
 }
 
 /// Read the command line that follows the program name.
@@ -1002,10 +1121,11 @@ enum RunError
 /// # Specification
 /// - ensures: accepts `--state <dir>` (or `--state=<dir>`; the last one given
 ///   wins) followed by a verb and exactly the operands that verb takes, or, for
-///   `serve`, `present`, `sync`, `whence`, `dispatch`, `replay`, `drift` and
-///   `judge`, what [`serve_command`], [`present_command`], [`sync_command`],
-///   [`whence_command`], [`dispatch_command`], [`replay_command`],
-///   [`drift_command`] and [`judge_command`] read. Other verbs' operands are
+///   `serve`, `present`, `sync`, `whence`, `dispatch`, `replay`, `drift`,
+///   `judge`, `playbook` and `rubric`, what [`serve_command`],
+///   [`present_command`], [`sync_command`], [`whence_command`],
+///   [`dispatch_command`], [`replay_command`], [`drift_command`],
+///   [`judge_command`] and [`strategy_command`] read. Other verbs' operands are
 ///   taken verbatim, so a note's text, a datum or a summary beginning with `-`
 ///   is a text, not an option. A tree operand is a bare anchor in the key form,
 ///   `bind`'s anchor names a path in the key form, `claim`'s DNS name and
@@ -1030,8 +1150,8 @@ enum RunError
 ///   that does not parse, [`UsageError::Summary`] for a summary [`Summary`]
 ///   refuses, as [`read_target`] for `bind`'s target, and as [`serve_command`],
 ///   [`present_command`], [`sync_command`], [`whence_command`],
-///   [`dispatch_command`], [`replay_command`], [`drift_command`] and
-///   [`judge_command`] for their verbs.
+///   [`dispatch_command`], [`replay_command`], [`drift_command`],
+///   [`judge_command`] and [`strategy_command`] for their verbs.
 /// - panics: none.
 ///
 /// # Errors
@@ -1072,10 +1192,11 @@ enum RunError
 ///   `dispatch` by anchor and by content with and without `--at`, `report`,
 ///   `handoff`, `retire`, `replay` toward the seat, a peer and `--local`,
 ///   `drift` with its options before and after its operand, `judge ask` and
-///   `judge verdict`, and a dash-leading note, datum and summary separate the
-///   accepted lines, and one line per refusal pins which refusal each
-///   malformation gets, including an arity error that wins over a malformed
-///   operand.
+///   `judge verdict`, `playbook validate` and `run` and `rubric validate` and
+///   `grade` with and without their options, and a dash-leading note, datum and
+///   summary separate the accepted lines, and one line per refusal pins which
+///   refusal each malformation gets, including an arity error that wins over a
+///   malformed operand.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
@@ -1121,6 +1242,10 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     }
     if verb == Verb::Judge {
         let command = judge_command(&mut arguments)?;
+        return Ok(Invocation { state, command });
+    }
+    if matches!(verb, Verb::Playbook | Verb::Rubric) {
+        let command = strategy_command(&mut arguments, verb)?;
         return Ok(Invocation { state, command });
     }
     let mut raw = arguments.raw_args()?;
@@ -1845,13 +1970,100 @@ fn judge_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     }
 }
 
+/// Read a `playbook` or a `rubric` command — as `document` names — from what
+/// follows its word.
+///
+/// # Specification
+/// - ensures: accepts `validate` or `run` after `playbook`, and `validate` or
+///   `grade` after `rubric`; `validate` takes one file operand and no option;
+///   `run` and `grade` take a file and a tree anchor in the key form, and the
+///   options `--task-state <dir>`, the task's state directory, the working
+///   directory when absent, and `--static <file>`, answering from a table
+///   rather than the endpoint, anywhere around the operands, each also in the
+///   `=` spelling, the last one given winning.
+/// - fails: [`UsageError::Operands`] naming `playbook` or `rubric` when nothing
+///   follows it, [`UsageError::Command`] for a word there that is not its
+///   command, [`UsageError::Arguments`] for any other option, among them either
+///   option to `validate`, or for an option without a value; then
+///   [`UsageError::Operands`] for operands other than the command takes, and as
+///   [`read_tree`] for the tree.
+/// - panics: none.
+///
+/// # Errors
+/// - [`UsageError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — `playbook validate`, `playbook run` with both options
+///   around its operands, `rubric validate` and `rubric grade` without options
+///   are read to their commands; nothing after `playbook`, `grade` after
+///   `playbook`, `--static` to `validate`, a missing tree, a surplus operand
+///   and a tree that is no anchor each meet their own refusal.
+/// - witness: `tests::every_verb_reads_its_operands`
+/// - witness: `tests::a_malformed_command_line_is_refused`
+fn strategy_command(
+    arguments: &mut lexopt::Parser,
+    document: Verb,
+) -> Result<Command, UsageError>
+{
+    let acted = match arguments.next()? {
+        | Some(lexopt::Arg::Value(word)) => match (document, word.to_str()) {
+            | (Verb::Playbook, Some("validate")) => Verb::ValidatePlaybook,
+            | (Verb::Playbook, Some("run")) => Verb::RunPlaybook,
+            | (Verb::Rubric, Some("validate")) => Verb::ValidateRubric,
+            | (Verb::Rubric, Some("grade")) => Verb::GradeRubric,
+            | _ => return Err(UsageError::Command(word)),
+        },
+        | Some(other) => return Err(UsageError::from(other.unexpected())),
+        | None => return Err(UsageError::Operands(document)),
+    };
+    let checks = matches!(acted, Verb::RunPlaybook | Verb::GradeRubric);
+    let (mut directory, mut judging) = (PathBuf::from("."), Judging::Endpoint);
+    let mut operands = Vec::new();
+    while let Some(argument) = arguments.next()? {
+        match argument {
+            | lexopt::Arg::Long("task-state") if checks => {
+                directory = PathBuf::from(arguments.value()?);
+            },
+            | lexopt::Arg::Long("static") if checks => {
+                judging = Judging::Table(PathBuf::from(arguments.value()?));
+            },
+            | lexopt::Arg::Value(operand) => operands.push(operand),
+            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+                return Err(UsageError::from(other.unexpected()));
+            },
+        }
+    }
+    let mut operands = operands.into_iter();
+    match (acted, operands.next(), operands.next(), operands.next()) {
+        | (Verb::ValidatePlaybook, Some(file), None, None) => Ok(Command::ValidatePlaybook {
+            file: PathBuf::from(file),
+        }),
+        | (Verb::ValidateRubric, Some(file), None, None) => Ok(Command::ValidateRubric {
+            file: PathBuf::from(file),
+        }),
+        | (Verb::RunPlaybook, Some(file), Some(tree), None) => Ok(Command::RunPlaybook {
+            file: PathBuf::from(file),
+            tree: read_tree(&tree)?,
+            directory,
+            judging,
+        }),
+        | (Verb::GradeRubric, Some(file), Some(tree), None) => Ok(Command::GradeRubric {
+            file: PathBuf::from(file),
+            tree: read_tree(&tree)?,
+            directory,
+            judging,
+        }),
+        | (acted, ..) => Err(UsageError::Operands(acted)),
+    }
+}
+
 /// Name the verb `word` spells.
 ///
 /// # Specification
 /// - ensures: `id`, `serve`, `open`, `grant`, `note`, `bind`, `claim`,
 ///   `introduce`, `present`, `withdraw`, `book`, `whence`, `view`, `heads`,
-///   `sync`, `dispatch`, `report`, `handoff`, `retire`, `replay`, `drift` and
-///   `judge` name their verbs.
+///   `sync`, `dispatch`, `report`, `handoff`, `retire`, `replay`, `drift`,
+///   `judge`, `playbook` and `rubric` name their verbs.
 /// - fails: [`UsageError::Command`] for any other word, carrying it.
 /// - panics: none.
 ///
@@ -1888,6 +2100,8 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
         | Some("replay") => Ok(Verb::Replay),
         | Some("drift") => Ok(Verb::Drift),
         | Some("judge") => Ok(Verb::Judge),
+        | Some("playbook") => Ok(Verb::Playbook),
+        | Some("rubric") => Ok(Verb::Rubric),
         | Some(_) | None => Err(UsageError::Command(word)),
     }
 }
@@ -2151,22 +2365,28 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///   writes [`drift::check`]'s report of it against the two checkouts, one line
 ///   per finding. `judge ask` writes `transcript <hash>` for the transcript
 ///   [`transcript_of`] names, then rules on its question as [`rulings`] rules.
-///   `judge verdict` runs as [`verdict`] specifies, this peer the judge. Every
-///   command ends in [`Completion::Success`] but a `drift` whose report holds a
-///   finding, which ends in [`Completion::Drifted`].
+///   `judge verdict` runs as [`verdict`] specifies, this peer the judge.
+///   `playbook validate`, `rubric validate`, `playbook run` and `rubric grade`
+///   run as [`strategy::validate_playbook`], [`strategy::validate_rubric`],
+///   [`strategy::run_playbook`] and [`strategy::grade_rubric`] specify, this
+///   peer the runner and the judge. Every command ends in
+///   [`Completion::Success`] but a `drift` whose report holds a finding, which
+///   ends in [`Completion::Drifted`].
 /// - fails: [`RunError::Identity`], [`RunError::Open`], [`RunError::Bind`],
 ///   [`RunError::Random`], [`RunError::Commit`], [`RunError::View`],
 ///   [`RunError::Present`], [`RunError::Route`], [`RunError::Whence`],
 ///   [`RunError::Heads`] and [`RunError::Sync`] as the record library reports
 ///   them, [`RunError::Itself`] for a `sync` or a `dispatch` aimed at this
-///   peer, [`RunError::Undispatched`] for a `report`, `handoff`, `retire` or
-///   `judge verdict` on a task with no dispatch, [`RunError::Wake`] as
-///   [`dispatch`] reports it, [`RunError::Drift`] as [`drift::check`] reports
-///   it, [`RunError::Transcript`] as [`transcript_of`] and
-///   [`RunError::Config`], [`RunError::Client`], [`RunError::Table`] and
-///   [`RunError::Rulings`] as [`rulings`] report them, and [`RunError::Output`]
-///   when standard output cannot be written. A failed sync, presence or wake
-///   still closes the endpoint.
+///   peer, [`RunError::Undispatched`] for a `report`, `handoff`, `retire`,
+///   `judge verdict`, `playbook run` or `rubric grade` on a task with no
+///   dispatch, [`RunError::Wake`] as [`dispatch`] reports it,
+///   [`RunError::Drift`] as [`drift::check`] reports it,
+///   [`RunError::Transcript`] as [`transcript_of`] and [`RunError::Config`],
+///   [`RunError::Client`], [`RunError::Table`] and [`RunError::Rulings`] as
+///   [`rulings`] report them, [`RunError::Load`], [`RunError::Verify`],
+///   [`RunError::Join`] and [`RunError::State`] as the [`strategy`] commands
+///   report them, and [`RunError::Output`] when standard output cannot be
+///   written. A failed sync, presence or wake still closes the endpoint.
 /// - panics: none.
 ///
 /// # Errors
@@ -2194,6 +2414,10 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - [`RunError::Table`], [`RunError::Rulings`]: the table file cannot be read
 ///   or holds no table.
 /// - [`RunError::Output`]: standard output cannot be written.
+/// - [`RunError::Load`]: a playbook or a rubric does not load.
+/// - [`RunError::Verify`], [`RunError::Join`]: a verifier does not run to its
+///   end.
+/// - [`RunError::State`]: a rubric's state file cannot be read.
 /// - [`RunError::Closed`], [`RunError::Diagnostics`]: as [`serve`].
 ///
 /// # Adequacy
@@ -2212,7 +2436,10 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///   is down, then up, and replays the task through the seat's presence as the
 ///   seat reports across a restart of each; a judge asks a question about a
 ///   transcript, from a table and from no endpoint, and rules on the task's
-///   current dispatch, read and unread, and the replay shows the verdict.
+///   current dispatch, read and unread, and the replay shows the verdict; a
+///   playbook and a rubric validate or are refused by file and field, a
+///   playbook runs its verifiers and grades its questions on the task's current
+///   dispatch, and the replay shows each verification and grading.
 /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
 /// - witness: `sync::tests::two_peers_sync_one_tree_to_identical_heads`
 /// - witness: `sync::tests::an_anchor_resolves_alike_on_both_peers`
@@ -2222,6 +2449,7 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
 /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
 /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
+/// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
 async fn execute(invocation: Invocation) -> Result<Completion, RunError>
 {
     let Invocation { state, command } = invocation;
@@ -2404,6 +2632,28 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             let judge = identity.peer_key();
             let peer = Peer::open(&state, identity)?;
             verdict(peer, judge, tree, rubric, transcript, questions, judging).await
+        },
+        | Command::ValidatePlaybook { file } => strategy::validate_playbook(&file),
+        | Command::ValidateRubric { file } => strategy::validate_rubric(&file),
+        | Command::RunPlaybook {
+            file,
+            tree,
+            directory,
+            judging,
+        } => {
+            let runner = identity.peer_key();
+            let peer = Peer::open(&state, identity)?;
+            strategy::run_playbook(&peer, runner, tree, &file, &directory, judging).await
+        },
+        | Command::GradeRubric {
+            file,
+            tree,
+            directory,
+            judging,
+        } => {
+            let judge = identity.peer_key();
+            let peer = Peer::open(&state, identity)?;
+            strategy::grade_rubric(&peer, judge, tree, &file, &directory, judging).await
         },
     };
     emitted.map(|()| Completion::Success)
@@ -3240,7 +3490,7 @@ mod tests
             path: path.clone(),
             target,
         };
-        let lines = [
+        let lines = vec![
             (vec!["--state", "dir", "id"], Command::Id),
             (vec!["--state=dir", "serve"], Command::Serve {
                 port: BindPort::Ephemeral,
@@ -3634,6 +3884,47 @@ mod tests
                         question("Did it land?", &["yes", "no"]),
                         question("Which?", &["a", "b", "c"]),
                     ],
+                    judging: Judging::Endpoint,
+                },
+            ),
+            (
+                vec!["--state", "dir", "playbook", "validate", "playbook.toml"],
+                Command::ValidatePlaybook {
+                    file: PathBuf::from("playbook.toml"),
+                },
+            ),
+            (
+                vec![
+                    "--state",
+                    "dir",
+                    "playbook",
+                    "run",
+                    "--static=table",
+                    "playbook.toml",
+                    "--task-state",
+                    "first",
+                    TREE,
+                    "--task-state=task",
+                ],
+                Command::RunPlaybook {
+                    file: PathBuf::from("playbook.toml"),
+                    tree,
+                    directory: PathBuf::from("task"),
+                    judging: Judging::Table(PathBuf::from("table")),
+                },
+            ),
+            (
+                vec!["--state", "dir", "rubric", "validate", "rubric.toml"],
+                Command::ValidateRubric {
+                    file: PathBuf::from("rubric.toml"),
+                },
+            ),
+            (
+                vec!["--state", "dir", "rubric", "grade", "rubric.toml", TREE],
+                Command::GradeRubric {
+                    file: PathBuf::from("rubric.toml"),
+                    tree,
+                    directory: PathBuf::from("."),
                     judging: Judging::Endpoint,
                 },
             ),
@@ -4393,6 +4684,57 @@ mod tests
                 "no"
             ])),
             UsageError::Question(QuestionError::Blank)
+        ));
+        let strategy = |words: &[&str]| {
+            let mut strategy = line(&["--state", "dir"]);
+            strategy.extend(line(words));
+            refused(strategy)
+        };
+        assert!(matches!(
+            strategy(&["playbook"]),
+            UsageError::Operands(Verb::Playbook)
+        ));
+        assert!(matches!(
+            strategy(&["rubric"]),
+            UsageError::Operands(Verb::Rubric)
+        ));
+        assert!(
+            matches!(strategy(&["playbook", "grade", "p.toml", TREE]), UsageError::Command(word) if word == "grade"),
+            "a playbook runs; a rubric grades"
+        );
+        assert!(matches!(
+            strategy(&["rubric", "--static", "table", "grade"]),
+            UsageError::Arguments(_)
+        ));
+        assert!(
+            matches!(
+                strategy(&["rubric", "validate", "--static", "table", "r.toml"]),
+                UsageError::Arguments(_)
+            ),
+            "validating asks nothing"
+        );
+        assert!(matches!(
+            strategy(&["playbook", "run", "p.toml", "--task-state"]),
+            UsageError::Arguments(_)
+        ));
+        assert!(matches!(
+            strategy(&["playbook", "run", "p.toml"]),
+            UsageError::Operands(Verb::RunPlaybook)
+        ));
+        assert!(matches!(
+            strategy(&["rubric", "validate", "r.toml", "s.toml"]),
+            UsageError::Operands(Verb::ValidateRubric)
+        ));
+        assert!(
+            matches!(
+                strategy(&["rubric", "grade", "r.toml", "not-an-anchor", "extra"]),
+                UsageError::Operands(Verb::GradeRubric)
+            ),
+            "the arity is checked before the tree is read"
+        );
+        assert!(matches!(
+            strategy(&["rubric", "grade", "r.toml", PATH]),
+            UsageError::NotTree
         ));
     }
 }

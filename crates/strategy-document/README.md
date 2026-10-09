@@ -51,7 +51,7 @@ Playbooks and rubrics: TOML documents read with every refusal named by its field
 
 ## Examples
 
-`examples/playbook.toml` checks a change to this repository: its gates as a verifier, and two questions of `examples/rubric.toml` about its READMEs. The `domhringr-peer` binary [validates and runs them](../surface-peer/README.md):
+`examples/playbook.toml` checks a change to this repository: its gates as a verifier, and two questions of `examples/rubric.toml` about its READMEs. The `domhringr-peer` binary [validates and runs them](../surface-peer/README.md#playbooks-and-rubrics):
 
 ```sh
 cargo build -p domhringr-surface-peer
