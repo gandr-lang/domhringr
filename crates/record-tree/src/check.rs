@@ -267,6 +267,37 @@ pub enum Grade
     Refused,
 }
 
+/// Compose a rubric's grades: the conjunction of its criteria.
+///
+/// # Specification
+/// - ensures: [`Grade::Unmet`] when any grade is unmet; otherwise
+///   [`Grade::Refused`] when any is refused; otherwise [`Grade::Undecided`]
+///   when any is undecided; otherwise [`Grade::Met`], the empty composition
+///   among them.
+/// - panics: none.
+///
+/// # Adequacy
+/// - hypothesis: L3 — empty, singleton, repeated and mixed grades distinguish
+///   the identity and each precedence boundary in both input orders.
+/// - witness: `check::tests::grades_compose_as_the_conjunction_of_their_criteria`
+#[inline]
+#[must_use]
+pub fn compose(grades: &[Grade]) -> Grade
+{
+    if grades.contains(&Grade::Unmet) {
+        Grade::Unmet
+    }
+    else if grades.contains(&Grade::Refused) {
+        Grade::Refused
+    }
+    else if grades.contains(&Grade::Undecided) {
+        Grade::Undecided
+    }
+    else {
+        Grade::Met
+    }
+}
+
 impl fmt::Display for Grade
 {
     /// Write the grade: `met`, `unmet`, `undecided` or `refused`.
@@ -291,8 +322,36 @@ impl fmt::Display for Grade
 #[cfg(test)]
 mod tests
 {
+    use super::Grade;
     use super::ParseStepIdError;
     use super::StepId;
+    use super::compose;
+
+    #[test]
+    fn grades_compose_as_the_conjunction_of_their_criteria()
+    {
+        use Grade::Met;
+        use Grade::Refused;
+        use Grade::Undecided;
+        use Grade::Unmet;
+        for grade in [Met, Unmet, Undecided, Refused] {
+            assert_eq!(compose(&[grade]), grade);
+            assert_eq!(compose(&[grade, grade]), grade);
+        }
+        for (grades, composed) in [
+            (&[][..], Met),
+            (&[Met, Undecided][..], Undecided),
+            (&[Refused, Met][..], Refused),
+            (&[Undecided, Refused][..], Refused),
+            (&[Met, Unmet][..], Unmet),
+            (&[Unmet, Undecided][..], Unmet),
+            (&[Refused, Unmet][..], Unmet),
+        ] {
+            assert_eq!(compose(grades), composed, "{grades:?}");
+            let reversed = grades.iter().rev().copied().collect::<Vec<_>>();
+            assert_eq!(compose(&reversed), composed, "{reversed:?}");
+        }
+    }
 
     #[test]
     fn a_step_id_is_a_short_lowercase_identifier()

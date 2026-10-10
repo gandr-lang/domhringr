@@ -9,9 +9,9 @@
 //! [`Band`] its grades stand against, and named questions, each asked of a
 //! judge as a choice between its criterion holding and failing. A ruling is
 //! graded against the band ([`Band::grade`]) and a rubric's grades compose
-//! as the conjunction of its criteria ([`compose`]): unmet when any is
-//! unmet, otherwise refused when any is refused, otherwise undecided when any
-//! is undecided, otherwise met — a refused question is never read as met.
+//! as the conjunction of its criteria ([`domhringr_record_tree::compose`]):
+//! unmet when any is unmet, otherwise refused when any is refused, otherwise
+//! undecided when any is undecided, otherwise met.
 //!
 //! Both documents are read by hand from TOML's document tree, so a text that
 //! is not the document is refused at the field it is about ([`Refusal`]:
@@ -69,7 +69,6 @@ pub use rubric::ParseStateFileError;
 pub use rubric::Rubric;
 pub use rubric::StateFile;
 pub use rubric::TranscriptError;
-pub use rubric::compose;
 pub use verify::Run;
 pub use verify::Verifier;
 pub use verify::VerifyError;

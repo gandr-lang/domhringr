@@ -38,6 +38,7 @@ use crate::anchor::Path;
 use crate::anchor::Resolution;
 use crate::anchor::Target;
 use crate::check::Grade;
+use crate::check::compose;
 use crate::decision::Decision;
 use crate::id::CommitPrefix;
 use crate::id::ContentHash;
@@ -512,6 +513,8 @@ pub enum Refusal
     /// A grading whose grades do not answer its verdict's: one grade per
     /// answer, refused exactly where the judge read no ruling.
     Misgraded,
+    /// A grading whose composed grade differs from its grades' conjunction.
+    Miscomposed,
     /// A landing naming no decision admitted among the receipt's ancestors.
     NoDecision,
     /// A decision whose author is not the operator it names, or a landing
@@ -552,6 +555,7 @@ impl fmt::Display for Refusal
             | Self::NotRunner => "not runner",
             | Self::NoVerdict => "no verdict",
             | Self::Misgraded => "misgraded",
+            | Self::Miscomposed => "miscomposed",
             | Self::NoDecision => "no decision",
             | Self::NotOperator => "not operator",
             | Self::NotLand => "not land",
@@ -938,6 +942,7 @@ struct Carry
 ///   [`Refusal::NoVerdict`] when its verdict is not admitted among its
 ///   ancestors, [`Refusal::NotJudge`] when its author is not that verdict's
 ///   judge, [`Refusal::Misgraded`] when its grades do not answer the verdict's,
+///   [`Refusal::Miscomposed`] when its composition differs from [`compose`],
 ///   then [`Refusal::NotCurrent`] when the verdict's dispatch is not the latest
 ///   among its ancestors; for a decision [`Refusal::NoAuthority`] when its
 ///   author is neither the owner nor granted, [`Refusal::NotOperator`] when its
@@ -1376,7 +1381,14 @@ pub fn fold(
                                 verdict,
                                 grades,
                                 composed,
-                            } => match grading(&ruled, &past, node.author, verdict, &grades) {
+                            } => match grading(
+                                &ruled,
+                                &past,
+                                node.author,
+                                verdict,
+                                &grades,
+                                composed,
+                            ) {
                                 | Ok(ruling) => {
                                     let grades = ruling
                                         .questions
@@ -1564,30 +1576,35 @@ fn join<Member>(
 /// - ensures: `Ok` with the verdict as `ruled` holds it iff `verdict` is an
 ///   admitted verdict in `past`, `author` is its judge, `grades` holds one
 ///   grade per answer with [`Grade::Refused`] exactly where the ruling is
-///   unread, and the verdict's dispatch is current in `past`.
+///   unread, `composed` is [`compose`] of `grades`, and the verdict's dispatch
+///   is current in `past`.
 /// - fails: the first refusal that holds, in this order:
 ///   [`Refusal::NoVerdict`], [`Refusal::NotJudge`], [`Refusal::Misgraded`],
-///   [`Refusal::NotCurrent`].
+///   [`Refusal::Miscomposed`], [`Refusal::NotCurrent`].
 /// - panics: none.
 ///
 /// # Errors
 /// - [`Refusal::NoVerdict`]: no admitted verdict `verdict` is in `past`.
 /// - [`Refusal::NotJudge`]: `author` is not the verdict's judge.
 /// - [`Refusal::Misgraded`]: `grades` does not answer the verdict's answers.
+/// - [`Refusal::Miscomposed`]: `composed` differs from [`compose`] of `grades`.
 /// - [`Refusal::NotCurrent`]: the verdict's dispatch is not current in `past`.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — a grading by the judge is admitted, and one of an unknown
 ///   verdict, of a verdict only concurrent with it, by another key, with a
 ///   grade too few, a read answer refused, an unread answer met, and after a
-///   later dispatch each meet their own refusal.
+///   later dispatch each meet their own refusal. Each composition mismatch is
+///   refused without advancing the task; a correct descendant is admitted.
 /// - witness: `fold::tests::a_verdicts_judge_grades_its_answers`
+/// - witness: `fold::tests::a_gradings_composition_is_checked_before_it_advances_the_task`
 fn grading<'ruled>(
     ruled: &'ruled BTreeMap<CommitId, Ruled>,
     past: &Past,
     author: PeerKey,
     verdict: CommitId,
     grades: &[Grade],
+    composed: Grade,
 ) -> Result<&'ruled Ruled, Refusal>
 {
     let Some(ruling) = ruled
@@ -1608,6 +1625,9 @@ fn grading<'ruled>(
             });
     if !answered {
         return Err(Refusal::Misgraded);
+    }
+    if composed != compose(grades) {
+        return Err(Refusal::Miscomposed);
     }
     past.course.current(ruling.dispatch)?;
     Ok(ruling)
@@ -1977,7 +1997,8 @@ mod tests
         grades: Vec<Grade>,
     ) -> Receipt
     {
-        Receipt::graded(tree(), verdict, grades, Grade::Refused).unwrap()
+        let composed = crate::compose(&grades);
+        Receipt::graded(tree(), verdict, grades, composed).unwrap()
     }
 
     /// A fresh decision on `dispatch`: `decision`.
@@ -3424,6 +3445,105 @@ mod tests
                 "the judge's grading is a step naming its verdict's dispatch, rubric and \
                  questions"
             );
+        });
+    }
+
+    #[test]
+    fn a_gradings_composition_is_checked_before_it_advances_the_task()
+    {
+        use Grade::Met;
+        use Grade::Refused;
+        use Grade::Undecided;
+        use Grade::Unmet;
+        let (a, s, j) = (owner(), other(), MemorySigner::from_bytes(&[5; 32]));
+        runtime().block_on(async {
+            for (grades, expected) in [
+                (vec![], Met),
+                (vec![Met], Met),
+                (vec![Unmet], Unmet),
+                (vec![Undecided], Undecided),
+                (vec![Refused], Refused),
+                (vec![Met, Refused], Refused),
+                (vec![Refused, Undecided, Unmet], Unmet),
+            ] {
+                let opened = commit(&a, tree(), &[], &open(&a)).await;
+                let dispatched = commit(&a, tree(), &[&opened], &dispatch(key(&s))).await;
+                let d = id(&dispatched);
+                let answers = grades
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &grade)| {
+                        let ruling = if grade == Refused {
+                            Ruling::Unread(Unread::NoLetter)
+                        }
+                        else {
+                            Ruling::Read(
+                                Readout::new(
+                                    vec![
+                                        Probability::try_from(0.75_f64).unwrap(),
+                                        Probability::try_from(0.25_f64).unwrap(),
+                                    ],
+                                    Probability::try_from(0.0_f64).unwrap(),
+                                )
+                                .unwrap(),
+                            )
+                        };
+                        (content(index.to_string()), ruling)
+                    })
+                    .collect();
+                let receipt = Receipt::verdict(
+                    tree(),
+                    d,
+                    key(&j),
+                    content("rubric".into()),
+                    evidence("transcript".into()),
+                    answers,
+                )
+                .unwrap();
+                let judged = commit(&j, tree(), &[&dispatched], &receipt).await;
+                let verdict = id(&judged);
+                let mut commits = vec![opened, dispatched, judged.clone()];
+                let mut parent = judged;
+                let mut refused = BTreeMap::new();
+                for composed in [Met, Unmet, Undecided, Refused]
+                    .into_iter()
+                    .filter(|&grade| grade != expected)
+                {
+                    let receipt =
+                        Receipt::graded(tree(), verdict, grades.clone(), composed).unwrap();
+                    let misstated = commit(&j, tree(), &[&parent], &receipt).await;
+                    let _previous = refused.insert(id(&misstated), Refusal::Miscomposed);
+                    commits.push(misstated.clone());
+                    parent = misstated;
+                }
+                let view = fold(tree(), commits.clone()).unwrap();
+                assert_eq!(
+                    view.refused().iter().cloned().collect::<BTreeMap<_, _>>(),
+                    refused,
+                    "{grades:?}"
+                );
+                assert_eq!(attempt(&view).progress(), &Progress::Unchecked);
+                assert!(
+                    !view
+                        .task()
+                        .steps()
+                        .iter()
+                        .any(|entry| matches!(entry.1, Step::Graded { .. }))
+                );
+                let receipt = Receipt::graded(tree(), verdict, grades, expected).unwrap();
+                let admitted = commit(&j, tree(), &[&parent], &receipt).await;
+                let grading = id(&admitted);
+                commits.push(admitted);
+                let view = fold(tree(), commits).unwrap();
+                assert_eq!(
+                    view.refused().iter().cloned().collect::<BTreeMap<_, _>>(),
+                    refused
+                );
+                assert_eq!(attempt(&view).progress(), &Progress::Graded {
+                    grading,
+                    composed: expected
+                });
+            }
         });
     }
 

@@ -35,11 +35,11 @@ use domhringr_record_tree::Step;
 use domhringr_record_tree::StepId;
 use domhringr_record_tree::TreeId;
 use domhringr_record_tree::View;
+use domhringr_record_tree::compose;
 use domhringr_strategy_document::Bound;
 use domhringr_strategy_document::Loaded;
 use domhringr_strategy_document::Plan;
 use domhringr_strategy_document::Rubric;
-use domhringr_strategy_document::compose;
 
 use crate::Completion;
 use crate::Judging;

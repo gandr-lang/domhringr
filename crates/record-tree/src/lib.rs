@@ -37,9 +37,10 @@
 //! ([`Kind::Verified`]): the step's identifier ([`StepId`]), the hash of the
 //! process's output and how it ended ([`Status`]). The judge of a verdict
 //! grades it ([`Kind::Graded`]): a [`Grade`] per answer and the grades
-//! composed. Each moves no slot and answers no attempt, and the fold admits
-//! each only from the key it names — the judge, the runner, the verdict's
-//! judge — while its dispatch is current.
+//! composed by [`compose`]. The fold refuses a grading whose composition is
+//! not that conjunction as [`Refusal::Miscomposed`]. Each moves no slot and
+//! answers no attempt, and the fold admits each only from the key it names —
+//! the judge, the runner, the verdict's judge — while its dispatch is current.
 //!
 //! The operator closes the loop on the record too. A decision on the current
 //! dispatch ([`Kind::Decide`]) names its operator and lands the change,
@@ -133,6 +134,7 @@ pub use check::ParseStepIdError;
 pub use check::Signal;
 pub use check::Status;
 pub use check::StepId;
+pub use check::compose;
 pub use decision::Decision;
 pub use decision::ParseRevisionError;
 pub use decision::Revision;

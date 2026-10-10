@@ -42,7 +42,7 @@ Playbooks and rubrics: TOML documents read with every refusal named by its field
 - `Plan`: a playbook and each rubric its steps name, read beside it, every question it names checked to exist; `Plan::gradings` groups the questions by rubric.
 - `Verifier::run`: a program run in a directory to its end, its merged output and its `Status`.
 - `Rubric::transcript`: the state files read into one transcript, staged as evidence and named by its value manifest; `TranscriptError` names the state file that cannot be read.
-- `Band::grade`: a ruling graded `met`, `unmet`, `undecided` or `refused`; `compose`: a rubric's grades composed into one.
+- `Band::grade`: a ruling graded `met`, `unmet`, `undecided` or `refused`; callers compose grades with `domhringr_record_tree::compose`.
 
 ## Expected features
 
@@ -66,8 +66,8 @@ With this crate and `domhringr-record-tree` as dependencies, this program grades
 ```rust
 use std::path::Path;
 
-use domhringr_record_tree::{Grade, Ruling};
-use domhringr_strategy_document::{Loaded, Rubric, compose};
+use domhringr_record_tree::{Grade, Ruling, compose};
+use domhringr_strategy_document::{Loaded, Rubric};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rubric = Loaded::<Rubric>::read(Path::new("examples/rubric.toml"))?;
@@ -166,6 +166,8 @@ Reversal: a verifier whose output is too large to hold in memory, which needs th
 **A ruling is graded by the probability on its true criterion against the band.** At or above `high` it is `met`, at or below `low` `unmet`, strictly between `undecided`; an unread ruling is `refused`.
 
 **A rubric's grades compose as the conjunction of its criteria.** Any `unmet` makes the composition `unmet`; otherwise any `refused` makes it `refused`; otherwise any `undecided` makes it `undecided`; otherwise it is `met`, as is an empty composition. This is the strong three-valued conjunction with refusal placed between failure and indecision: a criterion decided as failing settles the conjunction whatever the others say, and a refusal is never read as met, nor as merely close.
+
+`domhringr_record_tree::compose` owns this rule beside `Grade`. Writers and the record fold use the same definition; a grading with a different composed grade is refused as `miscomposed`. The existing dependency on `record-tree` supplies it.
 
 - refusal absorbing everything: an unread question would hide a criterion that was decided as failing.
 - `undecided` before `refused`: a judge that did not answer would read as one that weighed the evidence and stayed between.

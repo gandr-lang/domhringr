@@ -192,14 +192,24 @@ Reversal: a verdict that settles the task — accepting or reopening the attempt
 
 Reversal: a check that reads the output and error streams apart, which needs a digest per stream.
 
-**A grading is admitted from its verdict's judge alone, of a verdict in its causal past.** A `Graded { verdict, grades, composed }` names the verdict it grades and gives one `Grade` per answer, in the verdict's order — `met`, `unmet`, `undecided`, or `refused` for an unread ruling — and the grades composed across the rubric. The task, the rubric and the questions are the verdict's, so the grading names them through it rather than again. A grading naming no admitted verdict among its ancestors is refused `no verdict`, one whose author is not that verdict's judge `not judge`, one whose grades number other than the answers or are refused other than exactly where the ruling is unread `misgraded`, and one whose verdict's dispatch is no longer current `not current`; an admitted grading is a step of the task, printed `graded <commit> <dispatch> <verdict> <rubric> <composed>` and one `grade <commit> <question> <grade>` line per answer, and advances the attempt to graded. The fold checks that a grade answers its ruling, never where the ruling stands against the band or how the grades compose: the band and the composition are the rubric's, which the record names by hash and does not hold.
+**A grading is admitted from its verdict's judge alone, of a verdict in its causal past.** A `Graded { verdict, grades, composed }` names the verdict it grades and gives one `Grade` per answer, in the verdict's order — `met`, `unmet`, `undecided`, or `refused` for an unread ruling — and the grades composed across the rubric. The task, rubric and questions are the verdict's, so the grading names them through it. The fold checks these conditions in order:
+
+| Refusal | Condition |
+| ------- | --------- |
+| `no verdict` | No admitted verdict among the grading's ancestors. |
+| `not judge` | The author is not the verdict's judge. |
+| `misgraded` | The grade count differs from the answer count, or a grade is refused other than exactly where its ruling is unread. |
+| `miscomposed` | The composed grade differs from `compose(&grades)`. |
+| `not current` | The verdict's dispatch is no longer current. |
+
+**Composition is checked from the receipt alone.** `compose` lives beside `Grade`, shared by writers and the fold without an added dependency. Any unmet grade makes the conjunction unmet; otherwise any refused grade makes it refused; otherwise any undecided grade makes it undecided; otherwise it is met, including the empty composition. Refused gradings remain in the DAG without advancing the task; `open` prints their commit anchors and `miscomposed`. An admitted grading is a task step naming its dispatch, verdict, rubric, question grades and composition.
 
 - the task and the rubric in the grading: a second statement of what the verdict records, free to disagree with it.
 - the grades inside the verdict: the judge's readout and the rubric's band are two acts, and a band revised later grades the same readout again without asking the judge again.
 - a grading from any member: two keys could grade one verdict differently, and the grades would not be the asking key's.
-- the fold recomputing grades and composition: it needs the rubric's band and rule, which are not in the record.
+- the fold recomputing individual grades: it needs the rubric's band, which is not in the record.
 
-Reversal: a rubric reachable from the record, when the fold can recompute each grade from the band and the readout and refuse a grading that misstates one.
+Reversal: a reader holding the rubric as evidence can also check each grade against its band. Rubrics with a rule other than conjunction require that rule to be named in the record before the fold can check it.
 
 **A decision is admitted from the operator it names, on the current dispatch.** A `Decide { dispatch, operator, decision }` records what the operator decides of the attempt the dispatch made: `land` its change, `rework <reason>`, the reason one line as a report's summary is, or `abandon` the task. The operator is a role, the one that dispatches — the owner or a member — and the receipt names the key in that role that decided, as a verdict names its judge: one owner per choice. A decision whose author holds no operator role is refused `no authority`, one whose author is not the operator it names `not operator`, one on another dispatch `not current`; an admitted decision is a step of the task, printed `decide <commit> <dispatch> <operator> <decision>`, and advances the attempt to decided. A later decision on the same dispatch replaces an earlier one as the attempt's progress.
 
