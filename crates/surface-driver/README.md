@@ -82,13 +82,15 @@ A `<task>` is its name in the project — ASCII letters, digits, `-`, `_` and `.
 
 | Command | Prints | Commits |
 | ------- | ------ | ------- |
-| `open` | `project <anchor>`; `seat <peer-id> <endpoint> <commit-id>` per presence but the operator's; `task <anchor> <standing>` per task, or `unheld` for a task tree the store lacks | nothing |
+| `open` | `project <anchor>`; `seat <peer-id> <endpoint> <commit-id>` per presence but the operator's; `refused <commit-anchor> <reason>` per refusal and `task <anchor> <standing>` per task, or `unheld` for a task tree the store lacks | nothing |
 | `dispatch` | `dispatch <commit-anchor>`, then `woken` | `Open` and `Bind` for a new task, then `Dispatch` |
 | `verify` | `change <branch> <commit>`, `report <digest>`, `playbook <hash> <name>`, `verified <commit-id> <step> <output-digest> <status>` per verifier | `Verified` per verifier |
 | `decide` | `change`; `report`; `step <id> <status>` per verified step; per rubric `rubric`, `transcript`, `ruling`, `verdict`, `grade` and `graded` lines; `composed <grade>`; `decide <commit-id> <decision>` | `Verdict` and `Graded` per rubric, then `Decide` unless undecided |
 | `land` | `change <branch> <commit>`, `report <digest>`, `landed <commit-id> <revision>` | `Landed` |
 
 The exit status is 0 on success, 1 when a command fails, 2 for a command line that cannot be run, and 3 when `decide` decides nothing. Diagnostics go to standard error.
+
+Dispatches name the newest edition compiled into the driver: edition 2 by default, edition 1 with `--no-default-features`. Reading a task always uses its dispatch's edition. `open` surfaces unknown-edition and protocol-order refusals by commit anchor; `operator::tests::open_names_unknown_protocol_refusals` witnesses the unknown-edition case.
 
 ## The lifecycle
 

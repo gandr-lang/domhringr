@@ -1,5 +1,4 @@
-//! The Seat slot protocol, endpoint replay, and kernel-certified pause
-//! widening.
+//! Numbered Seat protocols, endpoint replay, and kernel-certified widening.
 
 #![cfg_attr(
     dylint_lib = "quenchant_dylints",
@@ -7,7 +6,7 @@
 )]
 #![expect(
     clippy::multiple_crate_versions,
-    reason = "the pinned gandr contracts use anodized with syn 2; thiserror uses syn 3"
+    reason = "the pinned gandr specifications use anodized with syn 2; thiserror uses syn 3"
 )]
 
 extern crate alloc;
@@ -36,17 +35,91 @@ use gandr_kernel_core::flow_universe::Flow;
 use gandr_kernel_core::flow_universe::Flows;
 use gandr_kernel_term::BaseType;
 use gandr_kernel_term::TermArena;
-use gandr_kernel_term::ValueId;
 
-/// The protocol under which a record is interpreted.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Edition
+/// A durable protocol name; unknown numbers remain names, not defaults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct Edition(u64);
+
+impl Edition
 {
-    /// Dispatch, report, handoff and retire.
-    Base,
-    /// The certified extension admitting pause without relinquishing the slot.
-    #[default]
-    Paused,
+    /// Dispatch, one or more reports, then handoff or retirement.
+    pub const ONE: Self = Self(1);
+    /// Edition 1 widened with pause before or between reports.
+    pub const TWO: Self = Self(2);
+    /// The edition new dispatches name in this build.
+    #[cfg(feature = "edition-2")]
+    pub const CURRENT: Self = Self::TWO;
+    /// The edition new dispatches name in this build.
+    #[cfg(not(feature = "edition-2"))]
+    pub const CURRENT: Self = Self::ONE;
+}
+
+impl From<u64> for Edition
+{
+    /// Preserve the number even when this build does not know its protocol.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn from(number: u64) -> Self
+    {
+        Self(number)
+    }
+}
+
+impl From<Edition> for u64
+{
+    /// Return the durable number.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn from(edition: Edition) -> Self
+    {
+        edition.0
+    }
+}
+
+impl core::str::FromStr for Edition
+{
+    type Err = core::num::ParseIntError;
+
+    /// Read an unsigned edition number without claiming protocol knowledge.
+    ///
+    /// # Specification
+    /// - ensures: preserves every representable unsigned edition number.
+    /// - fails: rejects nonnumeric or overflowing input.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// Returns the integer parser's error for malformed input.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 known, unknown, and malformed names distinguish parsing
+    ///   from protocol availability.
+    /// - witness: `tests::unknown_editions_never_replay_as_known_protocols`
+    #[inline]
+    fn from_str(text: &str) -> Result<Self, Self::Err>
+    {
+        text.parse().map(Self)
+    }
+}
+
+impl fmt::Display for Edition
+{
+    /// Print the durable number.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result
+    {
+        self.0.fmt(f)
+    }
 }
 
 /// A move in the slot's dialogue. Handoff and retirement close this endpoint.
@@ -67,7 +140,7 @@ pub enum Movement
 
 impl fmt::Display for Movement
 {
-    /// Write the stable receipt move name.
+    /// Print the receipt action's name.
     ///
     /// # Specification
     /// trivial.
@@ -97,28 +170,56 @@ pub enum Progress
     Complete,
 }
 
+/// A protocol this build does not contain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("unknown edition {0}")]
+#[repr(transparent)]
+pub struct UnknownEdition(pub Edition);
+
 /// The named receipt move refused by the independent monitor.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("{movement}: {reason:?}")]
+#[error("edition {edition} {movement}: {reason}")]
 pub struct Refusal
 {
+    /// The edition named by the dispatch.
+    pub edition: Edition,
     /// The receipt action, rather than an internal label or payload step.
     pub movement: Movement,
-    /// The first failed endpoint step and its expected action.
-    pub reason: ReplayError,
+    /// Missing protocol knowledge or the first failed endpoint step.
+    pub reason: Reason,
 }
 
-/// Construction or certified transport failed; no unchecked protocol is
-/// substituted.
+/// Why a move cannot enter its named protocol.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Reason
+{
+    /// The protocol is not compiled into this build.
+    #[error(transparent)]
+    Unknown(UnknownEdition),
+    /// The known protocol refuses this endpoint step.
+    #[error("{0:?}")]
+    Replay(ReplayError),
+}
+
+/// Construction or certified transport failed; no protocol is substituted.
 #[derive(Debug, thiserror::Error)]
 pub enum ArenaError
 {
     /// Invalid finite protocol syntax.
     #[error(transparent)]
     Type(#[from] gandr_core_session::TypeError),
+    /// One of the named protocols is not compiled in.
+    #[error(transparent)]
+    Unknown(#[from] UnknownEdition),
     /// The candidate extension is not a session subtype.
-    #[error("pause is not a widening")]
-    NotWidening,
+    #[error("edition {source_edition} is not a widening to edition {target_edition}")]
+    NotWidening
+    {
+        /// The source protocol.
+        source_edition: Edition,
+        /// The proposed target protocol.
+        target_edition: Edition,
+    },
     /// Native code export or recorded transport failed.
     #[error(transparent)]
     Transport(#[from] TransportError),
@@ -138,62 +239,118 @@ const RETIRE: ValueTypeId = ValueTypeId([4; 32]);
 /// The pause receipt type.
 const PAUSE: ValueTypeId = ValueTypeId([5; 32]);
 
-/// Validated endpoint types and the independently checked widening between
-/// them.
-///
-/// # Specification
-/// - provides: the Seat type, its dual, and a kernel-checked Base-to-Paused
-///   Flow.
-/// - panics: none.
-///
-/// # Adequacy
-/// - hypothesis: L1 kernel checking validates candidate evidence; L3 directed
-///   traces distinguish move order, pause width, retirement and continued use.
-/// - witness: `tests::pause_is_certified_and_old_runs_transport`
-/// - witness: `tests::named_refusal_preserves_the_prefix`
+/// Validated endpoint types keyed by their compiled edition numbers.
+#[cfg_attr(not(feature = "edition-2"), repr(transparent))]
 pub struct Arena
 {
-    /// The original slot protocol.
+    /// Edition 1's slot protocol.
     base: Session,
-    /// The protocol with pause in its recursive selection.
+    /// Edition 2's protocol; absent from edition-1-only binaries.
+    #[cfg(feature = "edition-2")]
     paused: Session,
-    /// Native session codes and their payload classifiers.
-    terms: TermArena,
-    /// The mapping checked at the recorded transport boundary.
-    payloads: PayloadCodes,
-    /// The base protocol's quoted native code.
-    base_code: ValueId,
-    /// The widened protocol's quoted native code.
-    paused_code: ValueId,
-    /// The candidate graph the kernel independently checked.
-    flows: Flows,
-    /// The checked widening's identity in that graph.
-    certificate: Certificate,
 }
 
 impl Arena
 {
-    /// Construct the protocol pair and certify the pause widening.
+    /// Construct only the protocols compiled into this build.
     ///
     /// # Specification
-    /// - ensures: Base is a subtype of Paused and the kernel accepts its Flow.
-    /// - fails: syntax, code-export, relation and kernel failures remain
-    ///   distinct.
+    /// - ensures: edition 1 is available; edition 2 is available exactly when
+    ///   the `edition-2` feature is enabled.
+    /// - fails: invalid finite session syntax remains a typed error.
     /// - panics: none.
     ///
     /// # Errors
-    /// Returns the corresponding [`ArenaError`], never an unchecked fallback.
+    /// Returns `ArenaError::Type` for invalid session syntax.
     ///
     /// # Adequacy
-    /// - hypothesis: L1 the kernel independently checks the engine's relation;
-    ///   L3 reverse subtyping is refused while forward transport preserves
-    ///   moves.
-    /// - witness: `tests::pause_is_certified_and_old_runs_transport`
+    /// - hypothesis: L3 known and unknown editions distinguish lookup from a
+    ///   peer-local default; directed traces pin the compiled protocols.
+    /// - witness: `tests::unknown_editions_never_replay_as_known_protocols`
+    /// - witness: `tests::named_refusal_preserves_the_prefix`
     #[inline]
     pub fn new() -> Result<Self, ArenaError>
     {
-        let base = session(Edition::Base)?;
-        let paused = session(Edition::Paused)?;
+        let base = session(Edition::ONE)?;
+        #[cfg(feature = "edition-2")]
+        let paused = session(Edition::TWO)?;
+        Ok(Self {
+            base,
+            #[cfg(feature = "edition-2")]
+            paused,
+        })
+    }
+
+    /// Borrow the protocol named by an edition, never a substitute.
+    ///
+    /// # Specification
+    /// - ensures: returns exactly the named compiled protocol.
+    /// - fails: unknown numbers name themselves in `UnknownEdition`.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// Returns `UnknownEdition` when the edition is not compiled in.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 unknown numbers and edition-1-only builds expose any
+    ///   fallback to a known protocol.
+    /// - witness: `tests::unknown_editions_never_replay_as_known_protocols`
+    #[inline]
+    pub const fn session(
+        &self,
+        edition: Edition,
+    ) -> Result<&Session, UnknownEdition>
+    {
+        match edition {
+            | Edition::ONE => Ok(&self.base),
+            #[cfg(feature = "edition-2")]
+            | Edition::TWO => Ok(&self.paused),
+            | unknown => Err(UnknownEdition(unknown)),
+        }
+    }
+
+    /// Re-derive and kernel-check the widening between two named editions,
+    /// then transport a complete play without changing its moves or digests.
+    ///
+    /// # Specification
+    /// - ensures: the transported play conforms to the target protocol; the
+    ///   candidate relation and its certificate are derived locally.
+    /// - fails: unknown editions, non-widenings, incomplete or nonconforming
+    ///   source plays, code export and kernel failures retain their identities.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// Returns the corresponding `ArenaError`; no certificate is received
+    /// from a peer or retained in a receipt.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L1 independent kernel checking validates the candidate; L3
+    ///   forward, reverse, unknown and incomplete traces separate the names,
+    ///   relation direction, conformance and completion obligations.
+    /// - witness: `tests::pause_is_certified_and_old_runs_transport`
+    #[inline]
+    pub fn transport(
+        &self,
+        source_edition: Edition,
+        target_edition: Edition,
+        play: &Play,
+    ) -> Result<Play, ArenaError>
+    {
+        let source = self.session(source_edition)?;
+        let target = self.session(target_edition)?;
+        let evidence = match gandr_core_session::relate(
+            source,
+            target,
+            gandr_core_session::Relation::Subtype,
+        )? {
+            | gandr_core_session::RelationResult::Related(evidence) => evidence,
+            | gandr_core_session::RelationResult::Unrelated => {
+                return Err(ArenaError::NotWidening {
+                    source_edition,
+                    target_edition,
+                });
+            },
+        };
         let mut terms = TermArena::new();
         let unit = terms.value_type_unit();
         let integer = terms.value_type_base(BaseType::Integer);
@@ -210,21 +367,13 @@ impl Arena
             ]
             .into(),
         );
-        let base_code = gandr_core_session::certified::encode(&mut terms, &base, &payloads)?;
-        let paused_code = gandr_core_session::certified::encode(&mut terms, &paused, &payloads)?;
-        let evidence = match gandr_core_session::relate(
-            &base,
-            &paused,
-            gandr_core_session::Relation::Subtype,
-        )? {
-            | gandr_core_session::RelationResult::Related(evidence) => evidence,
-            | gandr_core_session::RelationResult::Unrelated => return Err(ArenaError::NotWidening),
-        };
+        let source_code = gandr_core_session::certified::encode(&mut terms, source, &payloads)?;
+        let target_code = gandr_core_session::certified::encode(&mut terms, target, &payloads)?;
         let proofs = terms.value_unit();
         let mut flows = Flows::new();
         let flow = flows.push(Flow::Session {
-            source: base_code,
-            target: paused_code,
+            source: source_code,
+            target: target_code,
             evidence: Arc::new(evidence),
             payload_paths: proofs,
         })?;
@@ -236,84 +385,20 @@ impl Arena
             Family::Flow,
             ReplayBudget::DEFAULT,
         )?;
-        Ok(Self {
-            base,
-            paused,
-            terms,
-            payloads,
-            base_code,
-            paused_code,
-            flows,
-            certificate,
-        })
-    }
-
-    /// Borrow the endpoint type for a protocol edition.
-    ///
-    /// # Specification
-    /// trivial.
-    #[must_use]
-    #[inline]
-    pub const fn session(
-        &self,
-        edition: Edition,
-    ) -> &Session
-    {
-        match edition {
-            | Edition::Base => &self.base,
-            | Edition::Paused => &self.paused,
-        }
-    }
-
-    /// The operator endpoint dual to the slot endpoint.
-    ///
-    /// # Specification
-    /// trivial.
-    #[must_use]
-    #[inline]
-    pub fn dual(
-        &self,
-        edition: Edition,
-    ) -> Session
-    {
-        self.session(edition).dual()
-    }
-
-    /// Transport a completed Base play through the checked pause widening.
-    ///
-    /// # Specification
-    /// - ensures: every payload digest and move is preserved and the result
-    ///   conforms to Paused after the kernel and both monitors replay it.
-    /// - fails: incomplete, non-Base or invalid certificate runs are refused.
-    /// - panics: none.
-    ///
-    /// # Errors
-    /// [`ArenaError::Transport`] retains the kernel, binding or replay refusal.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L1 destination replay checks the transported run; L3 exact
-    ///   moves and digests expose alteration, with a paused-source near miss.
-    /// - witness: `tests::pause_is_certified_and_old_runs_transport`
-    #[inline]
-    pub fn transport(
-        &mut self,
-        play: &Play,
-    ) -> Result<Play, ArenaError>
-    {
         let source = Protocol {
-            session: &self.base,
-            code: self.base_code,
-            payloads: &self.payloads,
+            session: source,
+            code: source_code,
+            payloads: &payloads,
         };
         let target = Protocol {
-            session: &self.paused,
-            code: self.paused_code,
-            payloads: &self.payloads,
+            session: target,
+            code: target_code,
+            payloads: &payloads,
         };
         let moves = gandr_core_session::certified::transport(
-            &mut self.terms,
-            &self.flows,
-            self.certificate,
+            &mut terms,
+            &flows,
+            certificate,
             (source, target),
             &play.moves,
             ReplayBudget::DEFAULT,
@@ -322,8 +407,8 @@ impl Arena
     }
 }
 
-/// State owned by one causal branch; bodies stay behind their digests.
-#[derive(Clone, Debug, Default)]
+/// State owned by one attempt; bodies stay behind their digests.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Play
 {
@@ -333,26 +418,24 @@ pub struct Play
 
 impl Play
 {
-    /// Append a receipt only if the monitor admits its complete action.
+    /// Append a receipt action only if the named protocol admits its prefix.
     ///
     /// # Specification
-    /// - ensures: success retains the appended action and distinguishes an open
-    ///   prefix from an explicitly closed run; a refusal leaves the play
-    ///   unchanged.
-    /// - fails: the first wrong direction, label, payload or post-end move is
-    ///   named.
+    /// - ensures: success extends the prefix by the action's skeleton; failure
+    ///   leaves the prefix unchanged.
+    /// - fails: names the edition, receipt action and missing protocol or first
+    ///   failed monitor step.
     /// - panics: none.
     ///
     /// # Errors
-    /// [`Refusal`] carries the receipt name and the monitor's first failed
-    /// step.
+    /// Returns a named `Refusal` without consuming the admitted prefix.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 an out-of-order report, pause under Base and a
-    ///   post-retire action pin named refusals; retrying after refusal checks
-    ///   rollback.
+    /// - hypothesis: L3 early report, pause width and use after close expose
+    ///   ordering errors; unknown names expose fallback; a following report
+    ///   distinguishes refusal from prefix mutation.
     /// - witness: `tests::named_refusal_preserves_the_prefix`
-    /// - witness: `tests::pause_is_certified_and_old_runs_transport`
+    /// - witness: `tests::unknown_editions_never_replay_as_known_protocols`
     #[inline]
     pub fn record(
         &mut self,
@@ -362,6 +445,13 @@ impl Play
         digest: PayloadDigest,
     ) -> Result<Progress, Box<Refusal>>
     {
+        let session = arena.session(edition).map_err(|unknown| {
+            Box::new(Refusal {
+                edition,
+                movement,
+                reason: Reason::Unknown(unknown),
+            })
+        })?;
         let before = self.moves.len();
         let (label, identity) = match movement {
             | Movement::Dispatch => (None, DISPATCH),
@@ -382,13 +472,17 @@ impl Play
             self.moves.push(Move::End);
         }
         // economy: replay each canonical prefix because the upstream monitor has no
-        // cursor API; an upstream resumable monitor removes this quadratic cost.
-        match gandr_core_session::replay(arena.session(edition), &self.moves) {
+        // cursor API; a resumable monitor removes this quadratic cost.
+        match gandr_core_session::replay(session, &self.moves) {
             | Ok(_) => Ok(Progress::Complete),
             | Err(ReplayError::IncompleteRun { expected, .. }) => Ok(Progress::Open(expected)),
             | Err(reason) => {
                 self.moves.truncate(before);
-                Err(Box::new(Refusal { movement, reason }))
+                Err(Box::new(Refusal {
+                    edition,
+                    movement,
+                    reason: Reason::Replay(reason),
+                }))
             },
         }
     }
@@ -396,15 +490,16 @@ impl Play
     /// Observe a candidate receipt without admitting it.
     ///
     /// # Specification
-    /// - ensures: the same verdict as record, with the original play unchanged.
-    /// - fails: the same named monitor refusal as record.
+    /// - ensures: returns the same observation as `record`, leaving the
+    ///   admitted prefix unchanged on both success and failure.
+    /// - fails: propagates the named monitor refusal.
     /// - panics: none.
     ///
     /// # Errors
-    /// [`Refusal`] if the candidate violates the session.
+    /// Returns `Refusal` when the action cannot enter the named protocol.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 probing a valid report leaves the report requirement
+    /// - hypothesis: L3 inspecting a report leaves the report obligation
     ///   unsatisfied, so immediate retirement remains refused.
     /// - witness: `tests::named_refusal_preserves_the_prefix`
     #[inline]
@@ -426,29 +521,29 @@ impl Play
     ///
     /// # Specification
     /// trivial.
-    #[must_use]
     #[inline]
+    #[must_use]
     pub fn moves(&self) -> &[Move]
     {
         &self.moves
     }
 }
 
-/// Build the finite slot syntax, with recursion only through bound variables.
+/// Form the finite slot protocol for one compiled edition.
 ///
 /// # Specification
-/// - ensures: dispatch requires one or more reports, then handoff or retirement
-///   closes; Paused alone permits pause while retaining the current report
-///   phase.
-/// - fails: [`gandr_core_session::TypeError`] identifies malformed syntax.
+/// - requires: the edition is known by the caller.
+/// - ensures: report is required before either closing move; edition 2
+///   additionally offers pause before and between reports.
+/// - fails: malformed finite syntax is a typed session error.
 /// - panics: none.
 ///
 /// # Errors
-/// The upstream constructor's structural validation error.
+/// Returns the session syntax error without a fallback.
 ///
 /// # Adequacy
-/// - hypothesis: L3 independently stated endpoint actions distinguish every
-///   branch, repetition, retirement without report and pause's width.
+/// - hypothesis: L3 traces distinguish first report, repetition, pause width
+///   and both closing moves.
 /// - witness: `tests::named_refusal_preserves_the_prefix`
 /// - witness: `tests::pause_is_certified_and_old_runs_transport`
 fn session(edition: Edition) -> Result<Session, gandr_core_session::TypeError>
@@ -461,7 +556,7 @@ fn session(edition: Edition) -> Result<Session, gandr_core_session::TypeError>
     ]
     .into_iter()
     .collect::<BTreeMap<_, _>>();
-    if edition == Edition::Paused {
+    if cfg!(feature = "edition-2") && edition == Edition::TWO {
         let _absent = before.insert("pause".into(), NodeId(12));
         let _absent = after.insert("pause".into(), NodeId(14));
     }
@@ -480,7 +575,7 @@ fn session(edition: Edition) -> Result<Session, gandr_core_session::TypeError>
         Node::Send(RETIRE, NodeId(11)),
         Node::End,
     ]);
-    if edition == Edition::Paused {
+    if cfg!(feature = "edition-2") && edition == Edition::TWO {
         nodes.extend([
             Node::Send(PAUSE, NodeId(13)),
             Node::Var(NodeId(1)),

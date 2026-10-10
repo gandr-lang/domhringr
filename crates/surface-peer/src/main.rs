@@ -29,11 +29,12 @@
 //! domhringr-peer --state <dir> view <tree>
 //! domhringr-peer --state <dir> heads <tree>
 //! domhringr-peer --state <dir> sync <tree> [--peer <peer-id>] [--at <endpoint>]
-//! domhringr-peer --state <dir> dispatch <tree> <peer-id> <brief> [--at <endpoint>]
+//! domhringr-peer --state <dir> dispatch <tree> <peer-id> <brief> [--edition <number>] [--at <endpoint>]
 //! domhringr-peer --state <dir> report <tree> <file> <summary>
 //! domhringr-peer --state <dir> handoff <tree> <peer-id>
 //! domhringr-peer --state <dir> retire <tree>
 //! domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]
+//! domhringr-peer --state <dir> transport <tree> <edition>
 //! domhringr-peer --state <dir> evidence <tree> <digest> [--peer <peer-id>] [--at <endpoint>]
 //!                [--local]
 //! domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
@@ -328,13 +329,13 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> view <tree>
        domhringr-peer --state <dir> heads <tree>
        domhringr-peer --state <dir> sync <tree> [--peer <peer-id>] [--at <endpoint>]
-       domhringr-peer --state <dir> dispatch <tree> <peer-id> <brief> [--at <endpoint>]
+       domhringr-peer --state <dir> dispatch <tree> <peer-id> <brief> [--edition <number>] [--at <endpoint>]
        domhringr-peer --state <dir> report <tree> <file> <summary>
        domhringr-peer --state <dir> handoff <tree> <peer-id>
        domhringr-peer --state <dir> retire <tree>
        domhringr-peer --state <dir> pause <tree>
        domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]
-                      [--base]
+       domhringr-peer --state <dir> transport <tree> <edition>
        domhringr-peer --state <dir> evidence <tree> <digest> [--peer <peer-id>] [--at <endpoint>]
                       [--local]
        domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
@@ -430,6 +431,8 @@ enum Verb
     Pause,
     /// Print a task's seat receipts and where it stands.
     Replay,
+    /// Certify transport of the current complete play to a named edition.
+    Transport,
     /// Print the content of an evidence a task names, fetching it when the
     /// local store lacks it.
     Evidence,
@@ -491,15 +494,16 @@ impl fmt::Display for Verb
             | Self::Heads => "heads <tree>",
             | Self::Sync => "sync <tree> [--peer <peer-id>] [--at <endpoint>]",
             | Self::Dispatch => {
-                "dispatch <tree> <peer-id> anchor|content <brief> [--at <endpoint>]"
+                "dispatch <tree> <peer-id> anchor|content <brief> [--edition <number>] [--at <endpoint>]"
             },
             | Self::Report => "report <tree> <file> <summary>",
             | Self::Handoff => "handoff <tree> <peer-id>",
             | Self::Retire => "retire <tree>",
             | Self::Pause => "pause <tree>",
             | Self::Replay => {
-                "replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local] [--base]"
+                "replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]"
             },
+            | Self::Transport => "transport <tree> <edition>",
             | Self::Evidence => {
                 "evidence <tree> <digest> [--peer <peer-id>] [--at <endpoint>] [--local]"
             },
@@ -722,6 +726,8 @@ enum Command
         tree: TreeId,
         /// The seat dispatched to.
         seat: PeerKey,
+        /// The protocol named by the new dispatch.
+        edition: domhringr_record_tree::Edition,
         /// What the seat works from.
         brief: Brief,
         /// The seat's endpoint: `--at`, or the book's.
@@ -770,7 +776,13 @@ enum Command
         tree: TreeId,
         /// Whether, and whom, the task is reached at.
         replaying: Replaying,
-        /// The protocol used for conformance.
+    },
+    /// Certify the current complete play without changing its record.
+    Transport
+    {
+        /// The task holding the play.
+        tree: TreeId,
+        /// The protocol the transported play must conform to.
         edition: domhringr_record_tree::Edition,
     },
     /// Print the content of the evidence `digest` names, read from the local
@@ -1026,6 +1038,9 @@ enum Completion
 #[derive(Debug, thiserror::Error)]
 enum UsageError
 {
+    /// The protocol edition is not an unsigned number.
+    #[error("invalid edition: {0}")]
+    Edition(core::num::ParseIntError),
     /// An option other than `--state`, or `--state` without its value.
     #[error(transparent)]
     Arguments(#[from] lexopt::Error),
@@ -1133,6 +1148,9 @@ enum UsageError
 #[derive(Debug, thiserror::Error)]
 enum RunError
 {
+    /// The named complete play cannot be transported.
+    #[error(transparent)]
+    Transport(#[from] domhringr_record_tree::PlayTransportError),
     /// The async runtime cannot start.
     #[error("cannot start the async runtime")]
     Runtime(#[source] std::io::Error),
@@ -1423,6 +1441,14 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
         },
         | (Verb::View, (Some(tree), None, None, None)) => Command::View {
             tree: read_tree(&tree)?,
+        },
+        | (Verb::Transport, (Some(tree), Some(edition), None, None)) => {
+            let tree = read_tree(&tree)?;
+            let edition = edition
+                .to_string_lossy()
+                .parse()
+                .map_err(UsageError::Edition)?;
+            Command::Transport { tree, edition }
         },
         | (Verb::Heads, (Some(tree), None, None, None)) => Command::Heads {
             tree: read_tree(&tree)?,
@@ -1824,17 +1850,22 @@ fn serve_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 ///   brief read as [`read_brief`] reads it, with `--at <endpoint>` (or
 ///   `--at=<endpoint>`; the last one given wins) anywhere around them: the seat
 ///   is reached at the endpoint `--at` names, or else at its presence in the
-///   task's book.
-/// - fails: [`UsageError::Arguments`] for any other option or for `--at`
-///   without a value, [`UsageError::Operand`] for an endpoint that does not
-///   parse, [`UsageError::Operands`] for other than four operands, checked
-///   before any operand is read, as [`read_tree`] for the tree,
-///   [`UsageError::Operand`] for a seat's peer id that does not parse, and as
-///   [`read_brief`] for the brief.
+///   task's book. `--edition` records a numeric protocol name, defaulting to
+///   the newest compiled edition; unknown numbers remain valid names.
+/// - fails: [`UsageError::Arguments`] for any other option or an option without
+///   a value, [`UsageError::Edition`] for a malformed edition,
+///   [`UsageError::Operand`] for an endpoint that does not parse,
+///   [`UsageError::Operands`] for other than four operands, checked before any
+///   operand is read, as [`read_tree`] for the tree, [`UsageError::Operand`]
+///   for a seat's peer id that does not parse, and as [`read_brief`] for the
+///   brief.
 /// - panics: none.
 ///
 /// # Errors
-/// - [`UsageError::Arguments`]: an unknown option, or `--at` lacks a value.
+/// - [`UsageError::Arguments`]: an unknown option, or `--at` or `--edition`
+///   lacks a value.
+/// - [`UsageError::Edition`]: the edition is not a decimal unsigned 64-bit
+///   number.
 /// - [`UsageError::Operand`]: the endpoint or the peer id does not parse.
 /// - [`UsageError::Operands`]: there are not four operands.
 /// - [`UsageError::Anchor`], [`UsageError::NotTree`], [`UsageError::NotKey`]:
@@ -1849,15 +1880,24 @@ fn serve_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 ///   meet their own refusal.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
+/// - witness: `tests::dispatch_editions_are_numeric_names`
 fn dispatch_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 {
     let mut at = At::Book;
+    let mut edition = domhringr_record_tree::Edition::CURRENT;
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
             | lexopt::Arg::Long("at") => {
                 let value = arguments.value()?;
                 at = At::Given(read_id(&value, Operand::At)?);
+            },
+            | lexopt::Arg::Long("edition") => {
+                let value = arguments.value()?;
+                edition = value
+                    .to_string_lossy()
+                    .parse()
+                    .map_err(UsageError::Edition)?;
             },
             | lexopt::Arg::Value(operand) => operands.push(operand),
             | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
@@ -1883,6 +1923,7 @@ fn dispatch_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageErro
         tree,
         seat,
         brief,
+        edition,
         at,
     })
 }
@@ -1932,7 +1973,7 @@ fn replay_command(
 {
     let (mut toward, mut at) = (Toward::Seat, At::Book);
     let (mut named, mut local) = (false, false);
-    let mut edition = domhringr_record_tree::Edition::Paused;
+
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
@@ -1947,9 +1988,7 @@ fn replay_command(
                 named = true;
             },
             | lexopt::Arg::Long("local") => local = true,
-            | lexopt::Arg::Long("base") if verb == Verb::Replay => {
-                edition = domhringr_record_tree::Edition::Base;
-            },
+
             | lexopt::Arg::Value(operand) => operands.push(operand),
             | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
@@ -1966,7 +2005,6 @@ fn replay_command(
         | (Verb::Replay, Some(tree), None, None) => Ok(Command::Replay {
             tree: read_tree(&tree)?,
             replaying,
-            edition,
         }),
         | (Verb::Evidence, Some(tree), Some(digest), None) => {
             let tree = read_tree(&tree)?;
@@ -2240,6 +2278,7 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
         | Some("retire") => Ok(Verb::Retire),
         | Some("pause") => Ok(Verb::Pause),
         | Some("replay") => Ok(Verb::Replay),
+        | Some("transport") => Ok(Verb::Transport),
         | Some("evidence") => Ok(Verb::Evidence),
         | Some("drift") => Ok(Verb::Drift),
         | Some("judge") => Ok(Verb::Judge),
@@ -2723,6 +2762,22 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             let view = Peer::open(&state, identity)?.view(tree).await?;
             emit(&view)
         },
+        | Command::Transport { tree, edition } => {
+            let peer = Peer::open(&state, identity)?;
+            let view = peer.view(tree).await?;
+            drop(peer);
+            let Current::Attempt(ref attempt) = *view.task().current()
+            else {
+                return Err(RunError::Undispatched);
+            };
+            let play = view.transport(attempt.dispatch(), edition)?;
+            emit(&format_args!(
+                "transported {} edition {} -> {edition} {} moves\n",
+                attempt.dispatch(),
+                attempt.edition(),
+                play.moves().len()
+            ))
+        },
         | Command::Heads { tree } => {
             let heads = Peer::open(&state, identity)?.heads(tree).await?;
             emit(&heads)
@@ -2754,11 +2809,12 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             tree,
             seat,
             brief,
+            edition,
             at,
         } => {
             let operator = identity.peer_key();
             let peer = Peer::open(&state, identity)?;
-            dispatch(peer, operator, tree, seat, brief, at).await
+            dispatch(peer, operator, tree, seat, edition, brief, at).await
         },
         | Command::Report {
             tree,
@@ -2785,19 +2841,8 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             let peer = Peer::open(&state, identity)?;
             on_current(peer, tree, |dispatch| Receipt::pause(tree, dispatch)).await
         },
-        | Command::Replay {
-            tree,
-            replaying,
-            edition,
-        } => {
-            replay(
-                Peer::open(&state, identity)?,
-                &evidence,
-                tree,
-                replaying,
-                edition,
-            )
-            .await
+        | Command::Replay { tree, replaying } => {
+            replay(Peer::open(&state, identity)?, &evidence, tree, replaying).await
         },
         | Command::Evidence {
             tree,
@@ -3271,14 +3316,14 @@ where
     Ok(answers)
 }
 
-/// Dispatch `seat` to `brief` in `tree`, as `operator`, and wake it at the
-/// endpoint `at` names.
+/// Dispatch `seat` to `brief` under `edition` in `tree`, as `operator`, and
+/// wake it at the endpoint `at` names.
 ///
 /// # Specification
 /// - ensures: routes to `seat` for `tree` first ([`Peer::route`]), so a seat no
 ///   endpoint names gets no dispatch. When the task's current attempt puts
-///   `seat` in its slot, held, to `brief`, that dispatch is re-sent; otherwise
-///   a dispatch of `seat` to `brief` is committed under a fresh operation
+///   `seat` in its slot, held, to `brief` under `edition`, that dispatch is
+///   re-sent; otherwise a dispatch naming `edition` gets a fresh operation
 ///   fence. Writes the dispatch's commit id line at once, binds an ephemeral
 ///   endpoint, wakes the seat ([`domhringr_seat_slot::wake`]), closes the
 ///   endpoint, and writes the route's `source` line and `woken`.
@@ -3305,6 +3350,7 @@ async fn dispatch(
     operator: PeerKey,
     tree: TreeId,
     seat: PeerKey,
+    edition: domhringr_record_tree::Edition,
     brief: Brief,
     at: At,
 ) -> Result<(), RunError>
@@ -3317,7 +3363,9 @@ async fn dispatch(
     let view = peer.view(tree).await?;
     let resent = match *view.task().current() {
         | Current::Attempt(ref attempt)
-            if attempt.slot() == Slot::Held(seat) && *attempt.brief() == brief =>
+            if attempt.slot() == Slot::Held(seat)
+                && *attempt.brief() == brief
+                && attempt.edition() == edition =>
         {
             Some(attempt.dispatch())
         },
@@ -3326,7 +3374,7 @@ async fn dispatch(
     let dispatch = match resent {
         | Some(dispatch) => dispatch,
         | None => {
-            let receipt = Receipt::dispatch(tree, seat, brief)?;
+            let receipt = Receipt::dispatch(tree, seat, edition, brief)?;
             peer.commit(tree, receipt).await?
         },
     };
@@ -3382,12 +3430,11 @@ async fn replay(
     evidence: &Evidence,
     tree: TreeId,
     replaying: Replaying,
-    edition: domhringr_record_tree::Edition,
 ) -> Result<(), RunError>
 {
     let Replaying::Dial { toward, at } = replaying
     else {
-        let view = peer.view_at(tree, edition).await?;
+        let view = peer.view(tree).await?;
         emit_refusals(&view)?;
         let gathered = gather(evidence, view.task(), Source::Local).await;
         emit(view.task())?;
@@ -3403,14 +3450,14 @@ async fn replay(
     let route = peer.route(tree, aim, at).await?;
     let (view, gathered) = match route {
         | Route::Itself => {
-            let view = peer.view_at(tree, edition).await?;
+            let view = peer.view(tree).await?;
             let gathered = gather(evidence, view.task(), Source::Local).await;
             (view, gathered)
         },
         | Route::Book { ref remote, .. } | Route::Given { ref remote } => {
             let node = peer.bind(BindPort::Ephemeral, &[]).await?;
             let synced = node.sync(remote, tree).await;
-            let view = node.peer().view_at(tree, edition).await;
+            let view = node.peer().view(tree).await;
             let gathered = match (&synced, &view) {
                 | (&Ok(_), &Ok(ref view)) => {
                     let source = Source::Remote {
@@ -3443,9 +3490,9 @@ async fn replay(
 /// [`RunError::Output`] if stdout cannot be written or flushed.
 ///
 /// # Adequacy
-/// - hypothesis: L3 the process witness observes the pause receipt's identity,
-///   name and expected state under Base, and its admission under Paused.
-/// - witness: `seat::tests::two_processes_replay_session_editions`
+/// - hypothesis: L3 — two compiled protocol catalogues refuse edition-1 pause
+///   alike and distinguish unknown edition 2 from a known protocol.
+/// - witness: `seat::tests::two_binaries_replay_named_editions_and_transport`
 fn emit_refusals(view: &domhringr_record_tree::View) -> Result<(), RunError>
 {
     for &(commit, ref refusal) in view.refused() {
@@ -3917,6 +3964,45 @@ mod tests
     }
 
     #[test]
+    fn dispatch_editions_are_numeric_names()
+    {
+        let (_, seat) = ids();
+        let seat = seat.to_string();
+        for number in ["0", "1", "2", "18446744073709551615"] {
+            let invocation = parse(lexopt::Parser::from_args([
+                "--state",
+                "dir",
+                "dispatch",
+                TREE,
+                &seat,
+                "content",
+                CONTENT,
+                "--edition",
+                number,
+            ]))
+            .unwrap();
+            assert!(
+                matches!(invocation.command, Command::Dispatch { edition, .. } if edition.to_string() == number)
+            );
+        }
+        for number in ["pause", "-1", "18446744073709551616"] {
+            assert!(matches!(
+                parse(lexopt::Parser::from_args([
+                    "--state",
+                    "dir",
+                    "dispatch",
+                    TREE,
+                    &seat,
+                    "content",
+                    CONTENT,
+                    &format!("--edition={number}")
+                ])),
+                Err(UsageError::Edition(_))
+            ));
+        }
+    }
+
+    #[test]
     fn every_verb_reads_its_operands()
     {
         let tree = TREE_ID.parse::<TreeId>().unwrap();
@@ -4004,6 +4090,7 @@ mod tests
             (
                 vec!["--state", "dir", "dispatch", TREE, &peer, "anchor", PATH],
                 Command::Dispatch {
+                    edition: domhringr_record_tree::Edition::CURRENT,
                     tree,
                     seat: peer_key,
                     brief: Brief::Anchor(anchor.clone()),
@@ -4015,6 +4102,7 @@ mod tests
                     "--state", "dir", "dispatch", &at_option, TREE, &peer, "content", CONTENT,
                 ],
                 Command::Dispatch {
+                    edition: domhringr_record_tree::Edition::CURRENT,
                     tree,
                     seat: peer_key,
                     brief: Brief::Content(content),
@@ -4045,7 +4133,7 @@ mod tests
             }),
             (vec!["--state", "dir", "replay", TREE], Command::Replay {
                 tree,
-                edition: domhringr_record_tree::Edition::Paused,
+
                 replaying: Replaying::Dial {
                     toward: Toward::Seat,
                     at: At::Book,
@@ -4055,7 +4143,7 @@ mod tests
                 vec!["--state", "dir", "replay", &peer_option, TREE, &at_option],
                 Command::Replay {
                     tree,
-                    edition: domhringr_record_tree::Edition::Paused,
+
                     replaying: Replaying::Dial {
                         toward: Toward::Peer(peer_key),
                         at: named.at.clone(),
@@ -4066,7 +4154,7 @@ mod tests
                 vec!["--state", "dir", "replay", "--local", TREE],
                 Command::Replay {
                     tree,
-                    edition: domhringr_record_tree::Edition::Paused,
+
                     replaying: Replaying::Local,
                 },
             ),

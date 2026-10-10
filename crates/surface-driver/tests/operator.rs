@@ -871,6 +871,79 @@ rm -rf "$work"
     }
 
     #[test]
+    fn open_names_unknown_protocol_refusals()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let (project, task, dispatch, pause) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let identity = Identity::load_or_create(&state).unwrap();
+                let me = identity.peer_key();
+                let peer = Peer::open(&state, identity).unwrap();
+                let project = TreeKey::mint(&state).unwrap();
+                let task = TreeKey::mint(&state).unwrap();
+                for key in [&project, &task] {
+                    peer.commit(key.tree(), Receipt::open(key, me).unwrap())
+                        .await
+                        .unwrap();
+                }
+                let (project, task) = (project.tree(), task.tree());
+                peer.commit(
+                    project,
+                    Receipt::bind(
+                        project,
+                        "tasks/unknown".parse().unwrap(),
+                        domhringr_record_tree::Target::Anchor(Anchor::key(task)),
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+                let dispatch = peer
+                    .commit(
+                        task,
+                        Receipt::dispatch(
+                            task,
+                            me,
+                            domhringr_record_tree::Edition::from(99),
+                            domhringr_record_tree::Brief::Anchor(Anchor::key(project)),
+                        )
+                        .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let pause = peer
+                    .commit(task, Receipt::pause(task, dispatch).unwrap())
+                    .await
+                    .unwrap();
+                drop(peer);
+                (project, task, dispatch, pause)
+            });
+        let lines = ended(
+            Command::new(env!("CARGO_BIN_EXE_domhringr"))
+                .env("DOMHRINGR_STATE", root.path())
+                .env("DOMHRINGR_PROJECT", Anchor::key(project).to_string())
+                .arg("open"),
+            Exit::Success,
+        );
+        assert_eq!(lines, [
+            format!("project {}", Anchor::key(project)),
+            format!(
+                "refused {} protocol edition 99 dispatch: unknown edition 99",
+                Anchor::commit(task, dispatch)
+            ),
+            format!(
+                "refused {} protocol edition 99 pause: unknown edition 99",
+                Anchor::commit(task, pause)
+            ),
+            format!("task {}tasks/unknown undispatched", Anchor::key(project)),
+        ]);
+    }
+
+    #[test]
     fn open_lists_every_seat_and_task()
     {
         let mut world = World::new([Written("one"), Written("two")]);

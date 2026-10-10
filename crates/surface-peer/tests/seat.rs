@@ -237,21 +237,21 @@ mod tests
     /// - ensures: O opens a task and dispatches S to [`BRIEF`] at S's endpoint
     ///   on the loopback address while S is down; the dispatch prints its
     ///   commit id D, and O is killed while it dials. O's local replay prints
-    ///   `dispatch D S content <brief>` and `dispatched D S`. S serves acting
-    ///   through `false`; O's same dispatch, sent again, prints D, `source`,
-    ///   the tree, `at` and S's endpoint, and `woken`, while S admits O and
-    ///   prints `woken <tree> D` and `unreported <tree> D`. O's book then holds
-    ///   S's presence, and O's replay, naming no peer and no endpoint, prints
-    ///   `source`, the tree, `book` and S's presenting commit, then the two
-    ///   lines above. S, killed and served again through `echo`, resumes the
-    ///   dispatch it holds and prints `reported <tree> R`; O's replay through
-    ///   the book then prints the source line, the dispatch line, `report R D S
-    ///   <digest> content <brief>`, `reported D R` and `evidence <digest>
-    ///   held`, fetching the report from S, which prints `served <digest>`; O's
-    ///   local `evidence` then prints echo's output, `content <brief>`. O's
-    ///   dispatch, sent once more through the book, prints D, the source line
-    ///   and `woken`; S prints `woken <tree> D` and acts no more: O's replay
-    ///   prints the same five lines.
+    ///   `dispatch D S edition <number> content <brief>` and `dispatched D S`.
+    ///   S serves acting through `false`; O's same dispatch, sent again, prints
+    ///   D, `source`, the tree, `at` and S's endpoint, and `woken`, while S
+    ///   admits O and prints `woken <tree> D` and `unreported <tree> D`. O's
+    ///   book then holds S's presence, and O's replay, naming no peer and no
+    ///   endpoint, prints `source`, the tree, `book` and S's presenting commit,
+    ///   then the two lines above. S, killed and served again through `echo`,
+    ///   resumes the dispatch it holds and prints `reported <tree> R`; O's
+    ///   replay through the book then prints the source line, the dispatch
+    ///   line, `report R D S <digest> content <brief>`, `reported D R` and
+    ///   `evidence <digest> held`, fetching the report from S, which prints
+    ///   `served <digest>`; O's local `evidence` then prints echo's output,
+    ///   `content <brief>`. O's dispatch, sent once more through the book,
+    ///   prints D, the source line and `woken`; S prints `woken <tree> D` and
+    ///   acts no more: O's replay prints the same five lines.
     /// - panics: on any contract violation.
     #[test]
     fn a_dispatched_seat_reports_across_restarts_of_either_side()
@@ -276,7 +276,10 @@ mod tests
         let dispatch = dialing.line();
         drop(dialing);
         let dispatched = [
-            format!("dispatch {dispatch} {s_peer} content {BRIEF}"),
+            format!(
+                "dispatch {dispatch} {s_peer} edition {} content {BRIEF}",
+                domhringr_record_tree::Edition::CURRENT
+            ),
             format!("dispatched {dispatch} {s_peer}"),
         ];
         assert_eq!(
@@ -387,99 +390,124 @@ mod tests
         seat.admitted(&o_peer);
         drop(seat);
     }
+    #[cfg(feature = "edition-2")]
     #[test]
-    fn two_processes_replay_session_editions()
+    fn two_binaries_replay_named_editions_and_transport()
     {
+        let binary = std::env::var_os("DOMHRINGR_EDITION_ONE")
+            .expect("mise run test builds and signs the edition-1-only binary");
         let (o, s) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let (o, s) = (o.path(), s.path());
-        let s_id = finish(peer(s).arg("id"));
+        let old_peer = || {
+            let mut command = Command::new(&binary);
+            command.arg("--state").arg(s);
+            command
+        };
+        let s_id = finish(old_peer().arg("id"));
         let port = free_port();
         let contact = format!("{}@127.0.0.1:{port}", s_id[0]);
-        let old_tree = only(peer(o).arg("open"));
-        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("echo"), &s_id);
-        let dispatched = finish(peer(o).args([
-            "dispatch", &old_tree, &s_id[1], "content", BRIEF, "--at", &contact,
-        ]));
-        let old_dispatch = &dispatched[0];
-        let old_report = loop {
-            let line = seat.line();
-            if let Some(report) = line.strip_prefix(&format!("reported {old_tree} ")) {
-                break report.to_owned();
+        let serve_old = || {
+            let server = Running::spawn(old_peer().args(["serve", "--port", &port]));
+            for line in [&s_id[0], &s_id[1], "listening"] {
+                assert_eq!(server.line(), line);
             }
+            server
         };
-        drop(seat);
-        let old_retire = only(peer(s).args(["retire", &old_tree]));
-        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("echo"), &s_id);
-        let widened = finish(peer(o).args(["replay", &old_tree]));
-        let original = finish(peer(o).args(["replay", &old_tree, "--local", "--base"]));
-        for replayed in [widened, original] {
-            assert!(!replayed.iter().any(|line| line.starts_with("refused ")));
+        let file = s.join("report");
+        std::fs::write(&file, b"done").unwrap();
+        for edition in ["1", "2"] {
+            let tree = only(peer(o).arg("open"));
+            let seat = if edition == "1" {
+                serve_old()
+            }
+            else {
+                Running::serve(s, OsStr::new(&port), OsStr::new("false"), &s_id)
+            };
+            let dispatched = finish(peer(o).args([
+                "dispatch",
+                &tree,
+                &s_id[1],
+                "content",
+                BRIEF,
+                "--edition",
+                edition,
+                "--at",
+                &contact,
+            ]));
+            let dispatch = &dispatched[0];
+            drop(seat);
+            let pause = only(peer(s).args(["pause", &tree]));
+            let report = only(peer(s).args(["report", &tree]).arg(&file).arg("done"));
+            let retire = only(peer(s).args(["retire", &tree]));
+            let late = only(peer(s).args(["report", &tree]).arg(&file).arg("late"));
+            let seat = serve_old();
+            let a = finish(peer(o).args(["replay", &tree, "--peer", &s_id[1], "--at", &contact]));
+            drop(seat);
+            let b = finish(old_peer().args(["replay", &tree, "--local"]));
             assert!(
-                replayed
-                    .iter()
-                    .any(|line| line.starts_with(&format!("report {old_report} {old_dispatch} ")))
+                a.iter()
+                    .any(|line| line.starts_with(&format!("report {report} {dispatch} ")))
             );
             assert!(
-                replayed
-                    .iter()
-                    .any(|line| line == &format!("retire {old_retire} {old_dispatch} {}", s_id[1]))
+                a.iter()
+                    .any(|line| line == &format!("retire {retire} {dispatch} {}", s_id[1]))
             );
+            assert!(a.iter().any(|line| line.starts_with(&format!(
+                "refused {late} protocol edition {edition} report:"
+            ))));
+            assert!(
+                !a.iter()
+                    .any(|line| line.starts_with(&format!("report {late} ")))
+            );
+            if edition == "1" {
+                for replayed in [&a, &b] {
+                    assert!(replayed.iter().any(|line| {
+                        line.starts_with(&format!("refused {pause} protocol edition 1 pause:"))
+                    }));
+                    assert!(
+                        replayed
+                            .iter()
+                            .any(|line| line.starts_with(&format!("report {report} {dispatch} ")))
+                    );
+                    assert!(
+                        !replayed
+                            .iter()
+                            .any(|line| line.starts_with(&format!("pause {pause} ")))
+                    );
+                }
+                let heads = finish(peer(o).args(["heads", &tree]));
+                assert_eq!(
+                    only(peer(o).args(["transport", &tree, "2"])),
+                    format!("transported {dispatch} edition 1 -> 2 6 moves")
+                );
+                assert_eq!(finish(peer(o).args(["heads", &tree])), heads);
+                assert_eq!(finish(peer(o).args(["replay", &tree, "--local"])), b);
+            }
+            else {
+                assert!(
+                    a.iter()
+                        .any(|line| line == &format!("pause {pause} {dispatch} {}", s_id[1]))
+                );
+                for (commit, movement) in [
+                    (dispatch, "dispatch"),
+                    (&pause, "pause"),
+                    (&report, "report"),
+                    (&retire, "retire"),
+                    (&late, "report"),
+                ] {
+                    assert!(
+                        b.contains(&format!(
+                            "refused {commit} protocol edition 2 {movement}: unknown edition 2"
+                        )),
+                        "{b:?}"
+                    );
+                }
+                assert!(b.iter().any(|line| line == "undispatched"));
+                assert!(!b.iter().any(|line| line.starts_with("dispatch ")
+                    || line.starts_with("report ")
+                    || line.starts_with("pause ")
+                    || line.starts_with("retire ")));
+            }
         }
-        drop(seat);
-
-        let tree = only(peer(o).arg("open"));
-        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("false"), &s_id);
-        let dispatched = finish(peer(o).args([
-            "dispatch", &tree, &s_id[1], "content", BRIEF, "--at", &contact,
-        ]));
-        let dispatch = dispatched[0].clone();
-        while seat.line() != format!("unreported {tree} {dispatch}") {}
-        drop(seat);
-        let pause = only(peer(s).args(["pause", &tree]));
-        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("echo"), &s_id);
-        let reported = seat.line();
-        let report = reported
-            .strip_prefix(&format!("reported {tree} "))
-            .unwrap()
-            .to_owned();
-        drop(seat);
-        let retire = only(peer(s).args(["retire", &tree]));
-        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("echo"), &s_id);
-        let wide = finish(peer(o).args(["replay", &tree]));
-        assert!(
-            wide.iter()
-                .any(|line| line == &format!("pause {pause} {dispatch} {}", s_id[1]))
-        );
-        assert!(
-            wide.iter()
-                .any(|line| line == &format!("retire {retire} {dispatch} {}", s_id[1]))
-        );
-        assert!(!wide.iter().any(|line| line.starts_with("refused ")));
-        let old = finish(peer(o).args(["replay", &tree, "--local", "--base"]));
-        assert!(
-            old.iter()
-                .any(|line| line.starts_with(&format!("refused {pause} protocol pause:")))
-        );
-        assert!(
-            old.iter()
-                .any(|line| line.starts_with(&format!("report {report} {dispatch}")))
-        );
-        drop(seat);
-        let file = s.join("late-report");
-        std::fs::write(&file, b"late").unwrap();
-        let late = only(peer(s).args(["report", &tree]).arg(&file).arg("late"));
-        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("echo"), &s_id);
-        let replayed = finish(peer(o).args(["replay", &tree]));
-        assert!(
-            replayed
-                .iter()
-                .any(|line| line.starts_with(&format!("refused {late} protocol report:")))
-        );
-        assert!(
-            !replayed
-                .iter()
-                .any(|line| line.starts_with(&format!("report {late} ")))
-        );
-        drop(seat);
     }
 }

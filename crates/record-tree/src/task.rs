@@ -190,6 +190,8 @@ pub enum Step
     /// The author put `seat` in the task's slot to work from `brief`.
     Dispatch
     {
+        /// The protocol named by this dispatch.
+        edition: crate::Edition,
         /// The seat dispatched to.
         seat: PeerKey,
         /// What the seat works from.
@@ -413,6 +415,8 @@ pub struct Attempt
 {
     /// The dispatch's commit.
     dispatch: CommitId,
+    /// The protocol named by this dispatch.
+    edition: crate::Edition,
     /// What the dispatch hands its seat; kept beside the dispatch's step so a
     /// reader of the attempt needs no walk of the steps.
     brief: Brief,
@@ -435,6 +439,17 @@ impl Attempt
     pub const fn dispatch(&self) -> CommitId
     {
         self.dispatch
+    }
+
+    /// The protocol under which this attempt replays.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub const fn edition(&self) -> crate::Edition
+    {
+        self.edition
     }
 
     /// What the dispatch hands its seat.
@@ -687,17 +702,23 @@ impl Task
         &mut self,
         commit: CommitId,
         seat: PeerKey,
+        edition: crate::Edition,
         brief: Brief,
     )
     {
         self.current = Current::Attempt(Attempt {
             dispatch: commit,
+            edition,
             brief: brief.clone(),
             slot: Slot::Held(seat),
             answer: Answer::Awaited,
             progress: Progress::Unchecked,
         });
-        self.steps.push((commit, Step::Dispatch { seat, brief }));
+        self.steps.push((commit, Step::Dispatch {
+            seat,
+            edition,
+            brief,
+        }));
     }
 
     /// Record the admitted `step` of `commit`: a report, a handoff, a
@@ -780,16 +801,17 @@ impl Task
 impl fmt::Display for Task
 {
     /// Write the task as lines: one per step in canonical order — `dispatch
-    /// <commit> <seat> <brief>`, `report <commit> <dispatch> <author>
-    /// <content> <summary>`, `handoff <commit> <dispatch> <from> <to>`,
-    /// `retire <commit> <dispatch> <author>`, `verdict <commit> <dispatch>
-    /// <judge> <rubric> <transcript>` followed by `ruling <commit> <question>
-    /// <ruling>` per question asked, `verified <commit> <dispatch> <runner>
-    /// <playbook> <step> <output> <status>`, `graded <commit> <dispatch>
-    /// <verdict> <rubric> <composed>` followed by `grade <commit> <question>
-    /// <grade>` per question graded, `decide <commit> <dispatch> <operator>
-    /// <decision>`, or `landed <commit> <dispatch> <decided> <operator>
-    /// <merge>` — then where it stands, as [`Current`]'s `Display` writes it.
+    /// <commit> <seat> edition <edition> <brief>`, `report <commit> <dispatch>
+    /// <author> <content> <summary>`, `handoff <commit> <dispatch> <from>
+    /// <to>`, `retire <commit> <dispatch> <author>`, `verdict <commit>
+    /// <dispatch> <judge> <rubric> <transcript>` followed by `ruling
+    /// <commit> <question> <ruling>` per question asked, `verified <commit>
+    /// <dispatch> <runner> <playbook> <step> <output> <status>`, `graded
+    /// <commit> <dispatch> <verdict> <rubric> <composed>` followed by
+    /// `grade <commit> <question> <grade>` per question graded, `decide
+    /// <commit> <dispatch> <operator> <decision>`, or `landed <commit>
+    /// <dispatch> <decided> <operator> <merge>` — then where it stands, as
+    /// [`Current`]'s `Display` writes it.
     ///
     /// # Specification
     /// - ensures: every line ends in a newline, and each step stays one line: a
@@ -814,8 +836,12 @@ impl fmt::Display for Task
     {
         for &(commit, ref step) in &self.steps {
             match *step {
-                | Step::Dispatch { seat, ref brief } => {
-                    writeln!(f, "dispatch {commit} {seat} {brief}")?;
+                | Step::Dispatch {
+                    seat,
+                    edition,
+                    ref brief,
+                } => {
+                    writeln!(f, "dispatch {commit} {seat} edition {edition} {brief}")?;
                 },
                 | Step::Report {
                     dispatch,

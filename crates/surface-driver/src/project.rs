@@ -353,7 +353,9 @@ pub async fn dispatch(
     let view = peer.view(tree).await?;
     let resent = match *view.task().current() {
         | Current::Attempt(ref attempt)
-            if attempt.slot() == Slot::Held(seat) && *attempt.brief() == brief =>
+            if attempt.slot() == Slot::Held(seat)
+                && *attempt.brief() == brief
+                && attempt.edition() == domhringr_record_tree::Edition::CURRENT =>
         {
             Some(attempt.dispatch())
         },
@@ -362,7 +364,8 @@ pub async fn dispatch(
     let dispatch = match resent {
         | Some(dispatch) => dispatch,
         | None => {
-            let receipt = Receipt::dispatch(tree, seat, brief)?;
+            let receipt =
+                Receipt::dispatch(tree, seat, domhringr_record_tree::Edition::CURRENT, brief)?;
             peer.commit(tree, receipt).await?
         },
     };
@@ -698,7 +701,8 @@ async fn holding(
 ///   <commit-id>` for each presence in the project's book but the operator's,
 ///   in key order, and `task <anchor> <standing>` for each task in path order,
 ///   the standing as [`Current`]'s display writes it, or `unheld` for a task
-///   tree the store does not hold.
+///   tree the store does not hold. Before each task it prints every refusal as
+///   `refused <commit-anchor> <reason>`, including unknown editions.
 /// - fails: [`RunError::View`] when a tree cannot be folded, [`RunError::Bind`]
 ///   when the endpoint cannot bind, [`RunError::Diagnostics`] when standard
 ///   error cannot be written, and [`RunError::Output`] when standard output
@@ -713,6 +717,7 @@ async fn holding(
 ///   lists both seats and both tasks with their standings, after the seats
 ///   reported, as the process test reads them.
 /// - witness: `operator::tests::open_lists_every_seat_and_task`
+/// - witness: `operator::tests::open_names_unknown_protocol_refusals`
 /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 pub async fn open(
     peer: Peer,
@@ -795,7 +800,15 @@ async fn listing(
     }
     for &(ref path, tree) in tasks {
         let standing = match peer.view(tree).await {
-            | Ok(task) => task.task().current().to_string(),
+            | Ok(task) => {
+                for &(commit, ref refusal) in task.refused() {
+                    lines.push(format!(
+                        "refused {} {refusal}\n",
+                        Anchor::commit(tree, commit)
+                    ));
+                }
+                task.task().current().to_string()
+            },
             | Err(ViewError::Unopened(_)) => String::from("unheld"),
             | Err(failure) => return Err(RunError::View(failure)),
         };
