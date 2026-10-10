@@ -37,6 +37,7 @@
 //!                        · close                                          Decide
 //!            | open 0x11 · bytes decided (32) · bytes merge (20 or 32)
 //!                        · close                                          Landed
+//!            | open 0x12 · bytes dispatch (32) · close                    Pause
 //! target    := open 0x01 · anchor · close                                 Anchor
 //!            | open 0x02 · bytes endpoint (32) · close                    Endpoint
 //!            | open 0x03 · bytes datum (UTF-8) · close                    Datum
@@ -229,6 +230,9 @@ const DECIDE: u8 = 0x10;
 
 /// The constructor tag of [`Kind::Landed`].
 const LANDED: u8 = 0x11;
+
+/// The constructor tag of [`Kind::Pause`].
+const PAUSE: u8 = 0x12;
 
 /// The constructor tag of [`Target::Anchor`].
 const ANCHOR: u8 = 0x01;
@@ -569,6 +573,12 @@ pub enum Kind
     Retire
     {
         /// The dispatch whose slot is retired from.
+        dispatch: CommitId,
+    },
+    /// The holder pauses work without releasing the slot.
+    Pause
+    {
+        /// The dispatch whose work pauses.
         dispatch: CommitId,
     },
     /// The author, the judge it names, rules on `dispatch`: each question
@@ -923,6 +933,30 @@ impl Receipt
     {
         let operation = Operation::random()?;
         Ok(Self::new(tree, operation, Kind::Retire { dispatch }))
+    }
+
+    /// Record a pause that retains the dispatch slot.
+    ///
+    /// # Specification
+    /// - ensures: names the supplied dispatch with a fresh operation fence.
+    /// - fails: the operating system random source error is preserved.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// [`RandomError`] when the random source fails.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 receipt round-trip preserves the dispatch and pause
+    ///   move.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    #[inline]
+    pub fn pause(
+        tree: TreeId,
+        dispatch: CommitId,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Pause { dispatch }))
     }
 
     /// A fresh [`Kind::Verdict`] in `tree` on `dispatch` by `judge`: each
@@ -1317,6 +1351,10 @@ impl CanonicalValue for Receipt
                 sink.open(ConstructorTag::from(RETIRE))?;
                 sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
             },
+            | Kind::Pause { dispatch } => {
+                sink.open(ConstructorTag::from(PAUSE))?;
+                sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
+            },
             | Kind::Verdict {
                 dispatch,
                 judge,
@@ -1520,6 +1558,10 @@ impl CanonicalValue for Receipt
             | RETIRE => {
                 let dispatch = opened.commit(reader)?;
                 Kind::Retire { dispatch }
+            },
+            | PAUSE => {
+                let dispatch = opened.commit(reader)?;
+                Kind::Pause { dispatch }
             },
             | VERDICT => {
                 let dispatch = opened.commit(reader)?;
@@ -2943,6 +2985,7 @@ mod tests
             .unwrap(),
             Receipt::handoff(tree(), dispatch, peer).unwrap(),
             Receipt::retire(tree(), dispatch).unwrap(),
+            Receipt::pause(tree(), dispatch).unwrap(),
         ]);
         let probability = |value: f64| Probability::try_from(value).unwrap();
         let mut answers = vec![(

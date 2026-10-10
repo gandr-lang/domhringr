@@ -1,0 +1,21 @@
+[package]
+name = "domhringr-arena-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The Seat session protocol, recorded conformance and kernel-certified pause widening"
+readme = "README.md"
+repository.workspace = true
+license.workspace = true
+keywords = ["domhringr", "protocol", "replay", "session"]
+categories = ["data-structures"]
+publish.workspace = true
+
+[dependencies]
+gandr-core-session = { workspace = true }
+gandr-kernel-core = { workspace = true }
+gandr-kernel-term = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

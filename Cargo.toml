@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+  "crates/arena-session",
   "crates/judge-oracle",
   "crates/record-evidence",
   "crates/record-tree",
@@ -43,6 +44,13 @@ default-features = false
 # - record-tree
 [workspace.dependencies.data-encoding]
 version = "2.11"
+default-features = false
+
+# The pure Seat protocol and its independently checked replay.
+# consumers:
+# - record-tree
+[workspace.dependencies.domhringr-arena-session]
+path = "crates/arena-session"
 default-features = false
 
 # The judge: the letter readout over a model, its backends.
@@ -106,6 +114,31 @@ default-features = false
 version = "0.3"
 default-features = false
 features = ["alloc"]
+
+# Session replay and candidate protocol relations.
+# features: none; the monitor and certificate adapter need no optional features.
+# consumers:
+# - arena-session
+# - record-tree
+[workspace.dependencies.gandr-core-session]
+path = "vendor/gandr/crates/core-session"
+default-features = false
+
+# Independent replay of session widening certificates.
+# features: none; no optional kernel feature is required.
+# consumers:
+# - arena-session
+[workspace.dependencies.gandr-kernel-core]
+path = "vendor/gandr/crates/kernel-core"
+default-features = false
+
+# Native codes and finite session evidence for the certified boundary.
+# features: none; only the term arena is required.
+# consumers:
+# - arena-session
+[workspace.dependencies.gandr-kernel-term]
+path = "vendor/gandr/crates/kernel-term"
+default-features = false
 
 # The typed chunker's constants, kappa and the token cap, that the evidence
 # profile pins. No dependencies of its own, and already in the graph under
@@ -259,6 +292,7 @@ default-features = false
 # `derive(Error)` for the record library's, the evidence plane's, the seat's,
 # the strategy documents' and the binaries' error enums.
 # consumers:
+# - arena-session
 # - judge-oracle
 # - surface-driver
 # - surface-peer
@@ -478,7 +512,7 @@ pattern = "crates/quenchant-dylints"
 # revision this tree builds against. `mise run sibling:sync` materialises
 # them; CI checks each one out at its revision before the first cargo step.
 [workspace.metadata.siblings]
-gandr = "761bb3edc21ed06d1a552fc79b71e460672b66a2"
+gandr = "84b94d316a1c961fc89072a79b855a7d87b0c6aa"
 
 # The everyday optimized build. Size-optimized and nothing else, so each crate
 # compiles independently in parallel; the whole-program work lives in `dist`.

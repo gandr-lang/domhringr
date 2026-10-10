@@ -3,10 +3,10 @@
 //! Every peer holding the same commits computes the same [`View`]. The
 //! commits are placed in one canonical order — a topological order of the
 //! DAG that, among the commits whose parents are all placed, places the
-//! smallest commit id next — and each receipt is admitted or refused by rules
-//! that read only the receipt, its verified author, and its causal past.
-//! Refused commits stay in the DAG and sync like any other; the fold is what
-//! gives them no meaning.
+//! smallest commit id next — and each receipt is admitted or refused by causal
+//! authority and by endpoint replay of its dispatch's accepted canonical
+//! prefix. Refused commits stay in the DAG and sync like any other; the fold
+//! retains their named reasons without admitting their effects.
 
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
@@ -17,6 +17,16 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::fmt::Write as _;
 
+use domhringr_arena_session::Arena;
+use domhringr_arena_session::Edition;
+use domhringr_arena_session::Movement;
+use domhringr_arena_session::Play;
+use gandr_core_session::PayloadDigest;
+
+/// One checked protocol pair per process; construction failures remain fold
+/// facts.
+static ARENA: std::sync::LazyLock<Result<Arena, domhringr_arena_session::ArenaError>> =
+    std::sync::LazyLock::new(Arena::new);
 use gandr_storage_values::ValueError;
 use sedimentree_core::loose_commit::LooseCommit;
 use sedimentree_core::loose_commit::id::CommitId;
@@ -294,15 +304,14 @@ impl View
     /// - panics: none.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — a dispatch reported on by its seat, a slot handed off
-    ///   and reported on by its recipient, a slot retired from, a report on a
-    ///   dispatch a later one superseded, verdicts on a held and a retired
-    ///   slot, and an attempt verified, graded, verified again, decided twice,
-    ///   landed and decided once more are each read back by a case of their
-    ///   own.
+    /// - hypothesis: L3 a dispatched seat reports; pre-report handoff and
+    ///   retirement remain named refusals; reports on superseded dispatches,
+    ///   verdicts on a held slot, and an attempt verified, graded, verified
+    ///   again, decided twice, landed and decided once more are each read back
+    ///   by a case of their own.
     /// - witness: `fold::tests::the_dispatched_seat_reports_on_its_dispatch`
-    /// - witness: `fold::tests::a_handoff_moves_the_slot_to_its_recipient`
-    /// - witness: `fold::tests::a_retired_slot_without_a_report_is_stalled`
+    /// - witness: `fold::tests::a_handoff_before_report_is_a_named_protocol_refusal`
+    /// - witness: `fold::tests::retirement_before_report_is_refused_without_relinquishing_the_slot`
     /// - witness: `fold::tests::a_report_on_a_superseded_dispatch_is_refused`
     /// - witness: `fold::tests::a_judge_rules_on_the_current_dispatch`
     /// - witness: `fold::tests::an_attempt_advances_through_its_lifecycle`
@@ -395,6 +404,10 @@ impl fmt::Display for View
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal
 {
+    /// A receipt move failed endpoint replay.
+    Protocol(alloc::boxed::Box<domhringr_arena_session::Refusal>),
+    /// Protocol construction or its kernel certificate failed.
+    Arena(String),
     /// The blob is not a receipt.
     Undecodable(ValueError),
     /// The receipt belongs to another tree.
@@ -472,6 +485,8 @@ impl fmt::Display for Refusal
     ) -> fmt::Result
     {
         f.write_str(match *self {
+            | Self::Protocol(ref reason) => return write!(f, "protocol {reason}"),
+            | Self::Arena(ref reason) => return write!(f, "arena {reason}"),
             | Self::Undecodable(_) => "undecodable",
             | Self::WrongTree { .. } => "wrong tree",
             | Self::Duplicate { .. } => "duplicate operation",
@@ -677,6 +692,73 @@ struct Past
     course: Course,
 }
 
+/// Replay one named receipt against the process's kernel-checked protocol.
+///
+/// # Specification
+/// - ensures: an admitted move advances the play; a refusal leaves it
+///   unchanged.
+/// - fails: protocol initialization and monitor refusals remain distinct facts.
+/// - panics: none.
+///
+/// # Errors
+/// [`Refusal::Arena`] or [`Refusal::Protocol`].
+///
+/// # Adequacy
+/// - hypothesis: L3 order and pause-width near misses pin the receipt and
+///   state.
+/// - witness: `fold::tests::session_replay_refuses_order_and_certifies_pause`
+fn record_move(
+    play: &mut Play,
+    edition: Edition,
+    movement: Movement,
+    commit: CommitId,
+) -> Result<(), Refusal>
+{
+    let arena = ARENA
+        .as_ref()
+        .map_err(|error| Refusal::Arena(error.to_string()))?;
+    let _progress = play
+        .record(arena, edition, movement, PayloadDigest(*commit.as_bytes()))
+        .map_err(Refusal::Protocol)?;
+    Ok(())
+}
+
+/// Check authority and replay without letting an unauthorized move advance.
+///
+/// # Specification
+/// - ensures: only an authorized, conforming receipt advances the play.
+/// - fails: monitor order failures name the move; otherwise authority failures
+///   retain their existing classification.
+/// - panics: none.
+///
+/// # Errors
+/// The authority refusal, [`Refusal::Arena`] or [`Refusal::Protocol`].
+///
+/// # Adequacy
+/// - hypothesis: L3 out-of-order and wrong-author twins distinguish protocol
+///   state from authority, and a refused pause leaves the next report
+///   admissible.
+/// - witness: `fold::tests::session_replay_refuses_order_and_certifies_pause`
+fn admit_move(
+    play: &mut Play,
+    authority: Result<(), Refusal>,
+    edition: Edition,
+    movement: Movement,
+    commit: CommitId,
+) -> Result<(), Refusal>
+{
+    if let Err(authority) = authority {
+        let arena = ARENA
+            .as_ref()
+            .map_err(|error| Refusal::Arena(error.to_string()))?;
+        let _progress = play
+            .inspect(arena, edition, movement, PayloadDigest(*commit.as_bytes()))
+            .map_err(Refusal::Protocol)?;
+        return Err(authority);
+    }
+    record_move(play, edition, movement, commit)
+}
+
 /// An admitted decision, as a landing of it reads it.
 struct Decided
 {
@@ -776,17 +858,23 @@ struct Carry
 ///   an admitted decision to land among its ancestors, whose author is that
 ///   decision's operator, and whose decision's dispatch is the admitted
 ///   dispatch last in canonical order among its ancestors.
+/// - ensures: dispatch, report, handoff, retirement and pause must also conform
+///   to the selected Seat endpoint type. The accepted canonical prefix is
+///   maintained separately for each dispatch. A refused candidate never
+///   advances that prefix or changes causal authority.
 /// - ensures: a refused commit is listed with the first refusal that holds,
 ///   checked in this order: [`Refusal::Undecodable`], [`Refusal::WrongTree`],
 ///   [`Refusal::Duplicate`] (an admitted commit earlier in canonical order
-///   carries the same operation), then for an Open [`Refusal::BadProof`] when
-///   its proof fails and [`Refusal::SecondOpen`] when it is not the tree's,
-///   [`Refusal::NotOwner`] for a claim, [`Refusal::NoAuthority`] for a grant, a
-///   note, a bind, an introduction or a dispatch by an author neither the owner
-///   nor granted and for a presence or a withdrawal by an author neither that
-///   nor a seat, then [`Refusal::ForeignEndpoint`] for a presence whose proof
-///   fails and [`Refusal::ForeignPresence`] for a member's or a seat's
-///   withdrawal of another's presence, for a report, a handoff or a retirement
+///   carries the same operation), then [`Refusal::Arena`] or
+///   [`Refusal::Protocol`] for a Seat move, then for an Open
+///   [`Refusal::BadProof`] when its proof fails and [`Refusal::SecondOpen`]
+///   when it is not the tree's, [`Refusal::NotOwner`] for a claim,
+///   [`Refusal::NoAuthority`] for a grant, a note, a bind, an introduction or a
+///   dispatch by an author neither the owner nor granted and for a presence or
+///   a withdrawal by an author neither that nor a seat, then
+///   [`Refusal::ForeignEndpoint`] for a presence whose proof fails and
+///   [`Refusal::ForeignPresence`] for a member's or a seat's withdrawal of
+///   another's presence, for a report, a handoff or a retirement
 ///   [`Refusal::NotCurrent`] when its dispatch is not the latest among its
 ///   ancestors and [`Refusal::NotHolder`] when its author does not hold the
 ///   slot there, for a verdict [`Refusal::NotJudge`] when its author is not the
@@ -836,22 +924,22 @@ struct Carry
 ///   from every arrival order, the owner's withdrawal of a member's presence
 ///   and a member's of its own, a member's withdrawal of the owner's refused, a
 ///   dispatch refused to a non-member, a seat's presence, its report, a report
-///   by a peer not holding the slot, a handoff and its recipient's report, a
-///   retirement, a report on a superseded and on an unknown dispatch, a report
-///   concurrent with a later dispatch, a judge's verdict on a held and on a
-///   retired slot, a verdict signed by another key than its judge's, a verdict
-///   on a superseded and on an unknown dispatch, a runner's verification on a
-///   held and on a retired slot, one signed by another key than its runner's
-///   and one on a superseded dispatch, a judge's grading of its verdict, a
-///   grading signed by another key, of an unknown verdict and of one only
-///   concurrent with it, with a grade too few, a read answer refused and an
-///   unread answer met, and a grading after a later dispatch, a decision by the
-///   owner and by a member, by a seat and by a stranger, signed by a member for
-///   the owner, on an unknown and on a superseded dispatch, a landing of a
-///   decision to land, by the seat and by a member who did not decide, without
-///   a decision, of a decision only concurrent with it, of a decision to rework
-///   and after a later dispatch, an unopened tree and a parent cycle are each
-///   pinned by a case of their own.
+///   by a peer not holding the slot, handoff and retirement before a report, a
+///   report on a superseded and on an unknown dispatch, a report concurrent
+///   with a later dispatch, a judge's verdict on a held and on a retired slot,
+///   a verdict signed by another key than its judge's, a verdict on a
+///   superseded and on an unknown dispatch, a runner's verification on a held
+///   and on a retired slot, one signed by another key than its runner's and one
+///   on a superseded dispatch, a judge's grading of its verdict, a grading
+///   signed by another key, of an unknown verdict and of one only concurrent
+///   with it, with a grade too few, a read answer refused and an unread answer
+///   met, and a grading after a later dispatch, a decision by the owner and by
+///   a member, by a seat and by a stranger, signed by a member for the owner,
+///   on an unknown and on a superseded dispatch, a landing of a decision to
+///   land, by the seat and by a member who did not decide, without a decision,
+///   of a decision only concurrent with it, of a decision to rework and after a
+///   later dispatch, an unopened tree and a parent cycle are each pinned by a
+///   case of their own.
 /// - witness: `fold::tests::a_view_is_the_same_whatever_order_commits_arrive_in`
 /// - witness: `fold::tests::a_note_by_a_non_member_is_refused`
 /// - witness: `fold::tests::a_note_by_a_peer_granted_in_its_causal_past_is_admitted`
@@ -872,8 +960,8 @@ struct Carry
 /// - witness: `fold::tests::an_undecodable_blob_is_refused_and_an_unopened_tree_has_no_view`
 /// - witness: `fold::tests::a_parent_cycle_is_placed_in_commit_id_order`
 /// - witness: `fold::tests::the_dispatched_seat_reports_on_its_dispatch`
-/// - witness: `fold::tests::a_handoff_moves_the_slot_to_its_recipient`
-/// - witness: `fold::tests::a_retired_slot_without_a_report_is_stalled`
+/// - witness: `fold::tests::a_handoff_before_report_is_a_named_protocol_refusal`
+/// - witness: `fold::tests::retirement_before_report_is_refused_without_relinquishing_the_slot`
 /// - witness: `fold::tests::a_report_on_a_superseded_dispatch_is_refused`
 /// - witness: `fold::tests::a_judge_rules_on_the_current_dispatch`
 /// - witness: `fold::tests::a_verdict_on_a_superseded_dispatch_is_refused`
@@ -887,6 +975,30 @@ struct Carry
 pub fn fold(
     tree: TreeId,
     commits: Vec<VerifiedMeta<LooseCommit>>,
+) -> Result<View, Unopened>
+{
+    fold_at(tree, commits, Edition::Paused)
+}
+
+/// Fold the same record under a selected protocol edition.
+///
+/// # Specification
+/// - ensures: the authority and ordering rules of [`fold`], with each Seat move
+///   independently replayed under `edition`; refusals remain named facts.
+/// - fails: [`Unopened`] when no root proof admits an owner.
+/// - panics: none.
+///
+/// # Errors
+/// [`Unopened`] if the tree has no admitted root.
+///
+/// # Adequacy
+/// - hypothesis: L3 the same record admits pause only under Paused; named
+///   out-of-order refusals do not change the admitted prefix.
+/// - witness: `fold::tests::session_replay_refuses_order_and_certifies_pause`
+pub fn fold_at(
+    tree: TreeId,
+    commits: Vec<VerifiedMeta<LooseCommit>>,
+    edition: Edition,
 ) -> Result<View, Unopened>
 {
     let mut commits = commits;
@@ -939,6 +1051,7 @@ pub fn fold(
                 | Kind::Report { .. }
                 | Kind::Handoff { .. }
                 | Kind::Retire { .. }
+                | Kind::Pause { .. }
                 | Kind::Verdict { .. }
                 | Kind::Verified { .. }
                 | Kind::Graded { .. }
@@ -992,6 +1105,7 @@ pub fn fold(
     let mut admitted = BTreeMap::new();
     let mut ruled = BTreeMap::new();
     let mut decisions = BTreeMap::new();
+    let mut plays = BTreeMap::new();
     for placed in (0_usize ..).map(Placed) {
         let ready_node = core::iter::from_fn(|| ready.pop_first())
             .find_map(|position| nodes.remove_entry(&position));
@@ -1021,71 +1135,114 @@ pub fn fold(
                     Some(Refusal::Duplicate { first: *first })
                 }
                 else {
-                    let refusal = match kind {
-                        | Kind::Open { .. } if bad_proofs.contains(&position) => {
-                            Some(Refusal::BadProof)
-                        },
-                        | Kind::Open { .. } => (position != open).then_some(Refusal::SecondOpen),
-                        | Kind::Grant { to } if authorized => {
-                            let _was_member = view.members.insert(to);
-                            let _was_granted = past.grantees.insert(to);
-                            None
-                        },
-                        | Kind::Note { text } if authorized => {
-                            view.notes.push((node.author, text));
-                            None
-                        },
-                        | Kind::Bind { path, target } if authorized => {
-                            let _rebound = view.bindings.insert(path, (node.author, target));
-                            None
-                        },
-                        | Kind::Claim { domain } if node.author == owner => {
-                            let _claimed_before = view.claims.insert(domain);
-                            None
-                        },
-                        | Kind::Claim { .. } => Some(Refusal::NotOwner),
-                        | Kind::Introduce {
-                            tree: introduced,
-                            label,
-                        } if authorized => {
-                            let _reintroduced =
-                                view.introductions.insert(label, (node.author, introduced));
-                            None
-                        },
-                        | Kind::Present { endpoint, proof } if present => {
-                            match proof.verify(endpoint.key(), node.author) {
-                                | Ok(()) => {
-                                    let presence = Presence::new(endpoint, node.commit);
-                                    let _superseded = view.book.insert(node.author, presence);
-                                    None
-                                },
-                                | Err(_foreign) => Some(Refusal::ForeignEndpoint),
+                    let protocol = match kind {
+                        | Kind::Dispatch { .. } if authorized => {
+                            let mut play = Play::default();
+                            let result =
+                                record_move(&mut play, edition, Movement::Dispatch, node.commit);
+                            if result.is_ok() {
+                                drop(plays.insert(node.commit, play));
                             }
+                            result
                         },
-                        | Kind::Withdraw { of }
-                            if node.author == owner || (present && of == node.author) =>
-                        {
-                            let _withdrawn = view.book.remove(&of);
-                            None
-                        },
-                        | Kind::Withdraw { .. } if present => Some(Refusal::ForeignPresence),
-                        | Kind::Dispatch { seat, brief } if authorized => {
-                            past.course = Course::Dispatched {
-                                placed,
-                                dispatch: node.commit,
-                                moved: placed,
-                                holder: Holder::Seat(seat),
-                            };
-                            let _seated_before = past.seats.insert(seat);
-                            view.task.dispatch(node.commit, seat, brief);
-                            None
-                        },
-                        | Kind::Report {
-                            dispatch,
-                            content,
-                            summary,
-                        } => match past.course.answerable(dispatch, node.author) {
-                            | Ok(()) => {
+                        | Kind::Report { dispatch, .. } => admit_move(
+                            plays.entry(dispatch).or_default(),
+                            past.course.answerable(dispatch, node.author),
+                            edition,
+                            Movement::Report,
+                            node.commit,
+                        ),
+                        | Kind::Handoff { dispatch, .. } => admit_move(
+                            plays.entry(dispatch).or_default(),
+                            past.course.answerable(dispatch, node.author),
+                            edition,
+                            Movement::Handoff,
+                            node.commit,
+                        ),
+                        | Kind::Retire { dispatch, .. } => admit_move(
+                            plays.entry(dispatch).or_default(),
+                            past.course.answerable(dispatch, node.author),
+                            edition,
+                            Movement::Retire,
+                            node.commit,
+                        ),
+                        | Kind::Pause { dispatch, .. } => admit_move(
+                            plays.entry(dispatch).or_default(),
+                            past.course.answerable(dispatch, node.author),
+                            edition,
+                            Movement::Pause,
+                            node.commit,
+                        ),
+                        | _ => Ok(()),
+                    };
+                    let refusal = match protocol {
+                        | Err(refusal) => Some(refusal),
+                        | Ok(()) => match kind {
+                            | Kind::Open { .. } if bad_proofs.contains(&position) => {
+                                Some(Refusal::BadProof)
+                            },
+                            | Kind::Open { .. } => {
+                                (position != open).then_some(Refusal::SecondOpen)
+                            },
+                            | Kind::Grant { to } if authorized => {
+                                let _was_member = view.members.insert(to);
+                                let _was_granted = past.grantees.insert(to);
+                                None
+                            },
+                            | Kind::Note { text } if authorized => {
+                                view.notes.push((node.author, text));
+                                None
+                            },
+                            | Kind::Bind { path, target } if authorized => {
+                                let _rebound = view.bindings.insert(path, (node.author, target));
+                                None
+                            },
+                            | Kind::Claim { domain } if node.author == owner => {
+                                let _claimed_before = view.claims.insert(domain);
+                                None
+                            },
+                            | Kind::Claim { .. } => Some(Refusal::NotOwner),
+                            | Kind::Introduce {
+                                tree: introduced,
+                                label,
+                            } if authorized => {
+                                let _reintroduced =
+                                    view.introductions.insert(label, (node.author, introduced));
+                                None
+                            },
+                            | Kind::Present { endpoint, proof } if present => {
+                                match proof.verify(endpoint.key(), node.author) {
+                                    | Ok(()) => {
+                                        let presence = Presence::new(endpoint, node.commit);
+                                        let _superseded = view.book.insert(node.author, presence);
+                                        None
+                                    },
+                                    | Err(_foreign) => Some(Refusal::ForeignEndpoint),
+                                }
+                            },
+                            | Kind::Withdraw { of }
+                                if node.author == owner || (present && of == node.author) =>
+                            {
+                                let _withdrawn = view.book.remove(&of);
+                                None
+                            },
+                            | Kind::Withdraw { .. } if present => Some(Refusal::ForeignPresence),
+                            | Kind::Dispatch { seat, brief } if authorized => {
+                                past.course = Course::Dispatched {
+                                    placed,
+                                    dispatch: node.commit,
+                                    moved: placed,
+                                    holder: Holder::Seat(seat),
+                                };
+                                let _seated_before = past.seats.insert(seat);
+                                view.task.dispatch(node.commit, seat, brief);
+                                None
+                            },
+                            | Kind::Report {
+                                dispatch,
+                                content,
+                                summary,
+                            } => {
                                 view.task.answer(node.commit, Step::Report {
                                     dispatch,
                                     author: node.author,
@@ -1094,167 +1251,165 @@ pub fn fold(
                                 });
                                 None
                             },
-                            | Err(refusal) => Some(refusal),
-                        },
-                        | Kind::Handoff { dispatch, to } => {
-                            match past.course.answerable(dispatch, node.author) {
+                            | Kind::Handoff { dispatch, to } => {
+                                past.course = past.course.moved(placed, Holder::Seat(to));
+                                let _seated_before = past.seats.insert(to);
+                                view.task.answer(node.commit, Step::Handoff {
+                                    dispatch,
+                                    from: node.author,
+                                    to,
+                                });
+                                None
+                            },
+                            | Kind::Retire { dispatch } => {
+                                past.course = past.course.moved(placed, Holder::Vacant);
+                                view.task.answer(node.commit, Step::Retire {
+                                    dispatch,
+                                    author: node.author,
+                                });
+                                None
+                            },
+                            | Kind::Pause { dispatch } => {
+                                view.task.answer(node.commit, Step::Pause {
+                                    dispatch,
+                                    author: node.author,
+                                });
+                                None
+                            },
+                            | Kind::Verdict { judge, .. } if node.author != judge => {
+                                Some(Refusal::NotJudge)
+                            },
+                            | Kind::Verdict {
+                                dispatch,
+                                judge,
+                                rubric,
+                                transcript,
+                                answers,
+                            } => match past.course.current(dispatch) {
                                 | Ok(()) => {
-                                    past.course = past.course.moved(placed, Holder::Seat(to));
-                                    let _seated_before = past.seats.insert(to);
-                                    view.task.answer(node.commit, Step::Handoff {
-                                        dispatch,
-                                        from: node.author,
-                                        to,
-                                    });
-                                    None
-                                },
-                                | Err(refusal) => Some(refusal),
-                            }
-                        },
-                        | Kind::Retire { dispatch } => {
-                            match past.course.answerable(dispatch, node.author) {
-                                | Ok(()) => {
-                                    past.course = past.course.moved(placed, Holder::Vacant);
-                                    view.task.answer(node.commit, Step::Retire {
-                                        dispatch,
-                                        author: node.author,
-                                    });
-                                    None
-                                },
-                                | Err(refusal) => Some(refusal),
-                            }
-                        },
-                        | Kind::Verdict { judge, .. } if node.author != judge => {
-                            Some(Refusal::NotJudge)
-                        },
-                        | Kind::Verdict {
-                            dispatch,
-                            judge,
-                            rubric,
-                            transcript,
-                            answers,
-                        } => match past.course.current(dispatch) {
-                            | Ok(()) => {
-                                let questions = answers
-                                    .iter()
-                                    .map(|&(question, ref ruling)| {
-                                        (question, match *ruling {
-                                            | Ruling::Read(_) => Reading::Read,
-                                            | Ruling::Unread(_) => Reading::Unread,
+                                    let questions = answers
+                                        .iter()
+                                        .map(|&(question, ref ruling)| {
+                                            (question, match *ruling {
+                                                | Ruling::Read(_) => Reading::Read,
+                                                | Ruling::Unread(_) => Reading::Unread,
+                                            })
                                         })
-                                    })
-                                    .collect();
-                                let _ruled_before = ruled.insert(node.commit, Ruled {
-                                    judge,
-                                    dispatch,
-                                    rubric,
-                                    questions,
-                                });
-                                let _verdict_before = past.verdicts.insert(node.commit);
-                                view.task.answer(node.commit, Step::Verdict {
-                                    dispatch,
-                                    judge,
-                                    rubric,
-                                    transcript,
-                                    answers,
-                                });
-                                None
-                            },
-                            | Err(refusal) => Some(refusal),
-                        },
-                        | Kind::Verified { runner, .. } if node.author != runner => {
-                            Some(Refusal::NotRunner)
-                        },
-                        | Kind::Verified {
-                            dispatch,
-                            runner,
-                            playbook,
-                            step,
-                            output,
-                            status,
-                        } => match past.course.current(dispatch) {
-                            | Ok(()) => {
-                                view.task.answer(node.commit, Step::Verified {
-                                    dispatch,
-                                    runner,
-                                    playbook,
-                                    step,
-                                    output,
-                                    status,
-                                });
-                                None
-                            },
-                            | Err(refusal) => Some(refusal),
-                        },
-                        | Kind::Graded {
-                            verdict,
-                            grades,
-                            composed,
-                        } => match grading(&ruled, &past, node.author, verdict, &grades) {
-                            | Ok(ruling) => {
-                                let grades = ruling
-                                    .questions
-                                    .iter()
-                                    .zip(grades)
-                                    .map(|(&(question, _), grade)| (question, grade))
-                                    .collect();
-                                view.task.answer(node.commit, Step::Graded {
-                                    dispatch: ruling.dispatch,
-                                    verdict,
-                                    rubric: ruling.rubric,
-                                    grades,
-                                    composed,
-                                });
-                                None
-                            },
-                            | Err(refusal) => Some(refusal),
-                        },
-                        | Kind::Decide { operator, .. } if authorized && node.author != operator => {
-                            Some(Refusal::NotOperator)
-                        },
-                        | Kind::Decide {
-                            dispatch,
-                            operator,
-                            decision,
-                        } if authorized => match past.course.current(dispatch) {
-                            | Ok(()) => {
-                                let _decided_before = decisions.insert(node.commit, Decided {
-                                    dispatch,
-                                    operator,
-                                    decision: decision.clone(),
-                                });
-                                let _decision_before = past.decisions.insert(node.commit);
-                                view.task.answer(node.commit, Step::Decide {
-                                    dispatch,
-                                    operator,
-                                    decision,
-                                });
-                                None
-                            },
-                            | Err(refusal) => Some(refusal),
-                        },
-                        | Kind::Landed { decided, merge } => {
-                            match landing(&decisions, &past, node.author, decided) {
-                                | Ok(dispatch) => {
-                                    view.task.answer(node.commit, Step::Landed {
+                                        .collect();
+                                    let _ruled_before = ruled.insert(node.commit, Ruled {
+                                        judge,
                                         dispatch,
-                                        decided,
-                                        operator: node.author,
-                                        merge,
+                                        rubric,
+                                        questions,
+                                    });
+                                    let _verdict_before = past.verdicts.insert(node.commit);
+                                    view.task.answer(node.commit, Step::Verdict {
+                                        dispatch,
+                                        judge,
+                                        rubric,
+                                        transcript,
+                                        answers,
                                     });
                                     None
                                 },
                                 | Err(refusal) => Some(refusal),
-                            }
+                            },
+                            | Kind::Verified { runner, .. } if node.author != runner => {
+                                Some(Refusal::NotRunner)
+                            },
+                            | Kind::Verified {
+                                dispatch,
+                                runner,
+                                playbook,
+                                step,
+                                output,
+                                status,
+                            } => match past.course.current(dispatch) {
+                                | Ok(()) => {
+                                    view.task.answer(node.commit, Step::Verified {
+                                        dispatch,
+                                        runner,
+                                        playbook,
+                                        step,
+                                        output,
+                                        status,
+                                    });
+                                    None
+                                },
+                                | Err(refusal) => Some(refusal),
+                            },
+                            | Kind::Graded {
+                                verdict,
+                                grades,
+                                composed,
+                            } => match grading(&ruled, &past, node.author, verdict, &grades) {
+                                | Ok(ruling) => {
+                                    let grades = ruling
+                                        .questions
+                                        .iter()
+                                        .zip(grades)
+                                        .map(|(&(question, _), grade)| (question, grade))
+                                        .collect();
+                                    view.task.answer(node.commit, Step::Graded {
+                                        dispatch: ruling.dispatch,
+                                        verdict,
+                                        rubric: ruling.rubric,
+                                        grades,
+                                        composed,
+                                    });
+                                    None
+                                },
+                                | Err(refusal) => Some(refusal),
+                            },
+                            | Kind::Decide { operator, .. }
+                                if authorized && node.author != operator =>
+                            {
+                                Some(Refusal::NotOperator)
+                            },
+                            | Kind::Decide {
+                                dispatch,
+                                operator,
+                                decision,
+                            } if authorized => match past.course.current(dispatch) {
+                                | Ok(()) => {
+                                    let _decided_before = decisions.insert(node.commit, Decided {
+                                        dispatch,
+                                        operator,
+                                        decision: decision.clone(),
+                                    });
+                                    let _decision_before = past.decisions.insert(node.commit);
+                                    view.task.answer(node.commit, Step::Decide {
+                                        dispatch,
+                                        operator,
+                                        decision,
+                                    });
+                                    None
+                                },
+                                | Err(refusal) => Some(refusal),
+                            },
+                            | Kind::Landed { decided, merge } => {
+                                match landing(&decisions, &past, node.author, decided) {
+                                    | Ok(dispatch) => {
+                                        view.task.answer(node.commit, Step::Landed {
+                                            dispatch,
+                                            decided,
+                                            operator: node.author,
+                                            merge,
+                                        });
+                                        None
+                                    },
+                                    | Err(refusal) => Some(refusal),
+                                }
+                            },
+                            | Kind::Grant { .. }
+                            | Kind::Note { .. }
+                            | Kind::Bind { .. }
+                            | Kind::Introduce { .. }
+                            | Kind::Present { .. }
+                            | Kind::Withdraw { .. }
+                            | Kind::Dispatch { .. }
+                            | Kind::Decide { .. } => Some(Refusal::NoAuthority),
                         },
-                        | Kind::Grant { .. }
-                        | Kind::Note { .. }
-                        | Kind::Bind { .. }
-                        | Kind::Introduce { .. }
-                        | Kind::Present { .. }
-                        | Kind::Withdraw { .. }
-                        | Kind::Dispatch { .. }
-                        | Kind::Decide { .. } => Some(Refusal::NoAuthority),
                     };
                     if refusal.is_none() {
                         admit(&mut admitted, operation, node.commit);
@@ -2739,7 +2894,35 @@ mod tests
     }
 
     #[test]
-    fn a_handoff_moves_the_slot_to_its_recipient()
+    fn session_replay_refuses_order_and_certifies_pause()
+    {
+        let (a, s) = (owner(), other());
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let early = commit(&s, tree(), &[&opened], &report(CommitId::new([7; 32]), "early".into())).await;
+            let dispatched = commit(&a, tree(), &[&early], &dispatch(key(&s))).await;
+            let d = id(&dispatched);
+            let paused = commit(&s, tree(), &[&dispatched], &Receipt::pause(tree(), d).unwrap()).await;
+            let reported = commit(&s, tree(), &[&paused], &report(d, "done".into())).await;
+            let retired = commit(&s, tree(), &[&reported], &Receipt::retire(tree(), d).unwrap()).await;
+            let commits = vec![opened, early.clone(), dispatched, paused.clone(), reported.clone(), retired.clone()];
+            let base = super::fold_at(tree(), commits.clone(), crate::Edition::Base).unwrap();
+            let wide = super::fold_at(tree(), commits, crate::Edition::Paused).unwrap();
+            assert!(matches!(wide.refused(), [(commit, Refusal::Protocol(reason))] if *commit == id(&early)
+                && reason.movement == domhringr_arena_session::Movement::Report
+                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { expected: gandr_core_session::Action::Receive(_), reason: gandr_core_session::Refusal::WrongDirection, .. })));
+            assert!(matches!(base.refused(), [_, (commit, Refusal::Protocol(reason))] if *commit == id(&paused)
+                && reason.movement == domhringr_arena_session::Movement::Pause
+                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { reason: gandr_core_session::Refusal::WrongLabel, .. })));
+            for view in [&base, &wide] {
+                assert_eq!(attempt(view).answer(), Answer::Reported(id(&reported)));
+                assert_eq!(attempt(view).slot(), Slot::Retired { by: key(&s), at: id(&retired) });
+            }
+        });
+    }
+
+    #[test]
+    fn a_handoff_before_report_is_a_named_protocol_refusal()
     {
         let (a, s, t) = (owner(), other(), MemorySigner::from_bytes(&[5; 32]));
         runtime().block_on(async {
@@ -2763,36 +2946,55 @@ mod tests
                 reported.clone(),
             ])
             .unwrap();
-            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
-            assert_eq!(
-                refused,
-                BTreeMap::from([
-                    (id(&early), Refusal::NotHolder),
-                    (id(&by_former), Refusal::NotHolder),
-                    (id(&by_owner), Refusal::NotHolder),
-                ]),
-                "the recipient before the handoff, the holder after it and the owner hold no \
-                 slot"
-            );
+            let mut refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            assert!(matches!(refused.remove(&id(&handed)), Some(Refusal::Protocol(reason))
+                if reason.movement == domhringr_arena_session::Movement::Handoff
+                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. })));
+            assert!(matches!(refused.remove(&id(&by_owner)), Some(Refusal::NotHolder | Refusal::Protocol(_))));
+            assert_eq!(refused, BTreeMap::from([
+                (id(&early), Refusal::NotHolder),
+                (id(&reported), Refusal::NotHolder),
+            ]));
             let attempt = attempt(&view);
-            assert_eq!(
-                (attempt.slot(), attempt.answer()),
-                (Slot::Held(key(&t)), Answer::Reported(id(&reported))),
-                "the recipient holds the slot and reports on the dispatch"
-            );
-            assert!(
-                view.task().steps().contains(&(id(&handed), Step::Handoff {
-                    dispatch: d,
-                    from: key(&s),
-                    to: key(&t),
-                })),
-                "the handoff is a step"
-            );
+            assert_eq!((attempt.slot(), attempt.answer()),
+                (Slot::Held(key(&s)), Answer::Reported(id(&by_former))),
+                "refused handoff leaves the original holder able to report");
+            assert!(!view.task().steps().iter().any(|&(commit, _)| commit == id(&handed)));
         });
     }
 
     #[test]
-    fn a_retired_slot_without_a_report_is_stalled()
+    fn handoff_closes_the_play_instead_of_permitting_a_second_handoff()
+    {
+        let (a, s, t) = (owner(), other(), MemorySigner::from_bytes(&[5; 32]));
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let dispatched = commit(&a, tree(), &[&opened], &dispatch(key(&s))).await;
+            let d = id(&dispatched);
+            let reported = commit(&s, tree(), &[&dispatched], &report(d, "done".into())).await;
+            let handed = commit(&s, tree(), &[&reported], &Receipt::handoff(tree(), d, key(&t)).unwrap()).await;
+            let repeated = commit(&t, tree(), &[&handed], &Receipt::handoff(tree(), d, key(&s)).unwrap()).await;
+            let late = commit(&t, tree(), &[&repeated], &report(d, "late".into())).await;
+            let retired = commit(&t, tree(), &[&late], &Receipt::retire(tree(), d).unwrap()).await;
+            let view = fold(tree(), vec![opened, dispatched, reported.clone(), handed.clone(), repeated.clone(), late.clone(), retired.clone()]).unwrap();
+            let expected = [
+                (id(&repeated), domhringr_arena_session::Movement::Handoff),
+                (id(&late), domhringr_arena_session::Movement::Report),
+                (id(&retired), domhringr_arena_session::Movement::Retire),
+            ];
+            for ((commit, movement), &(actual, ref refusal)) in expected.into_iter().zip(view.refused()) {
+                assert_eq!(actual, commit);
+                assert!(matches!(*refusal, Refusal::Protocol(ref reason) if reason.movement == movement
+                    && matches!(reason.reason, gandr_core_session::ReplayError::Refused { expected: gandr_core_session::Action::End, reason: gandr_core_session::Refusal::ResumeAfterEnd, .. })));
+            }
+            assert_eq!(view.refused().len(), expected.len());
+            assert_eq!((attempt(&view).slot(), attempt(&view).answer()), (Slot::Held(key(&t)), Answer::Reported(id(&reported))));
+            assert!(view.task().steps().iter().any(|&(commit, _)| commit == id(&handed)));
+        });
+    }
+
+    #[test]
+    fn retirement_before_report_is_refused_without_relinquishing_the_slot()
     {
         let (a, s) = (owner(), other());
         runtime().block_on(async {
@@ -2809,30 +3011,13 @@ mod tests
                 late.clone(),
             ])
             .unwrap();
-            assert_eq!(
-                view.refused(),
-                &[(id(&late), Refusal::NotHolder)],
-                "a report after its author retired is refused"
-            );
+            assert!(matches!(view.refused(), [(commit, Refusal::Protocol(reason))]
+                if *commit == id(&retired) && reason.movement == domhringr_arena_session::Movement::Retire
+                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. })));
             let attempt = attempt(&view);
-            assert_eq!(
-                (attempt.slot(), attempt.answer(), attempt.seat()),
-                (
-                    Slot::Retired {
-                        by: key(&s),
-                        at: id(&retired),
-                    },
-                    Answer::Awaited,
-                    key(&s)
-                ),
-                "the slot is retired and the dispatch unreported"
-            );
-            assert!(
-                view.task()
-                    .to_string()
-                    .ends_with(&format!("stalled {d} {}\n", id(&retired))),
-                "a retired slot without a report is stalled"
-            );
+            assert_eq!((attempt.slot(), attempt.answer(), attempt.seat()),
+                (Slot::Held(key(&s)), Answer::Reported(id(&late)), key(&s)),
+                "refused abandonment leaves the slot open for its first report");
         });
     }
 
@@ -2863,15 +3048,12 @@ mod tests
                 concurrent.clone(),
             ])
             .unwrap();
-            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
-            assert_eq!(
-                refused,
-                BTreeMap::from([
-                    (id(&stale), Refusal::NotCurrent),
-                    (id(&unknown), Refusal::NotCurrent),
-                ]),
-                "a report naming a dispatch superseded or never made in its past is refused"
-            );
+            let mut refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            assert!(matches!(refused.remove(&id(&unknown)), Some(Refusal::Protocol(reason))
+                if reason.movement == domhringr_arena_session::Movement::Report
+                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(0), expected: gandr_core_session::Action::Receive(_), reason: gandr_core_session::Refusal::WrongDirection, .. })));
+            assert_eq!(refused, BTreeMap::from([(id(&stale), Refusal::NotCurrent)]),
+                "superseded dispatches retain their independent causal authority refusal");
             assert!(
                 view.task()
                     .steps()
@@ -2921,7 +3103,10 @@ mod tests
                 after.clone(),
             ])
             .unwrap();
-            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            let mut refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            assert!(matches!(refused.remove(&id(&retired)), Some(Refusal::Protocol(reason))
+                if reason.movement == domhringr_arena_session::Movement::Retire
+                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. })));
             assert_eq!(
                 refused,
                 BTreeMap::from([
@@ -2948,19 +3133,12 @@ mod tests
                     (id(&judged), ruled(key(&j))),
                     (id(&after), ruled(key(&stranger)))
                 ],
-                "a judge's verdict on the held slot and a stranger's own on the retired one \
-                 are the task's steps"
+                "judges can rule while the report is still owed, even after a refused retirement"
             );
             let attempt = attempt(&view);
             assert_eq!(
                 (attempt.slot(), attempt.answer()),
-                (
-                    Slot::Retired {
-                        by: key(&s),
-                        at: id(&retired),
-                    },
-                    Answer::Awaited
-                ),
+                (Slot::Held(key(&s)), Answer::Awaited),
                 "a verdict moves no slot and answers no attempt"
             );
         });
@@ -3039,13 +3217,16 @@ mod tests
                 passed.clone(),
                 forged.clone(),
                 by_owner.clone(),
-                retired,
+                retired.clone(),
                 failed.clone(),
                 second,
                 stale.clone(),
             ])
             .unwrap();
-            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            let mut refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            assert!(matches!(refused.remove(&id(&retired)), Some(Refusal::Protocol(reason))
+                if reason.movement == domhringr_arena_session::Movement::Retire
+                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. })));
             assert_eq!(
                 refused,
                 BTreeMap::from([
@@ -3072,8 +3253,7 @@ mod tests
                     .cloned()
                     .collect::<Vec<_>>(),
                 [(id(&passed), ran(passing)), (id(&failed), ran(failing))],
-                "a runner's verification on the held slot and on the retired one are the \
-                 task's steps, a failing exit recorded as it ended"
+                "verifications before and after a refused retirement retain their exit status"
             );
         });
     }

@@ -387,4 +387,99 @@ mod tests
         seat.admitted(&o_peer);
         drop(seat);
     }
+    #[test]
+    fn two_processes_replay_session_editions()
+    {
+        let (o, s) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (o, s) = (o.path(), s.path());
+        let s_id = finish(peer(s).arg("id"));
+        let port = free_port();
+        let contact = format!("{}@127.0.0.1:{port}", s_id[0]);
+        let old_tree = only(peer(o).arg("open"));
+        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("echo"), &s_id);
+        let dispatched = finish(peer(o).args([
+            "dispatch", &old_tree, &s_id[1], "content", BRIEF, "--at", &contact,
+        ]));
+        let old_dispatch = &dispatched[0];
+        let old_report = loop {
+            let line = seat.line();
+            if let Some(report) = line.strip_prefix(&format!("reported {old_tree} ")) {
+                break report.to_owned();
+            }
+        };
+        drop(seat);
+        let old_retire = only(peer(s).args(["retire", &old_tree]));
+        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("echo"), &s_id);
+        let widened = finish(peer(o).args(["replay", &old_tree]));
+        let original = finish(peer(o).args(["replay", &old_tree, "--local", "--base"]));
+        for replayed in [widened, original] {
+            assert!(!replayed.iter().any(|line| line.starts_with("refused ")));
+            assert!(
+                replayed
+                    .iter()
+                    .any(|line| line.starts_with(&format!("report {old_report} {old_dispatch} ")))
+            );
+            assert!(
+                replayed
+                    .iter()
+                    .any(|line| line == &format!("retire {old_retire} {old_dispatch} {}", s_id[1]))
+            );
+        }
+        drop(seat);
+
+        let tree = only(peer(o).arg("open"));
+        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("false"), &s_id);
+        let dispatched = finish(peer(o).args([
+            "dispatch", &tree, &s_id[1], "content", BRIEF, "--at", &contact,
+        ]));
+        let dispatch = dispatched[0].clone();
+        while seat.line() != format!("unreported {tree} {dispatch}") {}
+        drop(seat);
+        let pause = only(peer(s).args(["pause", &tree]));
+        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("echo"), &s_id);
+        let reported = seat.line();
+        let report = reported
+            .strip_prefix(&format!("reported {tree} "))
+            .unwrap()
+            .to_owned();
+        drop(seat);
+        let retire = only(peer(s).args(["retire", &tree]));
+        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("echo"), &s_id);
+        let wide = finish(peer(o).args(["replay", &tree]));
+        assert!(
+            wide.iter()
+                .any(|line| line == &format!("pause {pause} {dispatch} {}", s_id[1]))
+        );
+        assert!(
+            wide.iter()
+                .any(|line| line == &format!("retire {retire} {dispatch} {}", s_id[1]))
+        );
+        assert!(!wide.iter().any(|line| line.starts_with("refused ")));
+        let old = finish(peer(o).args(["replay", &tree, "--local", "--base"]));
+        assert!(
+            old.iter()
+                .any(|line| line.starts_with(&format!("refused {pause} protocol pause:")))
+        );
+        assert!(
+            old.iter()
+                .any(|line| line.starts_with(&format!("report {report} {dispatch}")))
+        );
+        drop(seat);
+        let file = s.join("late-report");
+        std::fs::write(&file, b"late").unwrap();
+        let late = only(peer(s).args(["report", &tree]).arg(&file).arg("late"));
+        let seat = Running::serve(s, OsStr::new(&port), OsStr::new("echo"), &s_id);
+        let replayed = finish(peer(o).args(["replay", &tree]));
+        assert!(
+            replayed
+                .iter()
+                .any(|line| line.starts_with(&format!("refused {late} protocol report:")))
+        );
+        assert!(
+            !replayed
+                .iter()
+                .any(|line| line.starts_with(&format!("report {late} ")))
+        );
+        drop(seat);
+    }
 }

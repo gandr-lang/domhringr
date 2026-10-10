@@ -9,8 +9,8 @@ Three disciplines: consult this file before naming a crate; when it is silent, d
 Categories are a layering order: a crate depends only on crates of its own category or of one listed before it. The categories are also the closed vocabulary of commit scopes.
 
 ```text
+arena     the game: session types, moves and polarity, conformance, endings and certified replay; no I/O
 record    the causal plane: receipts (the seat's among them) and their codec, the sedimentree, the fold, the endpoint and storage
-arena     the game: arenas, plays, moves and polarity, validity, endings, verdicts, replay; no I/O
 seat      the Player participant: answering a dispatch, acting, reporting; the harness shim
 judge     the oracle: letter readout over a model, dialogues, verdict receipts
 strategy  playbooks (Player strategies) and rubrics (Opponent strategies): documents, schemas, loader, grades
@@ -27,6 +27,7 @@ One row per directory: the directory, its package, and what it is.
 
 ```text
 crates/
+├── arena-session/      domhringr-arena-session      the Seat protocol and its dual, conformance by replay, named move refusals and kernel-certified pause widening
 ├── judge-oracle/       domhringr-judge-oracle       the judge: a lettered question about a transcript, read from a model's next-token distribution over an OpenAI-compatible endpoint into a letter and a probability per option, or a refusal by its reason; a table of rulings for tests and replay
 ├── record-evidence/    domhringr-record-evidence    the evidence plane: reports, verifier outputs and transcripts committed into gandr's value plane as chunk DAGs under one measured, pinned profile, named by manifest digest, read back through the profile check and the closure walk, and fetched from a holder over a chunk stream under its own ALPN
 ├── record-tree/        domhringr-record-tree        the sedimentree: receipts naming evidence by manifest digest, the fold to a view, a book of reachable peers and a task, anchors naming a tree, a path or a commit by key, DNS name or label, a tree stored in redb and synced over iroh beside other protocols

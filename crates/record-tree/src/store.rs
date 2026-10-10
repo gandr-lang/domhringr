@@ -311,6 +311,36 @@ impl Peer
         Ok(view)
     }
 
+    /// Replay stored commits under a selected Seat protocol edition.
+    ///
+    /// # Specification
+    /// - ensures: the selected fold sees every stored commit; rejected moves
+    ///   remain named facts, and neither the record nor its bodies are
+    ///   rewritten.
+    /// - fails: storage and missing-root failures retain their variants.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// [`ViewError::Load`] or [`ViewError::Unopened`].
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 the same stored paused play is refused under Base and
+    ///   admitted under Paused, with its subsequent report retained in both.
+    /// - witness: `store::tests::protocol_editions_replay_one_unchanged_record`
+    #[inline]
+    pub async fn view_at(
+        &self,
+        tree: TreeId,
+        edition: crate::Edition,
+    ) -> Result<View, ViewError>
+    {
+        let commits = Storage::<Sendable>::load_loose_commits(&self.storage, tree.sedimentree())
+            .await
+            .map_err(ViewError::Load)?;
+        let view = crate::fold::fold_at(tree, commits, edition)?;
+        Ok(view)
+    }
+
     /// Resolve `reference` by folding what the store holds, asking `witness`
     /// for the candidate trees of a DNS name and reading a label in `scope`.
     ///
@@ -1971,6 +2001,30 @@ mod tests
                 "one digit more tells them apart, and a blob that is no receipt resolves as \
                  refused with the decoder's reason"
             );
+            drop(peer);
+        });
+    }
+    #[test]
+    fn protocol_editions_replay_one_unchanged_record()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        runtime().block_on(async {
+            let peer = open(&state);
+            let me = peer.identity().peer_key();
+            peer.commit(tree(), Receipt::open(&tree_key(), me).unwrap()).await.unwrap();
+            let d = peer.commit(tree(), Receipt::dispatch(tree(), me, crate::Brief::Anchor(Anchor::key(tree()))).unwrap()).await.unwrap();
+            let pause = peer.commit(tree(), Receipt::pause(tree(), d).unwrap()).await.unwrap();
+            let r = peer.commit(tree(), Receipt::report(tree(), d, gandr_storage_values::ManifestDigest::from([7; 32]), "done".parse().unwrap()).unwrap()).await.unwrap();
+            let heads = peer.heads(tree()).await.unwrap().iter().copied().collect::<Vec<_>>();
+            let old = peer.view_at(tree(), crate::Edition::Base).await.unwrap();
+            let wide = peer.view_at(tree(), crate::Edition::Paused).await.unwrap();
+            assert!(matches!(old.refused(), [(commit, Refusal::Protocol(reason))] if *commit == pause && reason.movement == domhringr_arena_session::Movement::Pause));
+            assert_eq!(wide.refused(), &[]);
+            for view in [old, wide] {
+                assert!(matches!(view.task().current(), crate::Current::Attempt(attempt) if attempt.answer() == crate::Answer::Reported(r)));
+            }
+            assert_eq!(peer.heads(tree()).await.unwrap().iter().copied().collect::<Vec<_>>(), heads);
             drop(peer);
         });
     }

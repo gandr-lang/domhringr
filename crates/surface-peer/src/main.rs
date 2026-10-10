@@ -332,7 +332,9 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> report <tree> <file> <summary>
        domhringr-peer --state <dir> handoff <tree> <peer-id>
        domhringr-peer --state <dir> retire <tree>
+       domhringr-peer --state <dir> pause <tree>
        domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]
+                      [--base]
        domhringr-peer --state <dir> evidence <tree> <digest> [--peer <peer-id>] [--at <endpoint>]
                       [--local]
        domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
@@ -424,6 +426,8 @@ enum Verb
     Handoff,
     /// Retire from the task's current slot.
     Retire,
+    /// Pause work while retaining the slot.
+    Pause,
     /// Print a task's seat receipts and where it stands.
     Replay,
     /// Print the content of an evidence a task names, fetching it when the
@@ -492,7 +496,10 @@ impl fmt::Display for Verb
             | Self::Report => "report <tree> <file> <summary>",
             | Self::Handoff => "handoff <tree> <peer-id>",
             | Self::Retire => "retire <tree>",
-            | Self::Replay => "replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]",
+            | Self::Pause => "pause <tree>",
+            | Self::Replay => {
+                "replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local] [--base]"
+            },
             | Self::Evidence => {
                 "evidence <tree> <digest> [--peer <peer-id>] [--at <endpoint>] [--local]"
             },
@@ -747,6 +754,12 @@ enum Command
         /// The task.
         tree: TreeId,
     },
+    /// Commit a pause on the current dispatch.
+    Pause
+    {
+        /// The task.
+        tree: TreeId,
+    },
     /// Reach the peer `replaying` says for `tree`, sync, fetch the evidence
     /// the task names that the local store lacks, and print where its
     /// endpoint came from, the task's steps, where it stands and whether each
@@ -757,6 +770,8 @@ enum Command
         tree: TreeId,
         /// Whether, and whom, the task is reached at.
         replaying: Replaying,
+        /// The protocol used for conformance.
+        edition: domhringr_record_tree::Edition,
     },
     /// Print the content of the evidence `digest` names, read from the local
     /// store or else fetched from the peer `reaching` says for `tree`.
@@ -1427,6 +1442,9 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
         | (Verb::Retire, (Some(tree), None, None, None)) => Command::Retire {
             tree: read_tree(&tree)?,
         },
+        | (Verb::Pause, (Some(tree), None, None, None)) => Command::Pause {
+            tree: read_tree(&tree)?,
+        },
         | (verb, _) => return Err(UsageError::Operands(verb)),
     };
     Ok(Invocation { state, command })
@@ -1914,6 +1932,7 @@ fn replay_command(
 {
     let (mut toward, mut at) = (Toward::Seat, At::Book);
     let (mut named, mut local) = (false, false);
+    let mut edition = domhringr_record_tree::Edition::Paused;
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
@@ -1928,6 +1947,9 @@ fn replay_command(
                 named = true;
             },
             | lexopt::Arg::Long("local") => local = true,
+            | lexopt::Arg::Long("base") if verb == Verb::Replay => {
+                edition = domhringr_record_tree::Edition::Base;
+            },
             | lexopt::Arg::Value(operand) => operands.push(operand),
             | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
@@ -1944,6 +1966,7 @@ fn replay_command(
         | (Verb::Replay, Some(tree), None, None) => Ok(Command::Replay {
             tree: read_tree(&tree)?,
             replaying,
+            edition,
         }),
         | (Verb::Evidence, Some(tree), Some(digest), None) => {
             let tree = read_tree(&tree)?;
@@ -2215,6 +2238,7 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
         | Some("report") => Ok(Verb::Report),
         | Some("handoff") => Ok(Verb::Handoff),
         | Some("retire") => Ok(Verb::Retire),
+        | Some("pause") => Ok(Verb::Pause),
         | Some("replay") => Ok(Verb::Replay),
         | Some("evidence") => Ok(Verb::Evidence),
         | Some("drift") => Ok(Verb::Drift),
@@ -2757,8 +2781,23 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             let peer = Peer::open(&state, identity)?;
             on_current(peer, tree, |dispatch| Receipt::retire(tree, dispatch)).await
         },
-        | Command::Replay { tree, replaying } => {
-            replay(Peer::open(&state, identity)?, &evidence, tree, replaying).await
+        | Command::Pause { tree } => {
+            let peer = Peer::open(&state, identity)?;
+            on_current(peer, tree, |dispatch| Receipt::pause(tree, dispatch)).await
+        },
+        | Command::Replay {
+            tree,
+            replaying,
+            edition,
+        } => {
+            replay(
+                Peer::open(&state, identity)?,
+                &evidence,
+                tree,
+                replaying,
+                edition,
+            )
+            .await
         },
         | Command::Evidence {
             tree,
@@ -3343,11 +3382,13 @@ async fn replay(
     evidence: &Evidence,
     tree: TreeId,
     replaying: Replaying,
+    edition: domhringr_record_tree::Edition,
 ) -> Result<(), RunError>
 {
     let Replaying::Dial { toward, at } = replaying
     else {
-        let view = peer.view(tree).await?;
+        let view = peer.view_at(tree, edition).await?;
+        emit_refusals(&view)?;
         let gathered = gather(evidence, view.task(), Source::Local).await;
         emit(view.task())?;
         return attest(gathered);
@@ -3362,14 +3403,14 @@ async fn replay(
     let route = peer.route(tree, aim, at).await?;
     let (view, gathered) = match route {
         | Route::Itself => {
-            let view = peer.view(tree).await?;
+            let view = peer.view_at(tree, edition).await?;
             let gathered = gather(evidence, view.task(), Source::Local).await;
             (view, gathered)
         },
         | Route::Book { ref remote, .. } | Route::Given { ref remote } => {
             let node = peer.bind(BindPort::Ephemeral, &[]).await?;
             let synced = node.sync(remote, tree).await;
-            let view = node.peer().view(tree).await;
+            let view = node.peer().view_at(tree, edition).await;
             let gathered = match (&synced, &view) {
                 | (&Ok(_), &Ok(ref view)) => {
                     let source = Source::Remote {
@@ -3386,8 +3427,31 @@ async fn replay(
             (view?, gathered)
         },
     };
+    emit_refusals(&view)?;
     emit(&format_args!("{}{}", Reached { tree, route }, view.task()))?;
     attest(gathered)
+}
+
+/// Print every named conformance or authority refusal in a replayed view.
+///
+/// # Specification
+/// - ensures: each refused commit is printed with its refusal, never omitted.
+/// - fails: standard-output errors remain [`RunError::Output`].
+/// - panics: none.
+///
+/// # Errors
+/// [`RunError::Output`] if stdout cannot be written or flushed.
+///
+/// # Adequacy
+/// - hypothesis: L3 the process witness observes the pause receipt's identity,
+///   name and expected state under Base, and its admission under Paused.
+/// - witness: `seat::tests::two_processes_replay_session_editions`
+fn emit_refusals(view: &domhringr_record_tree::View) -> Result<(), RunError>
+{
+    for &(commit, ref refusal) in view.refused() {
+        emit(&format_args!("refused {commit} {refusal}\n"))?;
+    }
+    Ok(())
 }
 
 /// Where evidence the local store lacks is fetched from.
@@ -3981,6 +4045,7 @@ mod tests
             }),
             (vec!["--state", "dir", "replay", TREE], Command::Replay {
                 tree,
+                edition: domhringr_record_tree::Edition::Paused,
                 replaying: Replaying::Dial {
                     toward: Toward::Seat,
                     at: At::Book,
@@ -3990,6 +4055,7 @@ mod tests
                 vec!["--state", "dir", "replay", &peer_option, TREE, &at_option],
                 Command::Replay {
                     tree,
+                    edition: domhringr_record_tree::Edition::Paused,
                     replaying: Replaying::Dial {
                         toward: Toward::Peer(peer_key),
                         at: named.at.clone(),
@@ -4000,6 +4066,7 @@ mod tests
                 vec!["--state", "dir", "replay", "--local", TREE],
                 Command::Replay {
                     tree,
+                    edition: domhringr_record_tree::Edition::Paused,
                     replaying: Replaying::Local,
                 },
             ),
