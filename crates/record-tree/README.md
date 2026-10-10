@@ -169,6 +169,8 @@ Reversal: a dispatch that names several seats or slots, which needs a slot per s
 
 Every dispatch names its numeric protocol edition. Edition 1 requires dispatch → report⁺ → handoff or retire; edition 2 also permits `Pause { dispatch }`, retaining the holder and report phase without suspending a process. A peer refuses every slot move under an uncompiled edition by number, never under its own latest protocol. Editionless dispatches denote edition 1; their pause and ordering refusals remain refusals. `View::transport(dispatch, target)` locally derives and kernel-checks transport of the complete admitted play between named editions without changing receipts. Pause occupies tag `0x12`.
 
+Every task channel replays through the monitor under that edition: judge per verdict, runner per runner and dispatch, operator decision per dispatch. The judge sends one verdict and one grading; the runner may verify repeatedly; the operator chooses once, with only land continuing to a landing. Under a current dispatch, missing causal predecessors replay on empty channels. Duplicate grading, decision and landing receipts are refused as `protocol edition <edition> <move> <reason>`, naming the offending move. Canonical order chooses between concurrent candidates; a refused candidate consumes no channel state. Authorship, grading contents and the relation to the current dispatch remain fold checks.
+
 **A receipt names evidence by its value manifest and carries no bytes.** A report's content, a verdict's transcript and a verification's output are committed into gandr's value plane as chunk DAGs, and the receipt names each by its `ManifestDigest`: the BLAKE3 digest of the manifest, which binds the root, the length and the profile the value was cut under. `domhringr-record-evidence` holds the bytes beside the tree store and reads them back by that digest, from its own store or fetched from the peer that holds them; `Task::evidence` lists every digest a task names with that peer — a report's author, a verdict's judge, a verification's runner — in canonical order. The tree records what was produced; the evidence plane holds it, so an operator on another machine reads what it judges.
 
 - the bytes in the receipt: a tree grows with every artifact, and a sync carries what only a reader of that artifact needs.
@@ -192,47 +194,39 @@ Reversal: a verdict that settles the task — accepting or reopening the attempt
 
 Reversal: a check that reads the output and error streams apart, which needs a digest per stream.
 
-**A grading is admitted from its verdict's judge alone, of a verdict in its causal past.** A `Graded { verdict, grades, composed }` names the verdict it grades and gives one `Grade` per answer, in the verdict's order — `met`, `unmet`, `undecided`, or `refused` for an unread ruling — and the grades composed across the rubric. The task, rubric and questions are the verdict's, so the grading names them through it. The fold checks these conditions in order:
-
-| Refusal | Condition |
-| ------- | --------- |
-| `no verdict` | No admitted verdict among the grading's ancestors. |
-| `not judge` | The author is not the verdict's judge. |
-| `misgraded` | The grade count differs from the answer count, or a grade is refused other than exactly where its ruling is unread. |
-| `miscomposed` | The composed grade differs from `compose(&grades)`. |
-| `not current` | The verdict's dispatch is no longer current. |
+**A verdict is graded once, by its judge.** `Graded { verdict, grades, composed }` names the verdict and one `Grade` per answer in its order: `met`, `unmet`, `undecided`, or `refused` exactly for an unread ruling. The rubric and question identities come from the verdict. The judge channel requires the verdict in the grading's causal past and refuses a second grading by name. Wrong authorship is `not judge`, wrong answer shape `misgraded`, wrong composition `miscomposed`, and a superseded dispatch `not current`.
 
 **Composition is checked from the receipt alone.** `compose` lives beside `Grade`, shared by writers and the fold without an added dependency. Any unmet grade makes the conjunction unmet; otherwise any refused grade makes it refused; otherwise any undecided grade makes it undecided; otherwise it is met, including the empty composition. Refused gradings remain in the DAG without advancing the task; `open` prints their commit anchors and `miscomposed`. An admitted grading is a task step naming its dispatch, verdict, rubric, question grades and composition.
 
 - the task and the rubric in the grading: a second statement of what the verdict records, free to disagree with it.
-- the grades inside the verdict: the judge's readout and the rubric's band are two acts, and a band revised later grades the same readout again without asking the judge again.
+- the grades inside the verdict: the readout and its classification would lose their separate receipt identities.
 - a grading from any member: two keys could grade one verdict differently, and the grades would not be the asking key's.
 - the fold recomputing individual grades: it needs the rubric's band, which is not in the record.
 
 Reversal: a reader holding the rubric as evidence can also check each grade against its band. Rubrics with a rule other than conjunction require that rule to be named in the record before the fold can check it.
 
-**A decision is admitted from the operator it names, on the current dispatch.** A `Decide { dispatch, operator, decision }` records what the operator decides of the attempt the dispatch made: `land` its change, `rework <reason>`, the reason one line as a report's summary is, or `abandon` the task. The operator is a role, the one that dispatches — the owner or a member — and the receipt names the key in that role that decided, as a verdict names its judge: one owner per choice. A decision whose author holds no operator role is refused `no authority`, one whose author is not the operator it names `not operator`, one on another dispatch `not current`; an admitted decision is a step of the task, printed `decide <commit> <dispatch> <operator> <decision>`, and advances the attempt to decided. A later decision on the same dispatch replaces an earlier one as the attempt's progress.
+**One operator decision binds each dispatch.** `Decide { dispatch, operator, decision }` selects `land`, `rework <reason>` or `abandon`. The operator is the owner or a granted member, and signs the key the receipt names. The monitor refuses a second choice, including one concurrent with the first. Rework and abandon end this decision channel; land requires one later landing. A changed mind requires a fresh dispatch. Missing operator authority is `no authority`, wrong identity `not operator`, and another dispatch `not current`.
 
-The receipt the design sketched was `Decide { task, verdict }`. A tree is the task, so the receipt names the attempt it decides, its dispatch, as a report and a verdict do; and `verdict` already names the judge's receipt, so what the operator decides is a `decision`.
+The tree identifies the task; the decision names its dispatch. `Verdict` names the judge's receipt, while `decision` names the operator's choice.
 
 - the signer alone, no operator field: the decision would say who made it only through the commit, unlike every other ruling the fold admits from the key it names.
 - the decision as a verdict or a grading: a judge rules and grades, and its key holds no authority over the attempt; deciding on those readings is the operator's act.
-- one decision per dispatch, a second refused: an operator who reconsiders — reworks, then lands after a check by hand — would need a fresh dispatch to say so.
+- repeated decisions on one dispatch: competing choices would overwrite one another rather than bind once.
 
-Reversal: a decision that binds once made, which needs the fold to refuse a second on the same dispatch.
+Reversal: an explicit reconsideration protocol, with independently checked widening and a specified relation to the original choice.
 
-**A landing is admitted from its decision's operator alone, carrying out a decision to land in its causal past.** A `Landed { decided, merge }` names the decision it carries out by commit and the revision the repository's default branch stood at once the change was in: the merge commit, or the change's own commit when the branch fast-forwarded to it, as git's object id (`Revision`, 20 bytes in a SHA-1 repository, 32 in a SHA-256 one, printed as 40 or 64 lowercase hex digits). A landing naming no admitted decision among its ancestors is refused `no decision`, one whose author is not that decision's operator `not operator`, one whose decision is to rework or abandon `not land`, and one whose decision's dispatch is no longer current `not current`; an admitted landing is a step of the task, printed `landed <commit> <dispatch> <decision> <operator> <revision>`, and advances the attempt to landed. The landing names its operator through the decision, as a grading names its judge through the verdict. The fold never checks that the revision holds the change: the repository is not in the record.
+**A landing carries out its operator's one decision to land.** `Landed { decided, merge }` names that decision and the repository revision after landing: a merge commit or a fast-forwarded change, represented by `Revision` as 20 or 32 bytes. The decision channel refuses landing without a causal decision, after rework or abandon, and after an earlier landing. Every order refusal names `landed`. Wrong authorship remains `not operator`, and a superseded dispatch `not current`. An admitted landing records its dispatch, decision, operator and revision as a task step.
 
-The receipt the design sketched was `Landed { task, merge }`; it names the decision instead, for the first reason below.
+The landing names the decision commit, retaining the exact choice it carries out.
 
-- the landing naming the task or the dispatch: two decisions on one dispatch would leave unsaid which one it carries out, and a landing could not be told from one made after a rework.
+- the landing naming only the task or dispatch: it would omit the specific admitted choice it carries out.
 - a landing from any operator: two operators could land one decision, and the landing would not be the deciding key's.
 - the revision as text: a second spelling of a fixed-width id, and a parser in the decoder.
 - the repository or the branch in the receipt: where the repository lives is the operator's configuration, never the record's.
 
 Reversal: a repository the record can reach, when the fold checks that the revision holds the reported change.
 
-**An attempt's progress only advances.** A verification, a grading, a decision and a landing on the current dispatch each advance its progress, ranked in that order; within a rank the latest in canonical order holds, and a lower rank never undoes a higher, so a verification after a grading leaves the attempt graded, and a decision after a landing leaves it landed. The standing line prints the furthest. A verdict moves nothing: it is graded before it counts. A new dispatch is a new attempt, unchecked.
+**An attempt's progress only advances.** Verification, grading, decision and landing rank in that order. Within a rank the latest admitted step in canonical order holds; a lower rank cannot undo a higher one. Verification after grading leaves the attempt graded. A verdict moves nothing until graded. Second decisions and landings are refused rather than ranked. A fresh dispatch starts an unchecked attempt.
 
 - the latest of any kind: a verifier run after a landing would read the task as no longer landed.
 - one standing per kind: a reader would rebuild the lifecycle the fold already orders.

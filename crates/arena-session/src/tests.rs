@@ -9,6 +9,8 @@ use gandr_core_session::Refusal as Reason;
 use gandr_core_session::ReplayError;
 
 use crate::Arena;
+use crate::Channel;
+use crate::Choice;
 use crate::Edition;
 use crate::Movement;
 use crate::Play;
@@ -102,7 +104,7 @@ fn named_refusal_preserves_the_prefix()
             ..
         })
     ));
-    let operator = arena.session(Edition::ONE).unwrap().dual();
+    let operator = arena.session(Edition::ONE, Channel::Slot).unwrap().dual();
     let payload = |identity| gandr_core_session::Payload { identity, digest };
     let run = [
         Move::Send(payload(crate::DISPATCH)),
@@ -168,13 +170,16 @@ fn pause_is_certified_and_old_runs_transport()
     let transported = arena.transport(Edition::ONE, Edition::TWO, &old).unwrap();
     assert_eq!(transported.moves(), old.moves());
     assert_eq!(
-        gandr_core_session::replay(arena.session(Edition::TWO).unwrap(), transported.moves()),
+        gandr_core_session::replay(
+            arena.session(Edition::TWO, Channel::Slot).unwrap(),
+            transported.moves()
+        ),
         Ok(Completion)
     );
     assert_eq!(
         gandr_core_session::decide(
-            arena.session(Edition::TWO).unwrap(),
-            arena.session(Edition::ONE).unwrap(),
+            arena.session(Edition::TWO, Channel::Slot).unwrap(),
+            arena.session(Edition::ONE, Channel::Slot).unwrap(),
             gandr_core_session::Relation::Subtype
         ),
         Ok(Decision::Unrelated)
@@ -199,7 +204,10 @@ fn pause_is_certified_and_old_runs_transport()
             .unwrap();
     }
     assert_eq!(
-        gandr_core_session::replay(arena.session(Edition::TWO).unwrap(), paused.moves()),
+        gandr_core_session::replay(
+            arena.session(Edition::TWO, Channel::Slot).unwrap(),
+            paused.moves()
+        ),
         Ok(Completion)
     );
     assert!(matches!(
@@ -233,7 +241,7 @@ fn unknown_editions_never_replay_as_known_protocols()
     for edition in unknowns {
         assert_eq!(edition.to_string().parse::<Edition>().unwrap(), edition);
         assert!(
-            matches!(arena.session(edition), Err(crate::UnknownEdition(named)) if named == edition)
+            matches!(arena.session(edition, Channel::Slot), Err(crate::UnknownEdition(named)) if named == edition)
         );
         let mut play = Play::default();
         for movement in [
@@ -252,11 +260,258 @@ fn unknown_editions_never_replay_as_known_protocols()
             );
             assert!(play.moves().is_empty());
         }
+        for (channel, movement) in [
+            (Channel::Judge, Movement::Verdict),
+            (Channel::Runner, Movement::Verified),
+            (Channel::Decision, Movement::Decide(Choice::Land)),
+        ] {
+            let mut channel_play = Play::new(channel);
+            let refused = channel_play
+                .record(&arena, edition, movement, PayloadDigest([2; 32]))
+                .unwrap_err();
+            assert_eq!((refused.edition, refused.movement), (edition, movement));
+            assert_eq!(
+                refused.reason,
+                crate::Reason::Unknown(crate::UnknownEdition(edition))
+            );
+            assert_eq!(channel_play.moves(), &[]);
+        }
         assert!(
             matches!(arena.transport(Edition::ONE, edition, &play), Err(crate::ArenaError::Unknown(crate::UnknownEdition(named))) if named == edition)
         );
         assert!(
             matches!(arena.transport(edition, Edition::ONE, &play), Err(crate::ArenaError::Unknown(crate::UnknownEdition(named))) if named == edition)
         );
+    }
+}
+
+#[test]
+fn task_channels_replay_with_their_duals()
+{
+    let arena = Arena::new().unwrap();
+    let digest = PayloadDigest([11; 32]);
+    let editions = if cfg!(feature = "edition-2") {
+        vec![Edition::ONE, Edition::TWO]
+    }
+    else {
+        vec![Edition::ONE]
+    };
+    for edition in editions {
+        for (channel, movements, expected) in [
+            (
+                Channel::Judge,
+                vec![Movement::Verdict, Movement::Graded],
+                Progress::Complete,
+            ),
+            (
+                Channel::Runner,
+                vec![Movement::Verified, Movement::Verified],
+                Progress::Open(Action::Send(crate::VERIFIED)),
+            ),
+            (
+                Channel::Decision,
+                vec![Movement::Decide(Choice::Land), Movement::Landed],
+                Progress::Complete,
+            ),
+            (
+                Channel::Decision,
+                vec![Movement::Decide(Choice::Rework)],
+                Progress::Complete,
+            ),
+            (
+                Channel::Decision,
+                vec![Movement::Decide(Choice::Abandon)],
+                Progress::Complete,
+            ),
+        ] {
+            let mut play = Play::new(channel);
+            let mut progress = Progress::Open(Action::End);
+            for movement in movements {
+                progress = play.record(&arena, edition, movement, digest).unwrap();
+            }
+            assert_eq!(progress, expected);
+            let dual = arena.session(edition, channel).unwrap().dual();
+            let opposite = play
+                .moves()
+                .iter()
+                .map(|movement| match *movement {
+                    | Move::Send(payload) => Move::Receive(payload),
+                    | Move::Receive(payload) => Move::Send(payload),
+                    | Move::Select(ref label) => Move::Offer(label.clone()),
+                    | Move::Offer(ref label) => Move::Select(label.clone()),
+                    | Move::End => Move::End,
+                })
+                .collect::<Vec<_>>();
+            match expected {
+                | Progress::Complete => {
+                    assert_eq!(gandr_core_session::replay(&dual, &opposite), Ok(Completion));
+                },
+                | Progress::Open(_) => assert!(
+                    matches!(gandr_core_session::replay(&dual, &opposite), Err(ReplayError::IncompleteRun { expected: Action::Receive(identity), .. }) if identity == crate::VERIFIED)
+                ),
+            }
+        }
+    }
+}
+
+#[test]
+fn task_channels_refuse_missing_and_repeated_moves()
+{
+    let arena = Arena::new().unwrap();
+    let digest = PayloadDigest([12; 32]);
+    for (channel, prefix, movement, reason) in [
+        (
+            Channel::Judge,
+            vec![],
+            Movement::Graded,
+            Reason::WrongPayloadIdentity,
+        ),
+        (
+            Channel::Decision,
+            vec![],
+            Movement::Landed,
+            Reason::WrongDirection,
+        ),
+        (
+            Channel::Judge,
+            vec![Movement::Verdict, Movement::Graded],
+            Movement::Graded,
+            Reason::ResumeAfterEnd,
+        ),
+        (
+            Channel::Decision,
+            vec![Movement::Decide(Choice::Land)],
+            Movement::Decide(Choice::Rework),
+            Reason::WrongDirection,
+        ),
+        (
+            Channel::Decision,
+            vec![Movement::Decide(Choice::Land), Movement::Landed],
+            Movement::Landed,
+            Reason::ResumeAfterEnd,
+        ),
+        (
+            Channel::Decision,
+            vec![Movement::Decide(Choice::Rework)],
+            Movement::Landed,
+            Reason::ResumeAfterEnd,
+        ),
+        (
+            Channel::Decision,
+            vec![Movement::Decide(Choice::Abandon)],
+            Movement::Decide(Choice::Land),
+            Reason::ResumeAfterEnd,
+        ),
+    ] {
+        let mut play = Play::new(channel);
+        for accepted in prefix {
+            play.record(&arena, Edition::ONE, accepted, digest).unwrap();
+        }
+        let before = play.clone();
+        let refusal = play
+            .record(&arena, Edition::ONE, movement, digest)
+            .unwrap_err();
+        assert_eq!(
+            (refusal.edition, refusal.movement),
+            (Edition::ONE, movement)
+        );
+        assert!(
+            matches!(refusal.reason, crate::Reason::Replay(ReplayError::Refused { reason: actual, .. }) if actual == reason)
+        );
+        assert_eq!(play, before);
+    }
+}
+
+#[cfg(feature = "edition-2")]
+#[test]
+fn decision_label_widening_transports_complete_plays()
+{
+    let mut arena = Arena::new().unwrap();
+    // A fixture-only label exercises widening without defining a new receipt.
+    arena.paused.decision = gandr_core_session::Session::new(
+        vec![
+            gandr_core_session::Node::Select(alloc::collections::BTreeMap::from([
+                ("land".into(), gandr_core_session::NodeId(1)),
+                ("rework".into(), gandr_core_session::NodeId(4)),
+                ("abandon".into(), gandr_core_session::NodeId(6)),
+                ("defer".into(), gandr_core_session::NodeId(8)),
+            ])),
+            gandr_core_session::Node::Send(crate::DECIDE, gandr_core_session::NodeId(2)),
+            gandr_core_session::Node::Send(crate::LANDED, gandr_core_session::NodeId(3)),
+            gandr_core_session::Node::End,
+            gandr_core_session::Node::Send(crate::DECIDE, gandr_core_session::NodeId(5)),
+            gandr_core_session::Node::End,
+            gandr_core_session::Node::Send(crate::DECIDE, gandr_core_session::NodeId(7)),
+            gandr_core_session::Node::End,
+            gandr_core_session::Node::Send(crate::DECIDE, gandr_core_session::NodeId(9)),
+            gandr_core_session::Node::End,
+        ],
+        gandr_core_session::NodeId(0),
+    )
+    .unwrap();
+    let deferred = [
+        Move::Select("defer".into()),
+        Move::Send(gandr_core_session::Payload {
+            identity: crate::DECIDE,
+            digest: PayloadDigest([15; 32]),
+        }),
+        Move::End,
+    ];
+    assert_eq!(
+        gandr_core_session::replay(
+            arena.session(Edition::TWO, Channel::Decision).unwrap(),
+            &deferred
+        ),
+        Ok(Completion)
+    );
+    assert!(matches!(
+        gandr_core_session::replay(
+            arena.session(Edition::ONE, Channel::Decision).unwrap(),
+            &deferred
+        ),
+        Err(ReplayError::Refused {
+            reason: Reason::WrongLabel,
+            ..
+        })
+    ));
+    for choice in [Choice::Land, Choice::Rework, Choice::Abandon] {
+        let mut play = Play::new(Channel::Decision);
+        play.record(
+            &arena,
+            Edition::ONE,
+            Movement::Decide(choice),
+            PayloadDigest([13; 32]),
+        )
+        .unwrap();
+        if choice == Choice::Land {
+            assert!(matches!(
+                arena.transport(Edition::ONE, Edition::TWO, &play),
+                Err(crate::ArenaError::Transport(
+                    gandr_core_session::certified::TransportError::Replay(
+                        ReplayError::IncompleteRun { .. }
+                    )
+                ))
+            ));
+            play.record(
+                &arena,
+                Edition::ONE,
+                Movement::Landed,
+                PayloadDigest([14; 32]),
+            )
+            .unwrap();
+        }
+        let transported = arena.transport(Edition::ONE, Edition::TWO, &play).unwrap();
+        assert_eq!(transported, play);
+        assert_eq!(
+            gandr_core_session::replay(
+                arena.session(Edition::TWO, Channel::Decision).unwrap(),
+                transported.moves()
+            ),
+            Ok(Completion)
+        );
+        assert!(matches!(
+            arena.transport(Edition::TWO, Edition::ONE, &transported),
+            Err(crate::ArenaError::NotWidening { .. })
+        ));
     }
 }

@@ -27,7 +27,7 @@ One row per directory: the directory, its package, and what it is.
 
 ```text
 crates/
-├── arena-session/      domhringr-arena-session      the Seat protocol and its dual, conformance by replay, named move refusals and kernel-certified pause widening
+├── arena-session/      domhringr-arena-session      task channels and their duals, conformance by replay, named move refusals and kernel-certified label widening
 ├── judge-oracle/       domhringr-judge-oracle       the judge: a lettered question about a transcript, read from a model's next-token distribution over an OpenAI-compatible endpoint into a letter and a probability per option, or a refusal by its reason; a table of rulings for tests and replay
 ├── record-evidence/    domhringr-record-evidence    the evidence plane: reports, verifier outputs and transcripts committed into gandr's value plane as chunk DAGs under one measured, pinned profile, named by manifest digest, read back through the profile check and the closure walk, and fetched from a holder over a chunk stream under its own ALPN
 ├── record-tree/        domhringr-record-tree        the sedimentree: receipts naming evidence by manifest digest, the fold to a view, a book of reachable peers and a task, anchors naming a tree, a path or a commit by key, DNS name or label, a tree stored in redb and synced over iroh beside other protocols

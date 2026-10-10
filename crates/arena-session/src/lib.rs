@@ -1,4 +1,4 @@
-//! Numbered Seat protocols, endpoint replay, and kernel-certified widening.
+//! Numbered task channels, endpoint replay, and kernel-certified widening.
 
 #![cfg_attr(
     dylint_lib = "quenchant_dylints",
@@ -122,7 +122,34 @@ impl fmt::Display for Edition
     }
 }
 
-/// A move in the slot's dialogue. Handoff and retirement close this endpoint.
+/// One independently replayed binary channel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Channel
+{
+    /// One slot play per dispatch.
+    #[default]
+    Slot,
+    /// One verdict and grading per verdict commit.
+    Judge,
+    /// Repeated verifications per runner and dispatch.
+    Runner,
+    /// One operator choice per dispatch.
+    Decision,
+}
+
+/// The operator's selection; receipt contents remain opaque to the arena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Choice
+{
+    /// Decide to land, then record the landing.
+    Land,
+    /// Request a new dispatch for rework.
+    Rework,
+    /// Abandon this dispatch.
+    Abandon,
+}
+
+/// A receipt move on a task channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Movement
 {
@@ -136,6 +163,16 @@ pub enum Movement
     Retire,
     /// The current holder pauses, retaining the slot.
     Pause,
+    /// The judge supplies its verdict.
+    Verdict,
+    /// The judge grades its verdict and closes the channel.
+    Graded,
+    /// The runner supplies another verification.
+    Verified,
+    /// The operator selects its decision once.
+    Decide(Choice),
+    /// The deciding operator records the landing and closes the channel.
+    Landed,
 }
 
 impl fmt::Display for Movement
@@ -156,6 +193,11 @@ impl fmt::Display for Movement
             | Self::Handoff => "handoff",
             | Self::Retire => "retire",
             | Self::Pause => "pause",
+            | Self::Verdict => "verdict",
+            | Self::Graded => "graded",
+            | Self::Verified => "verified",
+            | Self::Decide(_) => "decide",
+            | Self::Landed => "landed",
         })
     }
 }
@@ -166,7 +208,7 @@ pub enum Progress
 {
     /// The prefix conforms and owes this next action.
     Open(Action),
-    /// Handoff or retirement closed the endpoint.
+    /// The channel reached its explicit end.
     Complete,
 }
 
@@ -239,15 +281,39 @@ const RETIRE: ValueTypeId = ValueTypeId([4; 32]);
 /// The pause receipt type.
 const PAUSE: ValueTypeId = ValueTypeId([5; 32]);
 
+/// The verdict receipt type.
+const VERDICT: ValueTypeId = ValueTypeId([6; 32]);
+/// The grading receipt type.
+const GRADED: ValueTypeId = ValueTypeId([7; 32]);
+/// The verification receipt type.
+const VERIFIED: ValueTypeId = ValueTypeId([8; 32]);
+/// The decision receipt type.
+const DECIDE: ValueTypeId = ValueTypeId([9; 32]);
+/// The landing receipt type.
+const LANDED: ValueTypeId = ValueTypeId([10; 32]);
+
+/// The binary protocols compiled under one edition.
+struct Channels
+{
+    /// The slot holder's endpoint.
+    slot: Session,
+    /// The judge's endpoint.
+    judge: Session,
+    /// The runner's endpoint.
+    runner: Session,
+    /// The deciding operator's endpoint.
+    decision: Session,
+}
+
 /// Validated endpoint types keyed by their compiled edition numbers.
 #[cfg_attr(not(feature = "edition-2"), repr(transparent))]
 pub struct Arena
 {
-    /// Edition 1's slot protocol.
-    base: Session,
+    /// Edition 1's task channels.
+    base: Channels,
     /// Edition 2's protocol; absent from edition-1-only binaries.
     #[cfg(feature = "edition-2")]
-    paused: Session,
+    paused: Channels,
 }
 
 impl Arena
@@ -268,12 +334,13 @@ impl Arena
     ///   peer-local default; directed traces pin the compiled protocols.
     /// - witness: `tests::unknown_editions_never_replay_as_known_protocols`
     /// - witness: `tests::named_refusal_preserves_the_prefix`
+    /// - witness: `tests::task_channels_replay_with_their_duals`
     #[inline]
     pub fn new() -> Result<Self, ArenaError>
     {
-        let base = session(Edition::ONE)?;
+        let base = channels(Edition::ONE)?;
         #[cfg(feature = "edition-2")]
-        let paused = session(Edition::TWO)?;
+        let paused = channels(Edition::TWO)?;
         Ok(Self {
             base,
             #[cfg(feature = "edition-2")]
@@ -281,10 +348,10 @@ impl Arena
         })
     }
 
-    /// Borrow the protocol named by an edition, never a substitute.
+    /// Borrow one channel under the named edition, never a substitute.
     ///
     /// # Specification
-    /// - ensures: returns exactly the named compiled protocol.
+    /// - ensures: returns the selected channel of exactly the named edition.
     /// - fails: unknown numbers name themselves in `UnknownEdition`.
     /// - panics: none.
     ///
@@ -299,14 +366,21 @@ impl Arena
     pub const fn session(
         &self,
         edition: Edition,
+        channel: Channel,
     ) -> Result<&Session, UnknownEdition>
     {
-        match edition {
-            | Edition::ONE => Ok(&self.base),
+        let channels = match edition {
+            | Edition::ONE => &self.base,
             #[cfg(feature = "edition-2")]
-            | Edition::TWO => Ok(&self.paused),
-            | unknown => Err(UnknownEdition(unknown)),
-        }
+            | Edition::TWO => &self.paused,
+            | unknown => return Err(UnknownEdition(unknown)),
+        };
+        Ok(match channel {
+            | Channel::Slot => &channels.slot,
+            | Channel::Judge => &channels.judge,
+            | Channel::Runner => &channels.runner,
+            | Channel::Decision => &channels.decision,
+        })
     }
 
     /// Re-derive and kernel-check the widening between two named editions,
@@ -336,8 +410,8 @@ impl Arena
         play: &Play,
     ) -> Result<Play, ArenaError>
     {
-        let source = self.session(source_edition)?;
-        let target = self.session(target_edition)?;
+        let source = self.session(source_edition, play.channel)?;
+        let target = self.session(target_edition, play.channel)?;
         let evidence = match gandr_core_session::relate(
             source,
             target,
@@ -357,6 +431,11 @@ impl Arena
         let string = terms.value_type_base(BaseType::String);
         let numeric = terms.value_type_base(BaseType::Numeric);
         let pair = terms.value_type_product(unit, unit);
+        let verdict = terms.value_type_product(integer, unit);
+        let graded = terms.value_type_product(string, unit);
+        let verified = terms.value_type_product(numeric, unit);
+        let decide = terms.value_type_product(unit, integer);
+        let landed = terms.value_type_product(unit, string);
         let payloads = PayloadCodes(
             [
                 (DISPATCH, integer),
@@ -364,6 +443,11 @@ impl Arena
                 (HANDOFF, numeric),
                 (RETIRE, unit),
                 (PAUSE, pair),
+                (VERDICT, verdict),
+                (GRADED, graded),
+                (VERIFIED, verified),
+                (DECIDE, decide),
+                (LANDED, landed),
             ]
             .into(),
         );
@@ -403,21 +487,39 @@ impl Arena
             &play.moves,
             ReplayBudget::DEFAULT,
         )?;
-        Ok(Play { moves })
+        Ok(Play {
+            channel: play.channel,
+            moves,
+        })
     }
 }
 
-/// State owned by one attempt; bodies stay behind their digests.
+/// One channel's accepted prefix; bodies stay behind their digests.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[repr(transparent)]
 pub struct Play
 {
-    /// Only admitted endpoint moves, including retirement's explicit close.
+    /// The endpoint whose session interprets this prefix.
+    channel: Channel,
+    /// Only admitted endpoint moves, including explicit closes.
     moves: Vec<Move>,
 }
 
 impl Play
 {
+    /// Start an empty prefix on the selected channel.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub const fn new(channel: Channel) -> Self
+    {
+        Self {
+            channel,
+            moves: Vec::new(),
+        }
+    }
+
     /// Append a receipt action only if the named protocol admits its prefix.
     ///
     /// # Specification
@@ -436,6 +538,7 @@ impl Play
     ///   distinguishes refusal from prefix mutation.
     /// - witness: `tests::named_refusal_preserves_the_prefix`
     /// - witness: `tests::unknown_editions_never_replay_as_known_protocols`
+    /// - witness: `tests::task_channels_refuse_missing_and_repeated_moves`
     #[inline]
     pub fn record(
         &mut self,
@@ -445,7 +548,7 @@ impl Play
         digest: PayloadDigest,
     ) -> Result<Progress, Box<Refusal>>
     {
-        let session = arena.session(edition).map_err(|unknown| {
+        let session = arena.session(edition, self.channel).map_err(|unknown| {
             Box::new(Refusal {
                 edition,
                 movement,
@@ -459,16 +562,32 @@ impl Play
             | Movement::Handoff => (Some("handoff"), HANDOFF),
             | Movement::Retire => (Some("retire"), RETIRE),
             | Movement::Pause => (Some("pause"), PAUSE),
+            | Movement::Verdict => (None, VERDICT),
+            | Movement::Graded => (None, GRADED),
+            | Movement::Verified => (None, VERIFIED),
+            | Movement::Decide(Choice::Land) => (Some("land"), DECIDE),
+            | Movement::Decide(Choice::Rework) => (Some("rework"), DECIDE),
+            | Movement::Decide(Choice::Abandon) => (Some("abandon"), DECIDE),
+            | Movement::Landed => (None, LANDED),
         };
         let payload = Payload { identity, digest };
         if let Some(label) = label {
             self.moves.push(Move::Select(label.into()));
-            self.moves.push(Move::Send(payload));
         }
-        else {
+        if movement == Movement::Dispatch {
             self.moves.push(Move::Receive(payload));
         }
-        if matches!(movement, Movement::Retire | Movement::Handoff) {
+        else {
+            self.moves.push(Move::Send(payload));
+        }
+        if matches!(
+            movement,
+            Movement::Retire
+                | Movement::Handoff
+                | Movement::Graded
+                | Movement::Landed
+                | Movement::Decide(Choice::Rework | Choice::Abandon)
+        ) {
             self.moves.push(Move::End);
         }
         // economy: replay each canonical prefix because the upstream monitor has no
@@ -527,6 +646,67 @@ impl Play
     {
         &self.moves
     }
+}
+
+/// Form every binary channel under a compiled edition.
+///
+/// # Specification
+/// - ensures: judge sends verdict then grading once; runner repeats
+///   verification; operator selects once and only land continues to a landing.
+/// - fails: malformed finite session syntax returns its type error.
+/// - panics: none.
+///
+/// # Errors
+/// - [`TypeError`]: invalid channel syntax.
+///
+/// # Adequacy
+/// - hypothesis: L3 directed runs distinguish ordering, repetition and each
+///   terminal choice; structural duals accept the opposite endpoint moves.
+/// - witness: `tests::task_channels_replay_with_their_duals`
+///
+/// [`TypeError`]: gandr_core_session::TypeError
+fn channels(edition: Edition) -> Result<Channels, gandr_core_session::TypeError>
+{
+    let slot = session(edition)?;
+    let judge = Session::new(
+        vec![
+            Node::Send(VERDICT, NodeId(1)),
+            Node::Send(GRADED, NodeId(2)),
+            Node::End,
+        ],
+        NodeId(0),
+    )?;
+    let runner = Session::new(
+        vec![
+            Node::Mu(NodeId(1)),
+            Node::Send(VERIFIED, NodeId(2)),
+            Node::Var(NodeId(0)),
+        ],
+        NodeId(0),
+    )?;
+    let decision = Session::new(
+        vec![
+            Node::Select(BTreeMap::from([
+                ("land".into(), NodeId(1)),
+                ("rework".into(), NodeId(4)),
+                ("abandon".into(), NodeId(6)),
+            ])),
+            Node::Send(DECIDE, NodeId(2)),
+            Node::Send(LANDED, NodeId(3)),
+            Node::End,
+            Node::Send(DECIDE, NodeId(5)),
+            Node::End,
+            Node::Send(DECIDE, NodeId(7)),
+            Node::End,
+        ],
+        NodeId(0),
+    )?;
+    Ok(Channels {
+        slot,
+        judge,
+        runner,
+        decision,
+    })
 }
 
 /// Form the finite slot protocol for one compiled edition.
