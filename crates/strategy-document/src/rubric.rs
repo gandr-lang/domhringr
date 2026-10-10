@@ -346,38 +346,6 @@ impl Band
     }
 }
 
-/// Compose a rubric's grades: the conjunction of its criteria.
-///
-/// # Specification
-/// - ensures: [`Grade::Unmet`] when any grade is unmet; otherwise
-///   [`Grade::Refused`] when any is refused; otherwise [`Grade::Undecided`]
-///   when any is undecided; otherwise [`Grade::Met`], the empty composition
-///   among them.
-/// - panics: none.
-///
-/// # Adequacy
-/// - hypothesis: L3 — all met, met with undecided, met with refused, and unmet
-///   beside each of met, undecided and refused compose to their outcome,
-///   whatever the order, and no grades compose to met.
-/// - witness: `rubric::tests::grades_compose_as_the_conjunction_of_their_criteria`
-#[inline]
-#[must_use]
-pub fn compose(grades: &[Grade]) -> Grade
-{
-    if grades.contains(&Grade::Unmet) {
-        Grade::Unmet
-    }
-    else if grades.contains(&Grade::Refused) {
-        Grade::Refused
-    }
-    else if grades.contains(&Grade::Undecided) {
-        Grade::Undecided
-    }
-    else {
-        Grade::Met
-    }
-}
-
 /// A file a rubric reads from the task's state directory: a relative path of
 /// segments joined by `/`, each of ASCII letters, digits, `.`, `_` and `-`,
 /// none empty, `.` or `..`.
@@ -487,7 +455,6 @@ mod tests
     use domhringr_record_tree::Unread;
 
     use super::Rubric;
-    use super::compose;
 
     /// A valid rubric of two state files and two questions.
     const RUBRIC: &str = r#"
@@ -713,27 +680,6 @@ criteria = { true = "The README is dense.", false = "The README is padded." }
             Grade::Refused,
             "an unread ruling is refused, never graded"
         );
-    }
-
-    #[test]
-    fn grades_compose_as_the_conjunction_of_their_criteria()
-    {
-        use Grade::Met;
-        use Grade::Refused;
-        use Grade::Undecided;
-        use Grade::Unmet;
-        for (grades, composed) in [
-            (&[][..], Met),
-            (&[Met, Met][..], Met),
-            (&[Met, Undecided][..], Undecided),
-            (&[Refused, Met][..], Refused),
-            (&[Undecided, Refused][..], Refused),
-            (&[Met, Unmet][..], Unmet),
-            (&[Unmet, Undecided][..], Unmet),
-            (&[Refused, Unmet][..], Unmet),
-        ] {
-            assert_eq!(compose(grades), composed, "{grades:?}");
-        }
     }
 
     #[test]

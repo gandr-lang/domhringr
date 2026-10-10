@@ -23,12 +23,12 @@ use domhringr_record_tree::Grade;
 use domhringr_record_tree::PeerKey;
 use domhringr_record_tree::Receipt;
 use domhringr_record_tree::TreeId;
+use domhringr_record_tree::compose;
 use domhringr_strategy_document::Bound;
 use domhringr_strategy_document::Loaded;
 use domhringr_strategy_document::Name;
 use domhringr_strategy_document::Plan;
 use domhringr_strategy_document::Rubric;
-use domhringr_strategy_document::compose;
 
 use crate::Judging;
 use crate::RunError;
