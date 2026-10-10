@@ -20,15 +20,14 @@
 //! its causal past, a claim only from the owner, and a presence only of the
 //! author's own endpoint.
 //!
-//! A tree is also a task: an operator — the owner or a member — dispatches a
-//! seat to a [`Brief`], and the seat holding the dispatch's slot reports on
-//! it — the content's BLAKE3 hash ([`ContentHash`]) and a one-line
-//! [`Summary`] — hands the slot to another seat, or retires from it. Each is
-//! a receipt ([`Kind::Dispatch`], [`Kind::Report`], [`Kind::Handoff`],
-//! [`Kind::Retire`]) admitted only from the holder of the latest dispatch's
-//! slot in its causal past, and the fold reads the admitted ones in canonical
-//! order into the task's [`Step`]s and its [`Current`] attempt: who holds the
-//! slot ([`Slot`]) and whether it is reported on ([`Answer`]).
+//! A tree is also a task: an operator dispatches a seat to a [`Brief`]. The
+//! causal holder reports, hands off, retires or pauses through signed receipts.
+//! These moves also replay against the Seat protocol: a report is required
+//! before handoff or retirement, and either ending closes the endpoint. Pause
+//! retains the holder and report phase. [`Peer::view_at`] selects the base or
+//! widened protocol without rewriting the record. The fold retains protocol
+//! refusals by move name and expected action, and reads admitted receipts into
+//! [`Step`]s and the [`Current`] attempt: its [`Slot`] and [`Answer`].
 //!
 //! The work is checked on the task's record. A judge rules on a dispatch
 //! ([`Kind::Verdict`]): each question's [`Ruling`], a [`Readout`] of the
@@ -136,6 +135,7 @@ pub use check::StepId;
 pub use decision::Decision;
 pub use decision::ParseRevisionError;
 pub use decision::Revision;
+pub use domhringr_arena_session::Edition;
 pub use fold::Refusal;
 pub use fold::Unopened;
 pub use fold::Verdict;

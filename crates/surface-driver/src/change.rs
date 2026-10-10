@@ -202,6 +202,7 @@ pub fn reported(view: &View) -> Result<Reported, RunError>
             | Step::Dispatch { .. }
             | Step::Handoff { .. }
             | Step::Retire { .. }
+            | Step::Pause { .. }
             | Step::Verdict { .. }
             | Step::Verified { .. }
             | Step::Graded { .. }
@@ -687,6 +688,7 @@ pub async fn land(
             | Step::Report { .. }
             | Step::Handoff { .. }
             | Step::Retire { .. }
+            | Step::Pause { .. }
             | Step::Verdict { .. }
             | Step::Verified { .. }
             | Step::Graded { .. }

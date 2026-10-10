@@ -6,6 +6,8 @@ A software factory: seats (agent sessions) that talk to each other over [iroh](h
 
 `0.0.0`. The `domhringr` crate claims the name and reports its version. The record plane has its first piece: `domhringr-record-tree` stores a [sedimentree](https://crates.io/crates/sedimentree_core) on disk and syncs it with a peer over iroh through [subduction](https://crates.io/crates/subduction_core), and the `domhringr-peer` binary (`crates/surface-peer`) drives it from the command line. The seat, the judge, and the playbooks and rubrics a task is checked by stand on it; [`crates/README.md`](crates/README.md) lists every crate, and [`rubrics/README.md`](rubrics/README.md) the rubric set a change is graded by.
 
+The first arena, [`domhringr-arena-session`](crates/arena-session/README.md), states the Seat protocol and its dual as session types. The record fold checks conformance by replay, retains named move refusals, and interprets pause through a kernel-certified widening without rewriting old receipts.
+
 ## Build
 
 ```sh

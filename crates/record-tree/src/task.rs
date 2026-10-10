@@ -225,6 +225,14 @@ pub enum Step
         /// The holder who retired.
         author: PeerKey,
     },
+    /// The holder paused work without changing the slot.
+    Pause
+    {
+        /// The dispatch paused.
+        dispatch: CommitId,
+        /// The holder who paused.
+        author: PeerKey,
+    },
     /// The judge ruled on `dispatch`: each question asked about `transcript`
     /// under `rubric`, with its ruling.
     Verdict
@@ -649,6 +657,7 @@ impl Task
                 | Step::Dispatch { .. }
                 | Step::Handoff { .. }
                 | Step::Retire { .. }
+                | Step::Pause { .. }
                 | Step::Graded { .. }
                 | Step::Decide { .. }
                 | Step::Landed { .. } => None,
@@ -756,6 +765,7 @@ impl Task
                 | Step::Report { .. }
                 | Step::Handoff { .. }
                 | Step::Retire { .. }
+                | Step::Pause { .. }
                 | Step::Verdict { .. }
                 | Step::Verified { .. }
                 | Step::Graded { .. }
@@ -822,6 +832,9 @@ impl fmt::Display for Task
                 },
                 | Step::Retire { dispatch, author } => {
                     writeln!(f, "retire {commit} {dispatch} {author}")?;
+                },
+                | Step::Pause { dispatch, author } => {
+                    writeln!(f, "pause {commit} {dispatch} {author}")?;
                 },
                 | Step::Verdict {
                     dispatch,

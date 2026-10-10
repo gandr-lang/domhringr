@@ -14,8 +14,10 @@ publish.workspace = true
 [dependencies]
 blake3 = { workspace = true }
 data-encoding = { workspace = true }
+domhringr-arena-session = { workspace = true }
 future_form = { workspace = true }
 futures = { workspace = true }
+gandr-core-session = { workspace = true }
 gandr-storage-values = { workspace = true }
 getrandom = { workspace = true }
 iroh = { workspace = true }
