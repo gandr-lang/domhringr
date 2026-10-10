@@ -36,6 +36,8 @@ concurrency:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
+  # Checkout mtimes change on every runner; validate cached source contents.
+  CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
 
   # Opt back into quickinstall (jdx/mise PR 10923 flipped the default off) and
   # mise's built-in binstall, in env form so both bind regardless of
@@ -101,20 +103,16 @@ jobs:
       # there whatever the repository variable says, so its toolchain install
       # is unconditional.
       #
-      # Cache writing belongs to the push run's promote jobs, and only once
-      # they have downloaded the landing's build state; every other lane
-      # restores. A promote job that found no state skips the setup.
+      # Main promotes verified queue state; hosted manual test jobs also
+      # warm branch-local caches. Other lanes restore without writing.
       - &setup-rust
         id: setup-rust
         name: setup rust
-        if: ${{ env.CI_BUILD_STATE == '' || hashFiles('build-state-*.tar') != '' }}
+        if: ${{ github.event_name != 'push' || hashFiles('build-state-*.tar.zst') != '' }}
         uses: ./.github/actions/setup-rust # zizmor: ignore[self-repository]
         with:
           install-toolchain: ${{ env.CI_INSTALL_TOOLCHAIN || needs.ci-image-ref.outputs.ref == '' }}
-          cache-save: ${{ hashFiles('build-state-*.tar') != '' }}
-          # Keeping the workspace crates in the cache lets cargo's fingerprints
-          # no-op the unchanged ones on restore.
-          cache-workspace-crates: true
+          cache-save: ${{ hashFiles('build-state-*.tar.zst') != '' || (github.event_name == 'workflow_dispatch' && startsWith(github.job, 'cargo-test')) }}
       # Install the whole CI subset in the cached setup step: later mise
       # auto-installs otherwise escape that cache.
       - &install-policy-tools
@@ -126,10 +124,11 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           version: 2026.10.3
-          cache: false
+          cache: true
+          cache_key: mise-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml', 'mise.lock', 'rust-toolchain.toml') }}
+          cache_save: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && startsWith(github.job, 'cargo-test')) }}
       # Policy caches never use a restore prefix: Cargo can consider a library
       # from another Git revision fresh. The metadata revision is in Cargo.toml.
-      # Save inside the job, before rust-cache prunes target/ at post-job time.
       - &restore-dylint-drivers
         name: restore Dylint drivers
         id: dylint-drivers-restore
@@ -147,7 +146,7 @@ jobs:
           key: dylint-library-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'mise.toml', 'mise.lock', 'Cargo.toml', 'Cargo.lock') }}
       - &save-dylint-library
         name: save Dylint library
-        if: ${{ hashFiles('build-state-*.tar') != '' && steps.dylint-library-restore.outputs.cache-hit != 'true' }}
+        if: ${{ hashFiles('build-state-*.tar.zst') != '' && steps.dylint-library-restore.outputs.cache-hit != 'true' }}
         uses: &cache-save actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: *dylint-library
@@ -159,37 +158,51 @@ jobs:
         with:
           path: *dylint-drivers
           key: ${{ steps.dylint-drivers-restore.outputs.cache-primary-key }}
-      # Every lane's nextest `ci` profile writes the same path; the artifact is
-      # named for the runner, so the lanes need no per-job report settings.
+      # Artifact delivery is hosted-only: act cannot serve upload-artifact
+      # v7's CreateArtifact request schema.
       - &upload-test-report
         name: upload test report
-        if: always()
+        if: ${{ always() && env.ACT != 'true' }}
         continue-on-error: true
         uses: &upload-artifact actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: junit-${{ runner.os }}-${{ runner.arch }}
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
-      # A merge-group lane whose cache missed hands its build state to main as
-      # a tar, uploaded unarchived: an artifact's own zip keeps neither file
-      # modes nor mtimes, and Cargo reuses nothing without both. An unarchived
-      # artifact is named for its file, so each lane's tar carries its job id.
-      # The tar sits in the workspace, since Git Bash's tar reads `D:\…` as a
-      # remote host, and its presence is what the later steps test.
+      - &restore-test-state
+        name: restore complete test state
+        id: test-state-restore
+        uses: *cache-restore
+        with:
+          path: build-state-${{ env.CI_BUILD_STATE }}.tar.zst
+          key: domhringr-v1-test-state-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}-${{ github.sha }}
+          restore-keys: domhringr-v1-test-state-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}-
+          # Promotion already downloads the verified queue artifact.
+          lookup-only: ${{ github.event_name == 'push' }}
+      - &save-test-state
+        name: cache complete test state
+        if: ${{ env.ACT != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.test-state-restore.outputs.cache-hit != 'true' && hashFiles('build-state-*.tar.zst') != '' }}
+        uses: *cache-save
+        with:
+          path: build-state-${{ env.CI_BUILD_STATE }}.tar.zst
+          key: ${{ steps.test-state-restore.outputs.cache-primary-key }}
+      # Preserve modes and mtimes in one checked test-profile artifact set.
+      # Dispatches also upload, so measurements cover the promotion path.
       - &archive-build-state
         name: archive build state
-        if: ${{ github.event_name == 'merge_group' && steps.setup-rust.outputs.cache-hit != 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'merge_group' && steps.test-state-restore.outputs.cache-hit != 'true') }}
         shell: bash
-        run: tar -cf "build-state-$GITHUB_JOB.tar" target
+        run: tar -cf - target/debug | zstd -T0 -3 -f -o "build-state-$GITHUB_JOB.tar.zst"
       - &upload-build-state
         name: upload build state
-        if: ${{ hashFiles('build-state-*.tar') != '' }}
+        if: ${{ env.ACT != 'true' && hashFiles('build-state-*.tar.zst') != '' }}
         uses: *upload-artifact
         with:
-          path: build-state-${{ github.job }}.tar
+          path: build-state-${{ github.job }}.tar.zst
           name: build-state-${{ github.job }}
           if-no-files-found: error
           retention-days: 1
+          compression-level: 0
       # The push run's side. Only this workflow's merge-group runs are trusted
       # producers: GitHub sets the event, and only a pull request the owner
       # queued reaches the queue.
@@ -203,9 +216,9 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - &unpack-build-state
         name: unpack build state
-        if: &state-found ${{ hashFiles('build-state-*.tar') != '' }}
+        if: &state-found ${{ hashFiles('build-state-*.tar.zst') != '' }}
         shell: bash
-        run: tar -xf "build-state-$CI_BUILD_STATE.tar"
+        run: zstd -dc "build-state-$CI_BUILD_STATE.tar.zst" | tar -xf -
       # The dependency cache also holds Cargo's registry; this fills it.
       - &fetch-dependencies
         name: fetch locked dependencies
@@ -329,6 +342,8 @@ jobs:
     permissions: *image-read-permissions
     container: &ci-image ${{ needs.ci-image-ref.outputs.ref }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 30
+    env:
+      CI_BUILD_STATE: cargo-test
     steps: &workspace-test-steps
       - *git-checkout
       - *trust-workspace
@@ -336,17 +351,20 @@ jobs:
       - *read-sibling-pins
       - *checkout-gandr
       - *setup-rust
+      - *restore-test-state
+      - *unpack-build-state
       - name: build every workspace target
-        run: cargo build --locked --workspace --all-targets
+        run: cargo build --locked --workspace --all-targets --profile test
       - name: test every workspace target
-        run: cargo nextest run --locked --profile ci --workspace
+        run: mise run test -- --profile ci
       - name: check private-item rustdoc
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --locked --workspace --no-deps --document-private-items
+        run: cargo doc --locked --workspace --no-deps --document-private-items --profile test
       - *upload-test-report
       - *archive-build-state
       - *upload-build-state
+      - *save-test-state
 
   # Engine SDK, instrumentation, C++/X280, Miri/careful and Windows lanes
   # have no local surface; macOS arm64 is the second host the factory runs on.
@@ -358,6 +376,7 @@ jobs:
     timeout-minutes: 45
     env:
       CI_INSTALL_TOOLCHAIN: "true"
+      CI_BUILD_STATE: cargo-test-macos
     steps: *workspace-test-steps
 
   cargo-clippy-crate:
@@ -369,8 +388,7 @@ jobs:
     container: *ci-image # zizmor: ignore[unpinned-images]
     steps:
       - *git-checkout
-      # Restore-only. The workspace crates stay in the restored cache so this
-      # lane's check artifacts no-op.
+      # Shared crate downloads are restore-only in this lane.
       - *install-policy-tools
       - *read-sibling-pins
       - *checkout-gandr
@@ -401,7 +419,7 @@ jobs:
       # This lane hands over its policy caches, not the dependency cache.
       - name: archive Dylint library
         if: ${{ github.event_name == 'merge_group' && steps.dylint-library-restore.outputs.cache-hit != 'true' }}
-        run: tar -cf "build-state-$GITHUB_JOB.tar" target/dylint
+        run: tar -cf - target/dylint | zstd -T0 -3 -o "build-state-$GITHUB_JOB.tar.zst"
       - *upload-build-state
       - name: archive Dylint drivers
         if: ${{ github.event_name == 'merge_group' && needs.ci-image-ref.outputs.ref == '' && steps.dylint-drivers-restore.outputs.cache-hit != 'true' }}
@@ -524,9 +542,11 @@ jobs:
       - *download-build-state
       - *read-sibling-pins
       - *checkout-gandr
+      - *restore-test-state
       - *setup-rust
       - *unpack-build-state
       - *fetch-dependencies
+      - *save-test-state
 
   promote-test-macos:
     name: promote the build state (macos-arm64)

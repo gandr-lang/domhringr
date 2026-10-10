@@ -485,6 +485,13 @@ gandr = "761bb3edc21ed06d1a552fc79b71e460672b66a2"
 [profile.release]
 opt-level = "s"
 
+# Build and tests share size-optimized code without debuginfo. Keep debug
+# assertions and overflow checks so arithmetic-boundary defects stay visible.
+[profile.test]
+inherits = "release"
+debug-assertions = true
+overflow-checks = true
+
 # The shipped binary: `cargo build-dist` (`.cargo/config.toml`), which also
 # applies `.cargo/config.dist.toml` (a size-optimized std, immediate abort on
 # panic, fat LTO at link). Serial by construction: one codegen unit per crate

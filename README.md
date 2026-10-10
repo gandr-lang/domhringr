@@ -19,6 +19,10 @@ cargo build-dist       # the shipped binary: fat LTO, size-optimized std
 
 Use `mise run test -- <nextest args>` for test runs; on macOS, setting `CODESIGN_IDENTITY` signs rebuilt executables before they run.
 
+CI builds every target under the test profile: size-optimized `release` code without debuginfo, with debug assertions and overflow checks explicitly enabled. `mise run test -- --profile ci` runs the existing test task against that build; private-item rustdoc uses the same Cargo profile. `release` and the aggressive, uncached `dist` profile are unchanged.
+
+The complete test artifact set is archived with zstd and uploaded without recompression. The archive contains `target/debug`, not unrelated profiles or generated documentation. Its cache retains integration-test binaries independently of dependency-cache cleanup, and Cargo checks source contents rather than checkout mtimes. Main promotes verified queue artifacts; hosted manual runs warm branch-local caches. The locked mise cache supplies installed policy tools, including sizelint, without rebuilding them on warm runs.
+
 `mise run ci:act` runs the committed Linux CI workflow in a disposable checkout. Two host-wide slots bound concurrent gates across repositories and worktrees; further invocations wait until a slot frees. Dead holders are reclaimed. Each invocation uses distinct container names. Cached actions run without GitHub fetches; missing actions download on first use.
 
 Completed and interrupted gates remove their containers, networks and volumes. Before starting, each gate reaps resources from abandoned runs whose workflow process is gone; live runs and the shared `act-toolcache` volume remain untouched.

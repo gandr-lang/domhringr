@@ -9,22 +9,10 @@ inputs:
   cache-save:
     description: "Save the rustup toolchain and the dependency cache in this job"
     default: "false"
-  # Keep the workspace crates' artifacts in the dependency cache; cargo's
-  # fingerprints then no-op the unchanged ones on the next restore.
-  # Off when the job runs inside the CI image, which carries the toolchain
-  # already; the dependency cache step still runs either way.
+  # Off inside the CI image, which already carries the toolchain.
   install-toolchain:
     description: "Restore, install, and save the rustup toolchain in this job"
     default: "true"
-  cache-workspace-crates:
-    description: "Keep the workspace crates in the Rust dependency cache"
-    default: "false"
-outputs:
-  # Whether the dependency cache restored its exact key; a lane hands its
-  # build state to main only on a miss, when main's cache would rotate.
-  cache-hit:
-    description: "The dependency cache restored an exact key match"
-    value: ${{ steps.rust-cache.outputs.cache-hit }}
 runs:
   using: composite
   steps:
@@ -61,22 +49,13 @@ runs:
       id: rust-cache
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
-        # The generation counter carries the cache's content shape. The
-        # root manifest's [profile.test] gives test targets their own
-        # opt-level, so every lane compiles two dependency graphs --
-        # cargo build and cargo clippy under dev, cargo nextest run
-        # under test -- and the cache has to hold both. rust-cache's
-        # key hashes the toolchain, the CARGO_*/RUSTUP_* values and
-        # the lockfiles, never the profile table, so without a bump
-        # the restore stays a full match on an older content shape,
-        # the save is skipped as up-to-date, and every run recompiles
-        # from scratch. Bumping the prefix rotates the lane at once.
-        prefix-key: domhringr-v1-rust-deps
-        # One dependency cache across every Rust job; the gate lane's
-        # block shares this key, so the cache holds the whole
-        # workspace's artifacts under the single toolchain.
+        # Profile changes rotate dependency state. Complete test archives
+        # are cached separately, without dependency-cache pruning.
+        prefix-key: domhringr-v2-rust-deps
+        key: ${{ hashFiles('Cargo.toml') }}
+        # Share crate downloads across every Rust lane.
         shared-key: rust-deps
         cache-all-crates: false
-        cache-workspace-crates: ${{ inputs.cache-workspace-crates }}
+        cache-targets: false
         cache-on-failure: false
         save-if: ${{ inputs.cache-save == 'true' }}

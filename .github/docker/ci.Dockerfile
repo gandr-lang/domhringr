@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # rustup needs curl and certificates; Rust linking needs build-essential.
 # git2's openssl-sys needs pkg-config and libssl-dev; Cargo Git sources need git.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libssl-dev \
+    && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libssl-dev zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Build tools as UID 1000. Job steps run as root to write runner-owned mounts.
