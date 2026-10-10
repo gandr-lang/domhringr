@@ -17,7 +17,19 @@ cargo build-dist       # the shipped binary: fat LTO, size-optimized std
 
 `cargo build --release` is the everyday optimized build; `cargo build-dist` (`.cargo/config.toml`) is the whole-program one.
 
-Use `mise run test -- <nextest args>` for test runs; on macOS, setting `CODESIGN_IDENTITY` signs rebuilt executables before they run.
+Use `mise run test -- <nextest args>` for test runs. On macOS, set `CODESIGN_IDENTITY` to a local, test-only code-signing identity in the login keychain. Trust its certificate for code signing once, then check that the identity is valid:
+
+```sh
+cert=$(mktemp)
+security find-certificate -c "$CODESIGN_IDENTITY" -p \
+  "$HOME/Library/Keychains/login.keychain-db" > "$cert"
+security add-trusted-cert -p codeSign \
+  -k "$HOME/Library/Keychains/login.keychain-db" "$cert"
+rm "$cert"
+security find-identity -v -p codesigning
+```
+
+The test task signs both test executables and the binaries they launch with `org.gandr-lang.domhringr.test`. Allow the first firewall prompt if one appears; the same certificate and identifier let the firewall recognize later builds and worktrees. User-domain trust is sufficient for this workflow; administrator-domain trust is not required. Keep this identity out of release signing. With `CODESIGN_IDENTITY` unset, or on Linux, tests run as built.
 
 CI builds every target under the test profile: size-optimized `release` code without debuginfo, with debug assertions and overflow checks explicitly enabled. `mise run test -- --profile ci` runs the existing test task against that build; private-item rustdoc uses the same Cargo profile. `release` and the aggressive, uncached `dist` profile are unchanged.
 
