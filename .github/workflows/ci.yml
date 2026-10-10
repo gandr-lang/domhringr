@@ -419,6 +419,7 @@ jobs:
       # This lane hands over its policy caches, not the dependency cache.
       - name: archive Dylint library
         if: ${{ github.event_name == 'merge_group' && steps.dylint-library-restore.outputs.cache-hit != 'true' }}
+        shell: bash
         run: tar -cf - target/dylint | zstd -T0 -3 -o "build-state-$GITHUB_JOB.tar.zst"
       - *upload-build-state
       - name: archive Dylint drivers

@@ -146,6 +146,7 @@ jobs:
         run: docker buildx imagetools inspect "ghcr.io/gandr-lang/domhringr-ci:${TAG}"
       - name: inspect published layer sizes and compression
         env: *image-tag
+        shell: bash
         run: >-
           docker buildx imagetools inspect --raw "ghcr.io/gandr-lang/domhringr-ci:${TAG}" |
           jq -r '.manifests[].digest' |
