@@ -11,7 +11,7 @@
 //! is:
 //!
 //! ```text
-//! receipt   := open 0x01 · word 2 · bytes tree (32) · bytes operation (16) · kind · close
+//! receipt   := open 0x01 · word 3 · bytes tree (32) · bytes operation (16) · kind · close
 //! kind      := open 0x01 · bytes proof (64) · close                       Open
 //!            | open 0x02 · bytes grantee (32) · close                     Grant
 //!            | open 0x03 · bytes text (UTF-8) · close                     Note
@@ -20,7 +20,7 @@
 //!            | open 0x06 · bytes tree (32) · bytes label (UTF-8) · close  Introduce
 //!            | open 0x07 · endpoint · bytes proof (64) · close            Present
 //!            | open 0x08 · bytes peer (32) · close                        Withdraw
-//!            | open 0x09 · bytes seat (32) · brief · close                Dispatch
+//!            | open 0x09 · bytes seat (32) · brief · word edition · close Dispatch
 //!            | open 0x0a · bytes dispatch (32) · bytes content (32)
 //!                        · bytes summary (UTF-8) · close                  Report
 //!            | open 0x0b · bytes dispatch (32) · bytes peer (32) · close  Handoff
@@ -71,6 +71,10 @@
 //!            | open 0x02 · bytes reason (UTF-8) · close                   Rework
 //!            | open 0x03 · close                                          Abandon
 //! ```
+//!
+//! An absent edition word in Dispatch denotes edition 1. A malformed word
+//! is a decode failure; an explicit unknown number remains a protocol name.
+//! Folding and sync retain the original signed bytes, never re-encode them.
 //!
 //! A tree, in the receipt's header, as an authority or as the tree
 //! introduced, and an endpoint are ed25519 verifying keys; a grantee, a
@@ -127,6 +131,7 @@ use core::net::Ipv4Addr;
 use core::net::Ipv6Addr;
 use core::net::SocketAddr;
 
+use domhringr_arena_session::Edition;
 use gandr_storage_values::CanonicalValue;
 use gandr_storage_values::CanonicalWord;
 use gandr_storage_values::ConstructorTag;
@@ -546,6 +551,8 @@ pub enum Kind
     /// `brief`: a new attempt at the task.
     Dispatch
     {
+        /// The protocol under which this attempt must replay.
+        edition: Edition,
         /// The seat dispatched to.
         seat: PeerKey,
         /// What the seat works from.
@@ -841,12 +848,14 @@ impl Receipt
         }))
     }
 
-    /// A fresh [`Kind::Dispatch`] in `tree` of `seat` to `brief`.
+    /// A fresh [`Kind::Dispatch`] in `tree` of `seat` to `brief` under
+    /// `edition`.
     ///
     /// # Specification
     /// - ensures: the receipt names `tree`, records the dispatch of `seat` to
-    ///   `brief`, and carries a fresh fence ([`Operation::random`]); the fold
-    ///   admits it from the owner or a member, the operator role.
+    ///   `brief` under `edition`, and carries a fresh fence
+    ///   ([`Operation::random`]). The fold requires the operator role and
+    ///   replays the dispatch under its named edition.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
     ///
@@ -856,11 +865,16 @@ impl Receipt
     pub fn dispatch(
         tree: TreeId,
         seat: PeerKey,
+        edition: Edition,
         brief: Brief,
     ) -> Result<Self, RandomError>
     {
         let operation = Operation::random()?;
-        Ok(Self::new(tree, operation, Kind::Dispatch { seat, brief }))
+        Ok(Self::new(tree, operation, Kind::Dispatch {
+            seat,
+            edition,
+            brief,
+        }))
     }
 
     /// A fresh [`Kind::Report`] in `tree` on `dispatch`, naming `content` by
@@ -1205,8 +1219,10 @@ impl Receipt
     /// Decode the receipt a commit's blob carries.
     ///
     /// # Specification
-    /// - ensures: accepts exactly the blobs [`Receipt::encode`] produces, so
-    ///   one receipt has one blob.
+    /// - ensures: accepts the blobs [`Receipt::encode`] produces and the
+    ///   editionless dispatch form, which names edition 1. An explicit edition
+    ///   is retained, even when unknown; malformed edition fields never become
+    ///   edition 1. Re-encoding always writes the edition.
     /// - fails: the value plane's refusals for a blob that is not one
     ///   well-formed value with nothing after it, and
     ///   [`ValueError::UnexpectedConstructor`] for a constructor the receipt
@@ -1234,6 +1250,7 @@ impl Receipt
     ///   anchor under every authority and a presence with every address form.
     /// - witness: `receipt::tests::every_kind_round_trips`
     /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    /// - witness: `receipt::tests::dispatch_editions_distinguish_absence_unknown_and_malformed`
     pub(crate) fn decode(blob: &Blob) -> Result<Self, ValueError>
     {
         decode_flat(TokenBody::from(blob.as_slice()))
@@ -1326,10 +1343,15 @@ impl CanonicalValue for Receipt
                 sink.open(ConstructorTag::from(WITHDRAW))?;
                 sink.bytes(TokenBytes::from(of.peer_id().as_bytes().as_slice()))?;
             },
-            | Kind::Dispatch { seat, ref brief } => {
+            | Kind::Dispatch {
+                seat,
+                edition,
+                ref brief,
+            } => {
                 sink.open(ConstructorTag::from(DISPATCH))?;
                 sink.bytes(TokenBytes::from(seat.peer_id().as_bytes().as_slice()))?;
                 brief.emit_tokens(sink)?;
+                sink.word(CanonicalWord::from(u64::from(edition)))?;
             },
             | Kind::Report {
                 dispatch,
@@ -1538,7 +1560,21 @@ impl CanonicalValue for Receipt
             | DISPATCH => {
                 let seat = opened.peer(reader)?;
                 let brief = Brief::decode_tokens(reader)?;
-                Kind::Dispatch { seat, brief }
+                // Only an absent field denotes edition 1; malformed fields fail.
+                let edition = match reader.read_word() {
+                    | Ok(word) => Edition::from(u64::from(word)),
+                    | Err(ValueError::UnexpectedToken {
+                        expected: gandr_storage_values::TokenKind::Word,
+                        found: gandr_storage_values::TokenKind::Close,
+                        ..
+                    }) => Edition::ONE,
+                    | Err(error) => return Err(error),
+                };
+                Kind::Dispatch {
+                    seat,
+                    edition,
+                    brief,
+                }
             },
             | REPORT => {
                 let dispatch = opened.commit(reader)?;
@@ -2974,8 +3010,8 @@ mod tests
             path: "briefs/größe".parse().unwrap(),
         });
         receipts.extend([
-            Receipt::dispatch(tree(), peer, briefed).unwrap(),
-            Receipt::dispatch(tree(), peer, Brief::Content(content)).unwrap(),
+            Receipt::dispatch(tree(), peer, crate::Edition::ONE, briefed).unwrap(),
+            Receipt::dispatch(tree(), peer, crate::Edition::ONE, Brief::Content(content)).unwrap(),
             Receipt::report(
                 tree(),
                 dispatch,
@@ -3310,6 +3346,40 @@ mod tests
     }
 
     #[test]
+    fn dispatch_editions_distinguish_absence_unknown_and_malformed()
+    {
+        let seat = PEER.parse::<PeerKey>().unwrap();
+        let legacy = crate::testing::editionless_dispatch(tree(), seat);
+        assert!(matches!(
+            Receipt::decode(&legacy).unwrap().kind(),
+            Kind::Dispatch {
+                edition: crate::Edition::ONE,
+                ..
+            }
+        ));
+        let (prefix, _) = legacy.as_slice().split_last_chunk::<2>().unwrap();
+        for edition in [0_u64, 1, 2, u64::MAX] {
+            let body = [prefix, &[0x02], &edition.to_le_bytes(), &[0x05, 0x05]].concat();
+            let receipt = Receipt::decode(&Blob::new(body.clone())).unwrap();
+            assert!(
+                matches!(receipt.kind(), Kind::Dispatch { edition: named, .. } if u64::from(*named) == edition)
+            );
+            assert_eq!(receipt.encode().unwrap().as_slice(), body);
+        }
+        for tail in [
+            vec![0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x05],
+            vec![0x02, 1],
+            vec![0x05],
+        ] {
+            let body = [prefix, &tail].concat();
+            assert!(
+                Receipt::decode(&Blob::new(body)).is_err(),
+                "malformed edition is not absence"
+            );
+        }
+    }
+
+    #[test]
     fn the_seat_receipts_encode_to_their_fixed_layouts()
     {
         let bytes = |payload: &[u8]| {
@@ -3338,6 +3408,7 @@ mod tests
         let layouts = [
             (
                 Kind::Dispatch {
+                    edition: crate::Edition::ONE,
                     seat: peer,
                     brief: Brief::Anchor(Anchor::commit(elsewhere, CommitId::new([0x09; 32]))),
                 },
@@ -3349,6 +3420,7 @@ mod tests
                     vec![0x05],
                     bytes(&[0x09; 32]),
                     vec![0x05, 0x05],
+                    word(1),
                 ]
                 .concat(),
                 "open dispatch, seat, open anchor brief, open commit, open key, tree, close, \
@@ -3356,6 +3428,7 @@ mod tests
             ),
             (
                 Kind::Dispatch {
+                    edition: crate::Edition::ONE,
                     seat: peer,
                     brief: Brief::Content(content),
                 },
@@ -3365,6 +3438,7 @@ mod tests
                     vec![0x01, 0x02],
                     bytes(&[0x0e; 32]),
                     vec![0x05],
+                    word(1),
                 ]
                 .concat(),
                 "open dispatch, seat, open content brief, hash, close",

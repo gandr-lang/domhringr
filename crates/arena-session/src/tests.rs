@@ -21,77 +21,88 @@ fn named_refusal_preserves_the_prefix()
     let mut play = Play::default();
     let digest = PayloadDigest([7; 32]);
     let refusal = play
-        .record(&arena, Edition::Base, Movement::Report, digest)
+        .record(&arena, Edition::ONE, Movement::Report, digest)
         .unwrap_err();
     assert_eq!(refusal.movement, Movement::Report);
-    assert!(matches!(refusal.reason, ReplayError::Refused {
-        reason: Reason::WrongDirection,
-        ..
-    }));
+    assert!(matches!(
+        refusal.reason,
+        crate::Reason::Replay(ReplayError::Refused {
+            reason: Reason::WrongDirection,
+            ..
+        })
+    ));
     assert_eq!(play.moves(), &[]);
     assert_eq!(
-        play.record(&arena, Edition::Base, Movement::Dispatch, digest)
+        play.record(&arena, Edition::ONE, Movement::Dispatch, digest)
             .unwrap(),
         Progress::Open(Action::Select)
     );
     for movement in [Movement::Report, Movement::Report] {
         assert_eq!(
-            play.record(&arena, Edition::Base, movement, digest)
-                .unwrap(),
+            play.record(&arena, Edition::ONE, movement, digest).unwrap(),
             Progress::Open(Action::Select)
         );
     }
     assert_eq!(
-        play.record(&arena, Edition::Base, Movement::Retire, digest)
+        play.record(&arena, Edition::ONE, Movement::Retire, digest)
             .unwrap(),
         Progress::Complete
     );
     let before = play.moves().to_vec();
     let refusal = play
-        .record(&arena, Edition::Base, Movement::Report, digest)
+        .record(&arena, Edition::ONE, Movement::Report, digest)
         .unwrap_err();
     assert_eq!(refusal.movement, Movement::Report);
-    assert!(matches!(refusal.reason, ReplayError::Refused {
-        reason: Reason::ResumeAfterEnd,
-        ..
-    }));
+    assert!(matches!(
+        refusal.reason,
+        crate::Reason::Replay(ReplayError::Refused {
+            reason: Reason::ResumeAfterEnd,
+            ..
+        })
+    ));
     assert_eq!(play.moves(), before);
     let mut unreported = Play::default();
     unreported
-        .record(&arena, Edition::Base, Movement::Dispatch, digest)
+        .record(&arena, Edition::ONE, Movement::Dispatch, digest)
         .unwrap();
     assert_eq!(
         unreported
-            .inspect(&arena, Edition::Base, Movement::Report, digest)
+            .inspect(&arena, Edition::ONE, Movement::Report, digest)
             .unwrap(),
         Progress::Open(Action::Select)
     );
     let refusal = unreported
-        .record(&arena, Edition::Base, Movement::Retire, digest)
+        .record(&arena, Edition::ONE, Movement::Retire, digest)
         .unwrap_err();
     assert_eq!(refusal.movement, Movement::Retire);
-    assert!(matches!(refusal.reason, ReplayError::Refused {
-        reason: Reason::WrongLabel,
-        ..
-    }));
+    assert!(matches!(
+        refusal.reason,
+        crate::Reason::Replay(ReplayError::Refused {
+            reason: Reason::WrongLabel,
+            ..
+        })
+    ));
     unreported
-        .record(&arena, Edition::Base, Movement::Report, digest)
+        .record(&arena, Edition::ONE, Movement::Report, digest)
         .unwrap();
     assert_eq!(
         unreported
-            .record(&arena, Edition::Base, Movement::Handoff, digest)
+            .record(&arena, Edition::ONE, Movement::Handoff, digest)
             .unwrap(),
         Progress::Complete
     );
     let refusal = unreported
-        .record(&arena, Edition::Base, Movement::Handoff, digest)
+        .record(&arena, Edition::ONE, Movement::Handoff, digest)
         .unwrap_err();
     assert_eq!(refusal.movement, Movement::Handoff);
-    assert!(matches!(refusal.reason, ReplayError::Refused {
-        reason: Reason::ResumeAfterEnd,
-        ..
-    }));
-    let operator = arena.dual(Edition::Base);
+    assert!(matches!(
+        refusal.reason,
+        crate::Reason::Replay(ReplayError::Refused {
+            reason: Reason::ResumeAfterEnd,
+            ..
+        })
+    ));
+    let operator = arena.session(Edition::ONE).unwrap().dual();
     let payload = |identity| gandr_core_session::Payload { identity, digest };
     let run = [
         Move::Send(payload(crate::DISPATCH)),
@@ -115,56 +126,84 @@ fn named_refusal_preserves_the_prefix()
 #[test]
 fn pause_is_certified_and_old_runs_transport()
 {
-    let mut arena = Arena::new().unwrap();
+    let arena = Arena::new().unwrap();
+    let mut old = Play::default();
+    let digest = PayloadDigest([8; 32]);
+    old.record(&arena, Edition::ONE, Movement::Dispatch, digest)
+        .unwrap();
+    let refusal = old
+        .record(&arena, Edition::ONE, Movement::Pause, digest)
+        .unwrap_err();
+    assert_eq!(refusal.edition, Edition::ONE);
+    assert!(matches!(
+        refusal.reason,
+        crate::Reason::Replay(ReplayError::Refused {
+            reason: Reason::WrongLabel,
+            ..
+        })
+    ));
+    if !cfg!(feature = "edition-2") {
+        assert!(matches!(
+            arena.transport(Edition::ONE, Edition::TWO, &old),
+            Err(crate::ArenaError::Unknown(crate::UnknownEdition(
+                Edition::TWO
+            )))
+        ));
+        return;
+    }
+    assert!(matches!(
+        arena.transport(Edition::ONE, Edition::TWO, &old),
+        Err(crate::ArenaError::Transport(
+            gandr_core_session::certified::TransportError::Replay(
+                ReplayError::IncompleteRun { .. }
+            )
+        ))
+    ));
+    for (movement, digest) in [
+        (Movement::Report, PayloadDigest([9; 32])),
+        (Movement::Retire, PayloadDigest([10; 32])),
+    ] {
+        old.record(&arena, Edition::ONE, movement, digest).unwrap();
+    }
+    let transported = arena.transport(Edition::ONE, Edition::TWO, &old).unwrap();
+    assert_eq!(transported.moves(), old.moves());
+    assert_eq!(
+        gandr_core_session::replay(arena.session(Edition::TWO).unwrap(), transported.moves()),
+        Ok(Completion)
+    );
     assert_eq!(
         gandr_core_session::decide(
-            arena.session(Edition::Paused),
-            arena.session(Edition::Base),
+            arena.session(Edition::TWO).unwrap(),
+            arena.session(Edition::ONE).unwrap(),
             gandr_core_session::Relation::Subtype
         ),
         Ok(Decision::Unrelated)
     );
-    let mut old = Play::default();
-    for (movement, digest) in [
-        (Movement::Dispatch, PayloadDigest([8; 32])),
-        (Movement::Report, PayloadDigest([9; 32])),
-        (Movement::Retire, PayloadDigest([10; 32])),
-    ] {
-        old.record(&arena, Edition::Base, movement, digest).unwrap();
-    }
-    let transported = arena.transport(&old).unwrap();
-    assert_eq!(transported.moves(), old.moves());
-    assert_eq!(
-        gandr_core_session::replay(arena.session(Edition::Paused), transported.moves()),
-        Ok(Completion)
-    );
+    assert!(matches!(
+        arena.transport(Edition::TWO, Edition::ONE, &transported),
+        Err(crate::ArenaError::NotWidening {
+            source_edition: Edition::TWO,
+            target_edition: Edition::ONE
+        })
+    ));
     let mut paused = Play::default();
-    let digest = PayloadDigest([11; 32]);
-    paused
-        .record(&arena, Edition::Paused, Movement::Dispatch, digest)
-        .unwrap();
-    let refusal = paused
-        .record(&arena, Edition::Base, Movement::Pause, digest)
-        .unwrap_err();
-    assert_eq!(refusal.movement, Movement::Pause);
-    assert!(
-        matches!(refusal.reason, ReplayError::Refused { observed: Move::Select(ref label), reason: Reason::WrongLabel, .. } if label.0 == "pause")
-    );
-    paused
-        .record(&arena, Edition::Paused, Movement::Pause, digest)
-        .unwrap();
-    paused
-        .record(&arena, Edition::Paused, Movement::Report, digest)
-        .unwrap();
-    paused
-        .record(&arena, Edition::Paused, Movement::Retire, digest)
-        .unwrap();
+    for movement in [
+        Movement::Dispatch,
+        Movement::Pause,
+        Movement::Report,
+        Movement::Pause,
+        Movement::Retire,
+    ] {
+        paused
+            .record(&arena, Edition::TWO, movement, digest)
+            .unwrap();
+    }
     assert_eq!(
-        gandr_core_session::replay(arena.session(Edition::Paused), paused.moves()),
+        gandr_core_session::replay(arena.session(Edition::TWO).unwrap(), paused.moves()),
         Ok(Completion)
     );
     assert!(matches!(
-        arena.transport(&paused),
+        arena.transport(Edition::ONE, Edition::TWO, &paused),
         Err(crate::ArenaError::Transport(
             gandr_core_session::certified::TransportError::Replay(ReplayError::Refused {
                 reason: Reason::WrongLabel,
@@ -172,4 +211,52 @@ fn pause_is_certified_and_old_runs_transport()
             })
         ))
     ));
+}
+
+#[test]
+fn unknown_editions_never_replay_as_known_protocols()
+{
+    let arena = Arena::new().unwrap();
+    assert_eq!("1".parse::<Edition>().unwrap(), Edition::ONE);
+    assert_eq!(
+        "18446744073709551615".parse::<Edition>().unwrap(),
+        Edition::from(u64::MAX)
+    );
+    assert!("18446744073709551616".parse::<Edition>().is_err());
+    assert!("pause".parse::<Edition>().is_err());
+    let unknowns = if cfg!(feature = "edition-2") {
+        vec![Edition::from(0), Edition::from(u64::MAX)]
+    }
+    else {
+        vec![Edition::from(0), Edition::TWO, Edition::from(u64::MAX)]
+    };
+    for edition in unknowns {
+        assert_eq!(edition.to_string().parse::<Edition>().unwrap(), edition);
+        assert!(
+            matches!(arena.session(edition), Err(crate::UnknownEdition(named)) if named == edition)
+        );
+        let mut play = Play::default();
+        for movement in [
+            Movement::Dispatch,
+            Movement::Pause,
+            Movement::Report,
+            Movement::Retire,
+        ] {
+            let refused = play
+                .record(&arena, edition, movement, PayloadDigest([1; 32]))
+                .unwrap_err();
+            assert_eq!((refused.edition, refused.movement), (edition, movement));
+            assert_eq!(
+                refused.reason,
+                crate::Reason::Unknown(crate::UnknownEdition(edition))
+            );
+            assert!(play.moves().is_empty());
+        }
+        assert!(
+            matches!(arena.transport(Edition::ONE, edition, &play), Err(crate::ArenaError::Unknown(crate::UnknownEdition(named))) if named == edition)
+        );
+        assert!(
+            matches!(arena.transport(edition, Edition::ONE, &play), Err(crate::ArenaError::Unknown(crate::UnknownEdition(named))) if named == edition)
+        );
+    }
 }

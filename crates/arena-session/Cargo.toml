@@ -17,5 +17,8 @@ gandr-kernel-core = { workspace = true }
 gandr-kernel-term = { workspace = true }
 thiserror = { workspace = true }
 
+[features]
+edition-2 = []
+
 [lints]
 workspace = true

@@ -769,7 +769,7 @@ mod tests
                 authority: Authority::Key(tree),
                 path: "briefs/one".parse().unwrap(),
             };
-            let receipt = Receipt::dispatch(tree, seat_key, Brief::Anchor(anchor.clone())).unwrap();
+            let receipt = Receipt::dispatch(tree, seat_key, domhringr_record_tree::Edition::ONE, Brief::Anchor(anchor.clone())).unwrap();
             let dispatch = operator.peer().commit(tree, receipt).await.unwrap();
             wake(&operator, &remote, &Wake::new(tree, dispatch, me))
                 .await
@@ -845,7 +845,7 @@ mod tests
                 "the report answers the current attempt"
             );
 
-            let receipt = Receipt::dispatch(tree, me, Brief::Anchor(anchor)).unwrap();
+            let receipt = Receipt::dispatch(tree, me, domhringr_record_tree::Edition::ONE, Brief::Anchor(anchor)).unwrap();
             let elsewhere = operator.peer().commit(tree, receipt).await.unwrap();
             let declined = wake(&operator, &remote, &Wake::new(tree, elsewhere, me)).await;
             assert!(
@@ -891,7 +891,8 @@ mod tests
                 .await
                 .unwrap();
             let brief = Brief::Content(ContentHash::of(&Content::from(b"brief".to_vec())));
-            let receipt = Receipt::dispatch(tree, me, brief).unwrap();
+            let receipt =
+                Receipt::dispatch(tree, me, domhringr_record_tree::Edition::ONE, brief).unwrap();
             let dispatch = seat.peer().commit(tree, receipt).await.unwrap();
 
             let mut events = serve(

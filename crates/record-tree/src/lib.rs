@@ -24,10 +24,11 @@
 //! causal holder reports, hands off, retires or pauses through signed receipts.
 //! These moves also replay against the Seat protocol: a report is required
 //! before handoff or retirement, and either ending closes the endpoint. Pause
-//! retains the holder and report phase. [`Peer::view_at`] selects the base or
-//! widened protocol without rewriting the record. The fold retains protocol
-//! refusals by move name and expected action, and reads admitted receipts into
-//! [`Step`]s and the [`Current`] attempt: its [`Slot`] and [`Answer`].
+//! retains the holder and report phase in edition 2. Dispatch names each
+//! attempt's numeric edition; unknown editions are refused by name. The fold
+//! retains protocol refusals by move name and expected action, and reads
+//! admitted receipts into [`Step`]s and the [`Current`] attempt: its [`Slot`]
+//! and [`Answer`].
 //!
 //! The work is checked on the task's record. A judge rules on a dispatch
 //! ([`Kind::Verdict`]): each question's [`Ruling`], a [`Readout`] of the
@@ -136,6 +137,7 @@ pub use decision::Decision;
 pub use decision::ParseRevisionError;
 pub use decision::Revision;
 pub use domhringr_arena_session::Edition;
+pub use fold::PlayTransportError;
 pub use fold::Refusal;
 pub use fold::Unopened;
 pub use fold::Verdict;

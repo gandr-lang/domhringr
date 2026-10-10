@@ -143,3 +143,32 @@ pub async fn commit(
 {
     seal(signer, tree, parents, receipt.encode().unwrap()).await
 }
+
+/// A dispatch's editionless flat layout, independent of the current encoder.
+///
+/// # Specification
+/// trivial.
+pub fn editionless_dispatch(
+    tree: TreeId,
+    seat: PeerKey,
+) -> Blob
+{
+    let bytes = |payload: &[u8]| {
+        let length = u64::try_from(payload.len()).unwrap().to_le_bytes();
+        [&[0x03_u8][..], &length, payload].concat()
+    };
+    Blob::new(
+        [
+            vec![0x01, 0x01, 0x02],
+            3_u64.to_le_bytes().to_vec(),
+            bytes(tree.key().as_bytes()),
+            bytes(&[0x0f; 16]),
+            vec![0x01, 0x09],
+            bytes(seat.peer_id().as_bytes()),
+            vec![0x01, 0x02],
+            bytes(&[0x0e; 32]),
+            vec![0x05, 0x05, 0x05],
+        ]
+        .concat(),
+    )
+}

@@ -28,5 +28,9 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 
+[features]
+default = ["edition-2"]
+edition-2 = ["domhringr-record-tree/edition-2"]
+
 [lints]
 workspace = true

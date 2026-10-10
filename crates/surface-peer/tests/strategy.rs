@@ -737,7 +737,10 @@ question = { rubric = "rubric.toml", question = "tested" }
             format!("grade {tested} unmet"),
         ]);
 
-        let mut replayed = vec![format!("dispatch {dispatch} {s_peer} content {BRIEF}")];
+        let mut replayed = vec![format!(
+            "dispatch {dispatch} {s_peer} edition {} content {BRIEF}",
+            domhringr_record_tree::Edition::CURRENT
+        )];
         let gradings = [
             (
                 &first_verdict,
@@ -833,8 +836,10 @@ question = { rubric = "rubric.toml", question = "tested" }
         let (o, s, files) = (o.path(), s.path(), files.path());
         let task = Dispatched::open(o, s);
         let mut replayed = vec![format!(
-            "dispatch {} {} content {BRIEF}",
-            task.dispatch, task.seat
+            "dispatch {} {} edition {} content {BRIEF}",
+            task.dispatch,
+            task.seat,
+            domhringr_record_tree::Edition::CURRENT
         )];
         let mut standing = format!("dispatched {} {}", task.dispatch, task.seat);
         let mut held = Vec::new();

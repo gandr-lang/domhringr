@@ -247,9 +247,9 @@ mod tests
     ///   `other`), which the table does not hold, prints the transcript line,
     ///   `ruling q read A …`, `ruling r unread malformed` and its commit V, and
     ///   keeps t: the ask by t alone then prints the same ruling. O's local
-    ///   replay prints `dispatch D S content <brief>`, `verdict V D O <rubric>
-    ///   t`, the two ruling lines under V, `dispatched D S` — the verdict
-    ///   answers no attempt — and `evidence t held`.
+    ///   replay prints `dispatch D S edition <number> content <brief>`,
+    ///   `verdict V D O <rubric> t`, the two ruling lines under V, `dispatched
+    ///   D S` — the verdict answers no attempt — and `evidence t held`.
     /// - panics: on any contract violation.
     #[test]
     fn a_judge_rules_on_a_transcript_and_replay_shows_the_verdict()
@@ -464,7 +464,10 @@ mod tests
         assert_eq!(
             finish(peer(o).args(["replay", tree.as_str(), "--local"])),
             [
-                format!("dispatch {dispatch} {s_peer} content {BRIEF}"),
+                format!(
+                    "dispatch {dispatch} {s_peer} edition {} content {BRIEF}",
+                    domhringr_record_tree::Edition::CURRENT
+                ),
                 format!("verdict {commit} {dispatch} {o_peer} {RUBRIC} {transcript}"),
                 format!("ruling {commit} {question} {read}"),
                 format!("ruling {commit} {other_question} unread malformed"),

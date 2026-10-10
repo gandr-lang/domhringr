@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tree = key.tree();
         node.peer().commit(tree, Receipt::open(&key, me)?).await?;
         let brief = Brief::Content(ContentHash::of(&Content::from(b"the brief".to_vec())));
-        node.peer().commit(tree, Receipt::dispatch(tree, me, brief)?).await?;
+        node.peer().commit(tree, Receipt::dispatch(tree, me, domhringr_record_tree::Edition::ONE, brief)?).await?;
         let mut events = serve(Arc::clone(&node), Surface::Program("echo".into()), Evidence::open(&state));
         while let Some(event) = events.recv().await {
             if let Event::Reported { report, .. } = event {

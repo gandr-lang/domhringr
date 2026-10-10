@@ -83,10 +83,25 @@ pub struct View
     book: BTreeMap<PeerKey, Presence>,
     /// The admitted seat receipts and the current attempt.
     task: Task,
+    /// Each dispatch's named protocol and admitted endpoint skeleton.
+    plays: BTreeMap<CommitId, (Edition, Play)>,
     /// The admitted commits' ids.
     admitted: BTreeSet<CommitId>,
     /// The refused commits and why, in canonical order.
     refused: Vec<(CommitId, Refusal)>,
+}
+
+/// Why a recorded play cannot be transported.
+#[derive(Debug, thiserror::Error)]
+pub enum PlayTransportError
+{
+    /// No dispatch with this commit was admitted for monitoring.
+    #[error("no monitored dispatch {0}")]
+    Missing(CommitId),
+    /// Protocol lookup, certificate formation or complete-play conformance
+    /// failed.
+    #[error(transparent)]
+    Arena(#[from] domhringr_arena_session::ArenaError),
 }
 
 impl View
@@ -320,6 +335,41 @@ impl View
     pub const fn task(&self) -> &Task
     {
         &self.task
+    }
+
+    /// Transport one complete admitted play to a named edition without writing
+    /// receipts.
+    ///
+    /// # Specification
+    /// - ensures: the source edition comes from the dispatch; the returned play
+    ///   preserves every admitted move and digest after local certificate
+    ///   formation.
+    /// - fails: a missing dispatch, unavailable protocol, incomplete play or
+    ///   invalid widening is refused, never substituted.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`PlayTransportError`]: the named play or widening cannot be
+    ///   established.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — complete, incomplete, missing and unknown-edition
+    ///   attempts distinguish transport from replay under a local default.
+    /// - witness: `fold::tests::dispatch_editions_govern_each_attempt`
+    #[inline]
+    pub fn transport(
+        &self,
+        dispatch: CommitId,
+        target: Edition,
+    ) -> Result<Play, PlayTransportError>
+    {
+        let &(source, ref play) = self
+            .plays
+            .get(&dispatch)
+            .ok_or(PlayTransportError::Missing(dispatch))?;
+        let arena = Arena::new()?;
+        let play = arena.transport(source, target, play)?;
+        Ok(play)
     }
 
     /// The refused commits and why, in canonical order.
@@ -706,7 +756,7 @@ struct Past
 /// # Adequacy
 /// - hypothesis: L3 order and pause-width near misses pin the receipt and
 ///   state.
-/// - witness: `fold::tests::session_replay_refuses_order_and_certifies_pause`
+/// - witness: `fold::tests::dispatch_editions_govern_each_attempt`
 fn record_move(
     play: &mut Play,
     edition: Edition,
@@ -738,15 +788,19 @@ fn record_move(
 /// - hypothesis: L3 out-of-order and wrong-author twins distinguish protocol
 ///   state from authority, and a refused pause leaves the next report
 ///   admissible.
-/// - witness: `fold::tests::session_replay_refuses_order_and_certifies_pause`
+/// - witness: `fold::tests::dispatch_editions_govern_each_attempt`
 fn admit_move(
-    play: &mut Play,
+    plays: &mut BTreeMap<CommitId, (Edition, Play)>,
+    dispatch: CommitId,
     authority: Result<(), Refusal>,
-    edition: Edition,
     movement: Movement,
     commit: CommitId,
 ) -> Result<(), Refusal>
 {
+    let Some(&mut (edition, ref mut play)) = plays.get_mut(&dispatch)
+    else {
+        return Err(Refusal::NotCurrent);
+    };
     if let Err(authority) = authority {
         let arena = ARENA
             .as_ref()
@@ -977,30 +1031,6 @@ pub fn fold(
     commits: Vec<VerifiedMeta<LooseCommit>>,
 ) -> Result<View, Unopened>
 {
-    fold_at(tree, commits, Edition::Paused)
-}
-
-/// Fold the same record under a selected protocol edition.
-///
-/// # Specification
-/// - ensures: the authority and ordering rules of [`fold`], with each Seat move
-///   independently replayed under `edition`; refusals remain named facts.
-/// - fails: [`Unopened`] when no root proof admits an owner.
-/// - panics: none.
-///
-/// # Errors
-/// [`Unopened`] if the tree has no admitted root.
-///
-/// # Adequacy
-/// - hypothesis: L3 the same record admits pause only under Paused; named
-///   out-of-order refusals do not change the admitted prefix.
-/// - witness: `fold::tests::session_replay_refuses_order_and_certifies_pause`
-pub fn fold_at(
-    tree: TreeId,
-    commits: Vec<VerifiedMeta<LooseCommit>>,
-    edition: Edition,
-) -> Result<View, Unopened>
-{
     let mut commits = commits;
     commits.sort_by(canonical);
     commits.dedup_by(|later, earlier| canonical(later, earlier).is_eq());
@@ -1093,6 +1123,7 @@ pub fn fold_at(
         introductions: BTreeMap::new(),
         book: BTreeMap::new(),
         task: Task::new(),
+        plays: BTreeMap::new(),
         admitted: BTreeSet::new(),
         refused: Vec::new(),
     };
@@ -1136,40 +1167,39 @@ pub fn fold_at(
                 }
                 else {
                     let protocol = match kind {
-                        | Kind::Dispatch { .. } if authorized => {
+                        | Kind::Dispatch { edition, .. } if authorized => {
                             let mut play = Play::default();
                             let result =
                                 record_move(&mut play, edition, Movement::Dispatch, node.commit);
-                            if result.is_ok() {
-                                drop(plays.insert(node.commit, play));
-                            }
+                            // Keep unknown names so subsequent moves cannot fall back.
+                            drop(plays.insert(node.commit, (edition, play)));
                             result
                         },
                         | Kind::Report { dispatch, .. } => admit_move(
-                            plays.entry(dispatch).or_default(),
+                            &mut plays,
+                            dispatch,
                             past.course.answerable(dispatch, node.author),
-                            edition,
                             Movement::Report,
                             node.commit,
                         ),
                         | Kind::Handoff { dispatch, .. } => admit_move(
-                            plays.entry(dispatch).or_default(),
+                            &mut plays,
+                            dispatch,
                             past.course.answerable(dispatch, node.author),
-                            edition,
                             Movement::Handoff,
                             node.commit,
                         ),
                         | Kind::Retire { dispatch, .. } => admit_move(
-                            plays.entry(dispatch).or_default(),
+                            &mut plays,
+                            dispatch,
                             past.course.answerable(dispatch, node.author),
-                            edition,
                             Movement::Retire,
                             node.commit,
                         ),
                         | Kind::Pause { dispatch, .. } => admit_move(
-                            plays.entry(dispatch).or_default(),
+                            &mut plays,
+                            dispatch,
                             past.course.answerable(dispatch, node.author),
-                            edition,
                             Movement::Pause,
                             node.commit,
                         ),
@@ -1227,7 +1257,11 @@ pub fn fold_at(
                                 None
                             },
                             | Kind::Withdraw { .. } if present => Some(Refusal::ForeignPresence),
-                            | Kind::Dispatch { seat, brief } if authorized => {
+                            | Kind::Dispatch {
+                                seat,
+                                edition,
+                                brief,
+                            } if authorized => {
                                 past.course = Course::Dispatched {
                                     placed,
                                     dispatch: node.commit,
@@ -1235,7 +1269,7 @@ pub fn fold_at(
                                     holder: Holder::Seat(seat),
                                 };
                                 let _seated_before = past.seats.insert(seat);
-                                view.task.dispatch(node.commit, seat, brief);
+                                view.task.dispatch(node.commit, seat, edition, brief);
                                 None
                             },
                             | Kind::Report {
@@ -1434,6 +1468,7 @@ pub fn fold_at(
             drop(carries.insert(position, Carry { past, readers }));
         }
     }
+    view.plays = plays;
     Ok(view)
 }
 
@@ -1867,7 +1902,7 @@ mod tests
     /// trivial.
     fn dispatch(seat: PeerKey) -> Receipt
     {
-        Receipt::dispatch(tree(), seat, brief()).unwrap()
+        Receipt::dispatch(tree(), seat, crate::Edition::ONE, brief()).unwrap()
     }
 
     /// A fresh report on `dispatch` of the content `text`, summarized as it.
@@ -2780,6 +2815,7 @@ mod tests
             ]),
             book: BTreeMap::from([(author, Presence::new(reached.clone(), presented))]),
             task: Task::new(),
+            plays: BTreeMap::new(),
             admitted: BTreeSet::new(),
             refused: vec![(refused, Refusal::NoAuthority)],
         };
@@ -2878,6 +2914,7 @@ mod tests
                 view.task().steps(),
                 &[
                     (id(&dispatched), Step::Dispatch {
+                        edition: crate::Edition::ONE,
                         seat: key(&s),
                         brief: brief(),
                     }),
@@ -2894,29 +2931,76 @@ mod tests
     }
 
     #[test]
-    fn session_replay_refuses_order_and_certifies_pause()
+    fn editionless_dispatches_keep_edition_one_refusals()
+    {
+        let (a, s) = (owner(), other());
+        runtime().block_on(async {
+            let opened = commit(&a, tree(), &[], &open(&a)).await;
+            let blob = crate::testing::editionless_dispatch(tree(), key(&s));
+            let dispatched = seal(&a, tree(), &[&opened], blob.clone()).await;
+            let d = id(&dispatched);
+            let paused = commit(&s, tree(), &[&dispatched], &Receipt::pause(tree(), d).unwrap()).await;
+            let early = commit(&s, tree(), &[&paused], &Receipt::retire(tree(), d).unwrap()).await;
+            let reported = commit(&s, tree(), &[&early], &report(d, "done".into())).await;
+            let retired = commit(&s, tree(), &[&reported], &Receipt::retire(tree(), d).unwrap()).await;
+            let late = commit(&s, tree(), &[&retired], &report(d, "late".into())).await;
+            let view = fold(tree(), vec![opened, dispatched.clone(), paused.clone(), early.clone(), reported.clone(), retired.clone(), late.clone()]).unwrap();
+            assert_eq!(dispatched.blob(), &blob);
+            assert_eq!(attempt(&view).edition(), crate::Edition::ONE);
+            assert_eq!(attempt(&view).answer(), Answer::Reported(id(&reported)));
+            assert_eq!(attempt(&view).slot(), Slot::Retired { by: key(&s), at: id(&retired) });
+            assert_eq!(view.refused().iter().map(|&(commit, _)| commit).collect::<BTreeSet<_>>(), BTreeSet::from([id(&paused), id(&early), id(&late)]));
+            for refusal in view.refused().iter().map(|refused| &refused.1) {
+                assert!(matches!(refusal, Refusal::Protocol(reason) if reason.edition == crate::Edition::ONE && matches!(reason.reason, domhringr_arena_session::Reason::Replay(_))));
+            }
+        });
+    }
+
+    #[test]
+    fn dispatch_editions_govern_each_attempt()
     {
         let (a, s) = (owner(), other());
         runtime().block_on(async {
             let opened = commit(&a, tree(), &[], &open(&a)).await;
             let early = commit(&s, tree(), &[&opened], &report(CommitId::new([7; 32]), "early".into())).await;
-            let dispatched = commit(&a, tree(), &[&early], &dispatch(key(&s))).await;
-            let d = id(&dispatched);
-            let paused = commit(&s, tree(), &[&dispatched], &Receipt::pause(tree(), d).unwrap()).await;
-            let reported = commit(&s, tree(), &[&paused], &report(d, "done".into())).await;
-            let retired = commit(&s, tree(), &[&reported], &Receipt::retire(tree(), d).unwrap()).await;
-            let commits = vec![opened, early.clone(), dispatched, paused.clone(), reported.clone(), retired.clone()];
-            let base = super::fold_at(tree(), commits.clone(), crate::Edition::Base).unwrap();
-            let wide = super::fold_at(tree(), commits, crate::Edition::Paused).unwrap();
-            assert!(matches!(wide.refused(), [(commit, Refusal::Protocol(reason))] if *commit == id(&early)
-                && reason.movement == domhringr_arena_session::Movement::Report
-                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { expected: gandr_core_session::Action::Receive(_), reason: gandr_core_session::Refusal::WrongDirection, .. })));
-            assert!(matches!(base.refused(), [_, (commit, Refusal::Protocol(reason))] if *commit == id(&paused)
-                && reason.movement == domhringr_arena_session::Movement::Pause
-                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { reason: gandr_core_session::Refusal::WrongLabel, .. })));
-            for view in [&base, &wide] {
-                assert_eq!(attempt(view).answer(), Answer::Reported(id(&reported)));
-                assert_eq!(attempt(view).slot(), Slot::Retired { by: key(&s), at: id(&retired) });
+            let mut commits = vec![opened, early.clone()];
+            let mut expected = vec![(id(&early), Refusal::NotCurrent)];
+            for edition in [crate::Edition::ONE, crate::Edition::TWO, crate::Edition::from(99)] {
+                let receipt = Receipt::dispatch(tree(), key(&s), edition, brief()).unwrap();
+                let dispatched = commit(&a, tree(), &[commits.last().unwrap()], &receipt).await;
+                let d = id(&dispatched);
+                let prefix = fold(tree(), commits.iter().cloned().chain([dispatched.clone()]).collect()).unwrap();
+                assert!(matches!(prefix.transport(CommitId::new([0; 32]), edition), Err(super::PlayTransportError::Missing(_))));
+                if edition == crate::Edition::ONE {
+                    assert!(matches!(prefix.transport(d, edition), Err(super::PlayTransportError::Arena(domhringr_arena_session::ArenaError::Transport(gandr_core_session::certified::TransportError::Replay(gandr_core_session::ReplayError::IncompleteRun { .. }))))));
+                }
+                let paused = commit(&s, tree(), &[&dispatched], &Receipt::pause(tree(), d).unwrap()).await;
+                let reported = commit(&s, tree(), &[&paused], &report(d, "done".into())).await;
+                let retired = commit(&s, tree(), &[&reported], &Receipt::retire(tree(), d).unwrap()).await;
+                let known = edition == crate::Edition::ONE || (cfg!(feature = "edition-2") && edition == crate::Edition::TWO);
+                let moves = [(id(&dispatched), domhringr_arena_session::Movement::Dispatch), (id(&paused), domhringr_arena_session::Movement::Pause), (id(&reported), domhringr_arena_session::Movement::Report), (id(&retired), domhringr_arena_session::Movement::Retire)];
+                commits.extend([dispatched, paused, reported.clone(), retired.clone()]);
+                let view = fold(tree(), commits.clone()).unwrap();
+                if known {
+                    assert_eq!(attempt(&view).edition(), edition);
+                    let target = if cfg!(feature = "edition-2") { crate::Edition::TWO } else { crate::Edition::ONE };
+                    let transported = view.transport(d, target).unwrap();
+                    assert_eq!(transported.moves(), view.plays[&d].1.moves());
+                    assert_eq!(attempt(&view).answer(), Answer::Reported(id(&reported)));
+                    assert_eq!(attempt(&view).slot(), Slot::Retired { by: key(&s), at: id(&retired) });
+                    if edition == crate::Edition::ONE {
+                        let &(pause, ref refusal) = view.refused().last().unwrap();
+                        assert_eq!(pause, moves[1].0);
+                        assert!(matches!(refusal, Refusal::Protocol(reason) if reason.edition == edition && reason.movement == domhringr_arena_session::Movement::Pause && matches!(reason.reason, domhringr_arena_session::Reason::Replay(gandr_core_session::ReplayError::Refused { reason: gandr_core_session::Refusal::WrongLabel, .. }))));
+                        expected.push((pause, refusal.clone()));
+                    }
+                } else {
+                    assert!(matches!(view.transport(d, crate::Edition::ONE), Err(super::PlayTransportError::Arena(domhringr_arena_session::ArenaError::Unknown(domhringr_arena_session::UnknownEdition(named)))) if named == edition));
+                    for (commit, movement) in moves {
+                        expected.push((commit, Refusal::Protocol(Box::new(domhringr_arena_session::Refusal { edition, movement, reason: domhringr_arena_session::Reason::Unknown(domhringr_arena_session::UnknownEdition(edition)) }))));
+                    }
+                }
+                assert_eq!(view.refused(), expected);
             }
         });
     }
@@ -2949,7 +3033,7 @@ mod tests
             let mut refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
             assert!(matches!(refused.remove(&id(&handed)), Some(Refusal::Protocol(reason))
                 if reason.movement == domhringr_arena_session::Movement::Handoff
-                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. })));
+                && matches!(reason.reason, domhringr_arena_session::Reason::Replay(gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. }))));
             assert!(matches!(refused.remove(&id(&by_owner)), Some(Refusal::NotHolder | Refusal::Protocol(_))));
             assert_eq!(refused, BTreeMap::from([
                 (id(&early), Refusal::NotHolder),
@@ -2985,7 +3069,7 @@ mod tests
             for ((commit, movement), &(actual, ref refusal)) in expected.into_iter().zip(view.refused()) {
                 assert_eq!(actual, commit);
                 assert!(matches!(*refusal, Refusal::Protocol(ref reason) if reason.movement == movement
-                    && matches!(reason.reason, gandr_core_session::ReplayError::Refused { expected: gandr_core_session::Action::End, reason: gandr_core_session::Refusal::ResumeAfterEnd, .. })));
+                    && matches!(reason.reason, domhringr_arena_session::Reason::Replay(gandr_core_session::ReplayError::Refused { expected: gandr_core_session::Action::End, reason: gandr_core_session::Refusal::ResumeAfterEnd, .. }))));
             }
             assert_eq!(view.refused().len(), expected.len());
             assert_eq!((attempt(&view).slot(), attempt(&view).answer()), (Slot::Held(key(&t)), Answer::Reported(id(&reported))));
@@ -3013,7 +3097,7 @@ mod tests
             .unwrap();
             assert!(matches!(view.refused(), [(commit, Refusal::Protocol(reason))]
                 if *commit == id(&retired) && reason.movement == domhringr_arena_session::Movement::Retire
-                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. })));
+                && matches!(reason.reason, domhringr_arena_session::Reason::Replay(gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. }))));
             let attempt = attempt(&view);
             assert_eq!((attempt.slot(), attempt.answer(), attempt.seat()),
                 (Slot::Held(key(&s)), Answer::Reported(id(&late)), key(&s)),
@@ -3049,11 +3133,12 @@ mod tests
             ])
             .unwrap();
             let mut refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
-            assert!(matches!(refused.remove(&id(&unknown)), Some(Refusal::Protocol(reason))
-                if reason.movement == domhringr_arena_session::Movement::Report
-                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(0), expected: gandr_core_session::Action::Receive(_), reason: gandr_core_session::Refusal::WrongDirection, .. })));
-            assert_eq!(refused, BTreeMap::from([(id(&stale), Refusal::NotCurrent)]),
-                "superseded dispatches retain their independent causal authority refusal");
+            assert_eq!(refused.remove(&id(&unknown)), Some(Refusal::NotCurrent));
+            assert_eq!(
+                refused,
+                BTreeMap::from([(id(&stale), Refusal::NotCurrent)]),
+                "superseded dispatches retain their independent causal authority refusal"
+            );
             assert!(
                 view.task()
                     .steps()
@@ -3106,7 +3191,7 @@ mod tests
             let mut refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
             assert!(matches!(refused.remove(&id(&retired)), Some(Refusal::Protocol(reason))
                 if reason.movement == domhringr_arena_session::Movement::Retire
-                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. })));
+                && matches!(reason.reason, domhringr_arena_session::Reason::Replay(gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. }))));
             assert_eq!(
                 refused,
                 BTreeMap::from([
@@ -3226,7 +3311,7 @@ mod tests
             let mut refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
             assert!(matches!(refused.remove(&id(&retired)), Some(Refusal::Protocol(reason))
                 if reason.movement == domhringr_arena_session::Movement::Retire
-                && matches!(reason.reason, gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. })));
+                && matches!(reason.reason, domhringr_arena_session::Reason::Replay(gandr_core_session::ReplayError::Refused { at: gandr_core_session::MoveIndex(1), reason: gandr_core_session::Refusal::WrongLabel, .. }))));
             assert_eq!(
                 refused,
                 BTreeMap::from([
@@ -3632,9 +3717,9 @@ mod tests
         });
         let mut task = Task::new();
         assert_eq!(task.to_string(), "undispatched\n", "no dispatch");
-        task.dispatch(first, s, anchored);
+        task.dispatch(first, s, crate::Edition::ONE, anchored);
         let dispatch_line = format!(
-            "dispatch {first} {s} anchor domhringr://{}/a\\\\b\n",
+            "dispatch {first} {s} edition 1 anchor domhringr://{}/a\\\\b\n",
             tree()
         );
         assert_eq!(
@@ -3753,7 +3838,7 @@ mod tests
             format!("{answered}landed {first} {landing} {merge}\n"),
             "a landed dispatch stays landed after a later decision"
         );
-        task.dispatch(second, s, Brief::Content(hash));
+        task.dispatch(second, s, crate::Edition::ONE, Brief::Content(hash));
         task.answer(abandoned, Step::Retire {
             dispatch: second,
             author: s,
@@ -3761,7 +3846,7 @@ mod tests
         assert_eq!(
             task.to_string(),
             format!(
-                "{answered}dispatch {second} {s} content {hash}\nretire {abandoned} {second} \
+                "{answered}dispatch {second} {s} edition 1 content {hash}\nretire {abandoned} {second} \
                  {s}\nstalled {second} {abandoned}\n"
             ),
             "a later dispatch by content, retired from unreported, is stalled"
