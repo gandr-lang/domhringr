@@ -33,6 +33,10 @@ security find-identity -v -p codesigning
 
 The test task signs both test executables and the binaries they launch with `org.gandr-lang.domhringr.test`. Allow the first firewall prompt if one appears; the same certificate and identifier let the firewall recognize later builds and worktrees. User-domain trust is sufficient for this workflow; administrator-domain trust is not required. Keep this identity out of release signing. With `CODESIGN_IDENTITY` unset, or on Linux, tests run as built.
 
+The Clippy wall lints every target in plain and enforcing modes, locally and in CI, with warnings denied. `mise run check:clippy-enforcing` uses `--cfg anodized_panic`, the test profile and `target/enforcing`. CI restores the complete test archive before both lint passes; the test lane and main retain cache ownership.
+
+Dylint runs plain, including when the calling environment requests specification enforcement. Its separately built plugin does not inherit workspace features, so the task strips panic and print enforcement cfgs from both Cargo flag forms while preserving unrelated flags and `DYLINT_RUSTFLAGS`. Its lints read source; quenchant's gates check the plugin's own specifications.
+
 CI builds every target under the test profile: size-optimized `release` code without debuginfo, with debug assertions and overflow checks explicitly enabled. `mise run test -- --profile ci` runs the existing test task against that build; private-item rustdoc uses the same Cargo profile. `release` and the aggressive, uncached `dist` profile are unchanged.
 
 The complete test artifact set is archived with zstd and uploaded without recompression. The archive contains `target/debug` and `target/enforcing/debug`, not unrelated profiles or generated documentation. Its cache retains integration-test binaries independently of dependency-cache cleanup, and Cargo checks source contents rather than checkout mtimes. Main promotes verified queue artifacts; hosted manual runs warm branch-local caches. The locked mise cache supplies installed policy tools, including sizelint, without rebuilding them on warm runs.
