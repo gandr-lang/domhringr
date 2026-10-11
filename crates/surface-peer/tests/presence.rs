@@ -11,6 +11,7 @@ mod tests
     use std::ffi::OsStr;
     use std::ffi::OsString;
     use std::io::BufRead as _;
+    use std::io::Read as _;
     use std::path::Path;
     use std::process::Child;
     use std::process::Command;
@@ -152,8 +153,46 @@ mod tests
         line.into()
     }
 
-    /// A UDP port in the ephemeral range that nothing on this host holds, as
-    /// its decimal text.
+    /// Why the presence fixture could not complete.
+    #[derive(Debug, thiserror::Error)]
+    enum FixtureError
+    {
+        /// Another socket claimed the selected UDP port before the peer.
+        #[error("selected UDP port is already in use")]
+        PortCollision,
+        /// A fixture process or temporary directory could not be managed.
+        #[error("fixture I/O failed: {0}")]
+        Io(#[from] std::io::Error),
+        /// The presenting command printed invalid UTF-8.
+        #[error("present printed invalid UTF-8: {0}")]
+        Utf8(#[from] core::str::Utf8Error),
+    }
+
+    /// Recognize only the peer's address-in-use bind failure.
+    ///
+    /// # Specification
+    /// - fails: with `FixtureError::PortCollision` only for an address-in-use
+    ///   bind failure.
+    /// - panics: none.
+    /// - executable: none — this classifier is its own specification.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture retries port collisions and
+    ///   retains every other failure as a failing assertion.
+    /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
+    fn require_bound(output: &std::process::Output) -> Result<(), FixtureError>
+    {
+        if !output.status.success()
+            && String::from_utf8_lossy(&output.stderr).contains(
+                "cannot bind the iroh endpoint: Failed to bind sockets: Address already in use",
+            )
+        {
+            return Err(FixtureError::PortCollision);
+        }
+        Ok(())
+    }
+
+    /// An OS-selected ephemeral UDP port, after releasing the probe socket.
     ///
     /// # Specification
     /// trivial.
@@ -184,8 +223,9 @@ mod tests
         /// - ensures: the process is running, has announced `ids` and
         ///   `listening`, and its standard output is read line by line; its
         ///   standard error passes through to the test's.
-        /// - panics: when the process cannot start or its announcement is not
-        ///   `ids` and `listening`.
+        /// - fails: with `FixtureError::PortCollision` if another socket claims
+        ///   the port, or `FixtureError::Io` if process management fails.
+        /// - panics: when its announcement is not `ids` and `listening`.
         /// - executable: none — process, channel or filesystem effects cannot
         ///   be replayed in a predicate; the process witness checks their
         ///   observable results.
@@ -198,7 +238,7 @@ mod tests
             state: &Path,
             port: &OsStr,
             ids: &[String],
-        ) -> Self
+        ) -> Result<Self, FixtureError>
         {
             let mut child = peer(state)
                 .arg("serve")
@@ -206,9 +246,8 @@ mod tests
                 .arg(port)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
-                .spawn()
-                .unwrap();
+                .stderr(Stdio::piped())
+                .spawn()?;
             let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
             let (sender, lines) = mpsc::channel();
             drop(std::thread::spawn(move || {
@@ -218,17 +257,38 @@ mod tests
                     }
                 }
             }));
-            let server = Self { child, lines };
-            let mut announced = ids.to_vec();
-            announced.push("listening".into());
-            assert_eq!(
-                core::iter::repeat_with(|| server.line())
-                    .take(3)
-                    .collect::<Vec<_>>(),
-                announced,
-                "serve announces its ids"
-            );
-            server
+            let mut server = Self { child, lines };
+            for expected in ids.iter().map(String::as_str).chain(["listening"]) {
+                match server.lines.recv_timeout(DEADLINE) {
+                    | Ok(line) => assert_eq!(line, expected, "serve announces its ids"),
+                    | Err(error) => {
+                        server.child.kill()?;
+                        let status = server.child.wait()?;
+                        let mut stderr = Vec::new();
+                        server
+                            .child
+                            .stderr
+                            .take()
+                            .unwrap()
+                            .read_to_end(&mut stderr)?;
+                        let output = std::process::Output {
+                            status,
+                            stdout: Vec::new(),
+                            stderr,
+                        };
+                        require_bound(&output)?;
+                        panic!(
+                            "serve announcement failed: {error}: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    },
+                }
+            }
+            let mut stderr = server.child.stderr.take().unwrap();
+            drop(std::thread::spawn(move || {
+                std::io::copy(&mut stderr, &mut std::io::stderr()).unwrap();
+            }));
+            Ok(server)
         }
 
         /// Assert the server admitted the peer `dialer` and printed the path
@@ -330,7 +390,38 @@ mod tests
     #[test]
     fn a_peer_is_reached_through_the_book_until_it_withdraws()
     {
-        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        // The CLI takes a port, not a socket. Present and both serve starts
+        // must reuse that announced port, leaving bind/drop/rebind windows.
+        // Retry the fixture with a fresh ephemeral port at most three times,
+        // only on EADDRINUSE; assertion failures are never retried.
+        for _ in 0_u8 .. 3 {
+            match check_presence() {
+                | Ok(()) => return,
+                | Err(FixtureError::PortCollision) => {},
+                | Err(error) => panic!("presence fixture failed: {error}"),
+            }
+        }
+        panic!("presence fixture lost its UDP port on all three attempts");
+    }
+
+    /// Exercise the presence lifecycle once with fresh state and a fresh port.
+    ///
+    /// # Specification
+    /// - ensures: the presenting peer is reached until its withdrawal syncs.
+    /// - fails: with `FixtureError::PortCollision` if a bind loses its selected
+    ///   port, `FixtureError::Io` on fixture I/O, or `FixtureError::Utf8` if
+    ///   the presenting command prints invalid UTF-8.
+    /// - panics: on any other process or presence assertion failure.
+    /// - executable: none — the process effects are checked by this witness.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the fixture checks the book and each command's source
+    ///   before and after withdrawal.
+    /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
+    fn check_presence() -> Result<(), FixtureError>
+    {
+        let a = tempfile::tempdir()?;
+        let b = tempfile::tempdir()?;
         let (a, b) = (a.path(), b.path());
         let (a_id, b_id) = (finish(peer(a).arg("id")), finish(peer(b).arg("id")));
         let (a_endpoint, a_peer) = (a_id[0].clone(), a_id[1].clone());
@@ -344,7 +435,14 @@ mod tests
         let _bound = only(peer(a).args(["bind", x.as_str(), "anchor", commit.as_str()]));
         let resolved = format!("anchor {commit}");
 
-        let presented = only(peer(a).args(["present", tree.as_str(), "--port", port.as_str()]));
+        let mut command = peer(a);
+        let command = command.args(["present", tree.as_str(), "--port", port.as_str()]);
+        let presented = output(command);
+        require_bound(&presented)?;
+        assert!(presented.status.success(), "{command:?}: {presented:?}");
+        let presented = core::str::from_utf8(&presented.stdout)?;
+        let presented = presented.strip_suffix('\n').unwrap();
+        assert!(!presented.contains('\n'), "present prints one commit");
         let book = only(peer(a).args(["book", tree.as_str()]));
         let fields = book.split(' ').collect::<Vec<_>>();
         let [peer_id, endpoint, since] = *fields.as_slice()
@@ -363,7 +461,7 @@ mod tests
             "the owner resolves its own tree reaching no one"
         );
 
-        let server = Server::start(a, OsStr::new(&port), &a_id);
+        let server = Server::start(a, OsStr::new(&port), &a_id)?;
         let first_contact = format!("{a_endpoint}@127.0.0.1:{port}");
         let synced = finish(peer(b).args([
             "sync",
@@ -413,7 +511,7 @@ mod tests
             Vec::<String>::new(),
             "a withdrawn presence leaves the book"
         );
-        let server = Server::start(a, OsStr::new(&port), &a_id);
+        let server = Server::start(a, OsStr::new(&port), &a_id)?;
         let synced = finish(peer(b).args(["sync", tree.as_str()]));
         assert_eq!(
             synced.first(),
@@ -438,5 +536,6 @@ mod tests
         );
         server.admitted(&b_peer);
         drop(server);
+        Ok(())
     }
 }
