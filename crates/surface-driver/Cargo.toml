@@ -20,6 +20,7 @@ path = "src/main.rs"
 anodized = { workspace = true }
 domhringr-judge-oracle = { workspace = true }
 domhringr-record-evidence = { workspace = true }
+domhringr-record-index = { workspace = true }
 domhringr-record-tree = { workspace = true }
 domhringr-seat-slot = { workspace = true }
 domhringr-strategy-document = { workspace = true }
@@ -28,9 +29,6 @@ lexopt = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-
-[dev-dependencies]
-domhringr-record-index = { workspace = true }
 
 [features]
 default = ["edition-2"]

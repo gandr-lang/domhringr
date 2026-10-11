@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use anodized::spec;
 use domhringr_record_tree::IndexDigest;
 use domhringr_record_tree::StateDir;
+use domhringr_record_tree::TreeId;
 use gandr_storage_records::BlockStore as _;
 use gandr_storage_records::DecodeWork;
 use gandr_storage_records::DecodedNode;
@@ -34,6 +35,16 @@ use crate::wire::WireError;
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Store(PathBuf);
+
+/// Whether a local project cursor has been published.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Cached
+{
+    /// No derivation has been retained for this project.
+    Absent,
+    /// The last complete locally derived project.
+    Manifest(IndexDigest),
+}
 
 /// Why a named index cannot be written or authenticated.
 #[derive(Debug, thiserror::Error)]
@@ -243,6 +254,62 @@ impl Store
             return Err(StoreError::Root(digest));
         }
         Ok(Index { manifest, tree })
+    }
+
+    /// Read this store's last locally derived project.
+    ///
+    /// # Specification
+    /// - ensures: absence is a cold cache; a present cursor names one manifest.
+    /// - fails: file access or an incorrectly sized cursor.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`StoreError::File`]: the cursor cannot be read.
+    pub(crate) fn cached(
+        &self,
+        project: TreeId,
+    ) -> Result<Cached, StoreError>
+    {
+        let path = self.0.join("projects").join(project.to_string());
+        let bytes = match std::fs::read(&path) {
+            | Ok(bytes) => bytes,
+            | Err(failure) if failure.kind() == io::ErrorKind::NotFound => {
+                return Ok(Cached::Absent);
+            },
+            | Err(source) => return Err(failed(&path)(source)),
+        };
+        let bytes: [u8; 32] = bytes.try_into().map_err(|_bytes| {
+            failed(&path)(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "project cursor must hold one index identity",
+            ))
+        })?;
+        Ok(Cached::Manifest(IndexDigest::from(bytes)))
+    }
+
+    /// Publish the cursor only after all derived images have been stored.
+    ///
+    /// # Specification
+    /// - requires: `digest` names a complete, locally derived project.
+    /// - ensures: the next refresh can reuse these entries without attesting.
+    /// - fails: directory creation or atomic publication failure.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`StoreError::File`]: persistence failed.
+    pub(crate) fn remember(
+        &self,
+        project: TreeId,
+        digest: IndexDigest,
+    ) -> Result<(), StoreError>
+    {
+        let directory = self.0.join("projects");
+        std::fs::create_dir_all(&directory).map_err(failed(&directory))?;
+        put(
+            &directory,
+            &directory.join(project.to_string()),
+            Body(digest.as_ref()),
+        )
     }
 
     /// Admit one named node into the verifying store before decoding its shape.

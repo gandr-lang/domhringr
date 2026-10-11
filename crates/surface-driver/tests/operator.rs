@@ -1095,4 +1095,364 @@ rm -rf "$work"
             "a refused merge commits no landing"
         );
     }
+
+    /// List the record directly, independently of the keyed-plane reader.
+    ///
+    /// # Specification
+    /// trivial.
+    async fn folding_listing(
+        peer: &Peer,
+        project: TreeId,
+    ) -> Vec<String>
+    {
+        use domhringr_record_tree::Authority;
+        use domhringr_record_tree::Target;
+        use domhringr_record_tree::ViewError;
+        let view = peer.view(project).await.unwrap();
+        let mut lines = vec![format!("project {}", Anchor::key(project))];
+        for (seat, presence) in view.book() {
+            if *seat != peer.identity().peer_key() {
+                lines.push(format!("seat {seat} {presence}"));
+            }
+        }
+        for (path, binding) in view.bindings() {
+            let Some(name) = path.as_ref().strip_prefix("tasks/")
+            else {
+                continue;
+            };
+            let Target::Anchor(Anchor::Tree(Authority::Key(tree))) = binding.1
+            else {
+                continue;
+            };
+            if name.contains('/') {
+                continue;
+            }
+            let standing = match peer.view(tree).await {
+                | Ok(task) => {
+                    for &(commit, ref refusal) in task.refused() {
+                        lines.push(format!(
+                            "refused {} {refusal}",
+                            Anchor::commit(tree, commit)
+                        ));
+                    }
+                    task.task().current().to_string()
+                },
+                | Err(ViewError::Unopened(_)) => String::from("unheld"),
+                | Err(failure) => panic!("fold task: {failure}"),
+            };
+            lines.push(format!("task {}{path} {standing}", Anchor::key(project)));
+        }
+        lines
+    }
+
+    /// A separate runtime releases the tree engine before the next process.
+    ///
+    /// # Specification
+    /// trivial.
+    fn local_runtime() -> tokio::runtime::Runtime
+    {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn open_reads_the_index_as_the_fold_reads_the_trees()
+    {
+        use domhringr_record_tree::Brief;
+        use domhringr_record_tree::Code;
+        use domhringr_record_tree::Current;
+        use domhringr_record_tree::Decision;
+        use domhringr_record_tree::Edition;
+        use domhringr_record_tree::Grade;
+        use domhringr_record_tree::Revision;
+        use domhringr_record_tree::Ruling;
+        use domhringr_record_tree::Status;
+        use domhringr_record_tree::Target;
+        use domhringr_record_tree::Unread;
+        use gandr_storage_values::ManifestDigest;
+        let root = tempfile::tempdir().unwrap();
+        let state = StateDir::from(root.path().to_path_buf());
+        let (project, task) = local_runtime().block_on(async {
+            let identity = Identity::load_or_create(&state).unwrap();
+            let me = identity.peer_key();
+            let peer = Peer::open(&state, identity).unwrap();
+            let project = TreeKey::mint(&state).unwrap();
+            let task = TreeKey::mint(&state).unwrap();
+            let absent = TreeKey::mint(&state).unwrap();
+            for key in [&project, &task] {
+                peer.commit(key.tree(), Receipt::open(key, me).unwrap())
+                    .await
+                    .unwrap();
+            }
+            for (name, tree) in [
+                ("alpha", task.tree()),
+                ("unheld", absent.tree()),
+                ("zeta", task.tree()),
+            ] {
+                peer.commit(
+                    project.tree(),
+                    Receipt::bind(
+                        project.tree(),
+                        format!("tasks/{name}").parse().unwrap(),
+                        Target::Anchor(Anchor::key(tree)),
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            }
+            drop(peer);
+            (project.tree(), task.tree())
+        });
+        let stages = [
+            "undispatched",
+            "dispatched",
+            "reported",
+            "verified",
+            "graded",
+            "decided",
+            "landed",
+            "refused",
+        ];
+        for stage in stages {
+            let (reference, heads) = local_runtime().block_on(async {
+                let identity = Identity::load_or_create(&state).unwrap();
+                let me = identity.peer_key();
+                let peer = Peer::open(&state, identity).unwrap();
+                let view = peer.view(task).await.unwrap();
+                let dispatch = match *view.task().current() {
+                    | Current::Attempt(ref attempt) => Some(attempt.dispatch()),
+                    | Current::Undispatched => None,
+                };
+                let hash = BRIEF.parse().unwrap();
+                let value = ManifestDigest::from([42; 32]);
+                match stage {
+                    | "undispatched" => {},
+                    | "dispatched" => {
+                        peer.commit(
+                            task,
+                            Receipt::dispatch(task, me, Edition::CURRENT, Brief::Content(hash))
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    },
+                    | "reported" => {
+                        peer.commit(
+                            task,
+                            Receipt::report(
+                                task,
+                                dispatch.unwrap(),
+                                value,
+                                "report".parse().unwrap(),
+                            )
+                            .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    },
+                    | "verified" => {
+                        peer.commit(
+                            task,
+                            Receipt::verified(
+                                task,
+                                dispatch.unwrap(),
+                                me,
+                                hash,
+                                "check".parse().unwrap(),
+                                value,
+                                Status::Exited(Code::from(0_i32)),
+                            )
+                            .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    },
+                    | "graded" => {
+                        let verdict = peer
+                            .commit(
+                                task,
+                                Receipt::verdict(task, dispatch.unwrap(), me, hash, value, vec![(
+                                    hash,
+                                    Ruling::Unread(Unread::Tied),
+                                )])
+                                .unwrap(),
+                            )
+                            .await
+                            .unwrap();
+                        peer.commit(
+                            task,
+                            Receipt::graded(task, verdict, vec![Grade::Refused], Grade::Refused)
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    },
+                    | "decided" => {
+                        peer.commit(
+                            task,
+                            Receipt::decide(task, dispatch.unwrap(), me, Decision::Land).unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    },
+                    | "landed" => {
+                        let Current::Attempt(ref attempt) = *view.task().current()
+                        else {
+                            panic!("attempt");
+                        };
+                        let &domhringr_record_tree::Progress::Decided { decide, .. } =
+                            attempt.progress()
+                        else {
+                            panic!("decided");
+                        };
+                        peer.commit(
+                            task,
+                            Receipt::landed(task, decide, Revision::Sha1([9; 20])).unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    },
+                    | "refused" => {
+                        peer.commit(
+                            task,
+                            Receipt::dispatch(task, me, Edition::from(99), Brief::Content(hash))
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    },
+                    | _ => panic!("unknown fixture stage"),
+                }
+                let reference = folding_listing(&peer, project).await;
+                if stage == "refused" {
+                    assert!(
+                        reference.iter().any(|line| line.starts_with("refused ")
+                            && line.ends_with("unknown edition 99"))
+                    );
+                }
+                else {
+                    assert!(reference.iter().any(|line| line.starts_with(&format!(
+                        "task {}tasks/alpha {stage}",
+                        Anchor::key(project)
+                    ))));
+                }
+                (reference, peer.heads(project).await.unwrap())
+            });
+            for _read in 0_u8 .. 2 {
+                let actual = ended(
+                    Command::new(env!("CARGO_BIN_EXE_domhringr"))
+                        .env("DOMHRINGR_STATE", root.path())
+                        .env("DOMHRINGR_PROJECT", Anchor::key(project).to_string())
+                        .arg("open"),
+                    Exit::Success,
+                );
+                assert_eq!(
+                    actual, reference,
+                    "{stage}: cold or refreshed, then unchanged"
+                );
+            }
+            local_runtime().block_on(async {
+                let identity = Identity::load_or_create(&state).unwrap();
+                let peer = Peer::open(&state, identity).unwrap();
+                assert_eq!(
+                    peer.heads(project).await.unwrap(),
+                    heads,
+                    "open never attests"
+                );
+                drop(peer);
+            });
+        }
+    }
+
+    /// Own claims in the actual store, checked against a whole derivation.
+    ///
+    /// # Specification
+    /// trivial.
+    fn attested(world: &World) -> Vec<CommitId>
+    {
+        local_runtime().block_on(async {
+            let state = StateDir::from(world.root.path().join("operator"));
+            let identity = Identity::load_or_create(&state).unwrap();
+            let author = identity.peer_key();
+            let peer = Peer::open(&state, identity).unwrap();
+            let view = peer.view(world.project).await.unwrap();
+            let claims: Vec<_> = view
+                .attestations()
+                .iter()
+                .filter(|entry| entry.0 == author)
+                .map(|entry| entry.1.commit)
+                .collect();
+            let claim = &view.indexes()[&author];
+            let store = domhringr_record_index::store::Store::open(&state);
+            let index = store.load(claim.index).unwrap();
+            assert!(
+                domhringr_record_index::check::check(&peer, world.project, claim, &index)
+                    .await
+                    .unwrap()
+                    .0
+                    .is_empty()
+            );
+            let whole = domhringr_record_index::derive::Deriver::default()
+                .project(&peer, world.project, &view, &store)
+                .await
+                .unwrap();
+            drop(peer);
+            assert_eq!(
+                whole.index.manifest.identity().unwrap(),
+                claim.index,
+                "attestation describes the command's resulting store"
+            );
+            claims
+        })
+    }
+
+    #[test]
+    fn a_committing_command_attests_a_changed_index_once()
+    {
+        let mut world = World::new([Written("attested"), Written("unused")]);
+        let task = Task("change");
+        let (dispatch, _) = world.dispatch(task, Which::First);
+        let first = attested(&world);
+        assert_eq!(first.len(), 1);
+        let resent = ended(
+            world
+                .driver()
+                .arg("dispatch")
+                .arg(task)
+                .arg("--seat")
+                .arg(world.seats[0].key.to_string())
+                .args(["--brief", BRIEF]),
+            Exit::Success,
+        );
+        assert!(resent[0].ends_with(&dispatch));
+        local_runtime().block_on(async {
+            let state = StateDir::from(world.root.path().join("operator"));
+            let identity = Identity::load_or_create(&state).unwrap();
+            let author = identity.peer_key();
+            let peer = Peer::open(&state, identity).unwrap();
+            let view = peer.view(world.project).await.unwrap();
+            drop(peer);
+            let claims: Vec<_> = view
+                .attestations()
+                .iter()
+                .filter(|entry| entry.0 == author)
+                .map(|entry| entry.1.commit)
+                .collect();
+            assert_eq!(
+                claims, first,
+                "a re-sent dispatch attests nothing, even if its wake syncs a report"
+            );
+        });
+        let _verified = world.verify(task);
+        assert_eq!(attested(&world).len(), 2);
+        world.seed(task, Ruled::Holds);
+        assert_eq!(attested(&world).len(), 3);
+        let _decided = world.decide(task, Exit::Success);
+        assert_eq!(attested(&world).len(), 4);
+        let _landed = ended(&mut world.land(task), Exit::Success);
+        assert_eq!(attested(&world).len(), 5);
+    }
 }

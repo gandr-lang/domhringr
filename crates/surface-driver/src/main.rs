@@ -519,6 +519,15 @@ enum RunError
     /// A tree cannot be folded.
     #[error(transparent)]
     View(#[from] ViewError),
+    /// A frontier could not be read.
+    #[error(transparent)]
+    Heads(#[from] domhringr_record_tree::HeadsError),
+    /// The operator's index could not be refreshed.
+    #[error(transparent)]
+    Index(#[from] domhringr_record_index::derive::DeriveError),
+    /// The refreshed index's manifest could not be named.
+    #[error(transparent)]
+    Manifest(#[from] domhringr_record_index::WireError),
     /// The seat cannot be reached, or the task synced from it.
     #[error(transparent)]
     Reach(#[from] Unreached),
@@ -539,7 +548,7 @@ enum RunError
     Unsynced
     {
         /// The task's anchor in its project.
-        task: Anchor,
+        task: String,
         /// Why.
         #[source]
         cause: Box<Unreached>,
@@ -1060,7 +1069,7 @@ async fn act(
 ) -> Result<Completion, RunError>
 {
     match command {
-        | Command::Open => project::open(peer, operator, project).await?,
+        | Command::Open => project::open(peer, state, operator, project).await?,
         | Command::Dispatch {
             task,
             seat,
@@ -1080,6 +1089,7 @@ async fn act(
             repository,
         } => {
             let (tree, store) = project::caught_up(peer, project, &task, evidence).await?;
+            let before = store.peer().heads(tree).await?;
             let verified = check::verify(
                 store.peer(),
                 evidence,
@@ -1090,6 +1100,9 @@ async fn act(
             )
             .await;
             store.close().await;
+            if store.peer().heads(tree).await? != before {
+                project::attest(store.peer(), state, project).await?;
+            }
             drop(store);
             verified?;
         },
@@ -1100,6 +1113,7 @@ async fn act(
             judging,
         } => {
             let (tree, store) = project::caught_up(peer, project, &task, evidence).await?;
+            let before = store.peer().heads(tree).await?;
             let decided = check::decide(
                 check::Deciding {
                     peer: store.peer(),
@@ -1113,13 +1127,20 @@ async fn act(
             )
             .await;
             store.close().await;
+            if store.peer().heads(tree).await? != before {
+                project::attest(store.peer(), state, project).await?;
+            }
             drop(store);
             return decided;
         },
         | Command::Land { task, repository } => {
             let (tree, store) = project::caught_up(peer, project, &task, evidence).await?;
+            let before = store.peer().heads(tree).await?;
             let landed = change::land(store.peer(), evidence, operator, tree, &repository).await;
             store.close().await;
+            if store.peer().heads(tree).await? != before {
+                project::attest(store.peer(), state, project).await?;
+            }
             drop(store);
             landed?;
         },

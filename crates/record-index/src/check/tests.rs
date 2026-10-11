@@ -42,11 +42,25 @@ fn a_forged_entry_is_found_by_re_derivation()
         let project_view = peer.view(project).await.unwrap();
         let heads = Heads::from_iter([fixture.standings[4]]);
         let mut entries = BTreeMap::new();
+        let mut provenance = crate::provenance::Records::default();
         for (name, tree) in project::bindings(&project_view) {
-            entries.insert(name, derive::at(&peer, tree, &heads, &store).await.unwrap());
+            let entry = derive::at(&peer, tree, &heads, &store).await.unwrap();
+            let TaskEntry::Held { dialogue, .. } = entry
+            else {
+                panic!("held task");
+            };
+            provenance
+                .extend(tree, &store.load(dialogue).unwrap())
+                .unwrap();
+            entries.insert(name, entry);
         }
         drop(peer);
-        let honest = project::build(&entries, &BTreeMap::new()).unwrap();
+        let provenance = provenance.build().unwrap();
+        let nested = BTreeMap::from([(
+            crate::IndexKind::Provenance,
+            store.keep(&provenance).unwrap(),
+        )]);
+        let honest = project::build(&entries, &nested).unwrap();
         let honest_digest = store.keep(&honest).unwrap();
         let receipt = testing::fenced(
             &Receipt::indexed(project, honest_digest).unwrap(),
@@ -67,7 +81,7 @@ fn a_forged_entry_is_found_by_re_derivation()
             panic!("held alias");
         };
         *current = Current::Undispatched;
-        let forged = project::build(&entries, &BTreeMap::new()).unwrap();
+        let forged = project::build(&entries, &nested).unwrap();
         let forged_digest = store.keep(&forged).unwrap();
         let receipt = testing::fenced(
             &Receipt::indexed(project, forged_digest).unwrap(),

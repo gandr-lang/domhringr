@@ -235,7 +235,7 @@ Reversal: a value too large to hold in memory, which needs the read streamed to 
 
 ## Keyed indexes
 
-The [index plane](../record-index/README.md) derives task dialogues and project entries without changing receipt admission. A project includes direct `tasks/<name>` bindings; each held entry names its task frontier, full standing, attempt count and dialogue manifest.
+The [index plane](../record-index/README.md) derives task dialogues, project entries and evidence/revision provenance without changing receipt admission. A project includes direct `tasks/<name>` bindings; each held entry names its task frontier, full standing, refusals, attempt count and dialogue manifest.
 
 Run these commands after `domhringr-peer --state <dir>`:
 
@@ -247,9 +247,12 @@ Run these commands after `domhringr-peer --state <dir>`:
 | `index play <project> <name> <attempt>` | Every move in that attempt, in canonical order |
 | `index after <project> <name> <attempt>` | `after <n> none` or `after <n> <dispatch-id>` |
 | `index check <project> [--by <peer-id>]` | `agrees`, or findings with exit status 3 |
-| `index measure <project>` | One line per distinct project or dialogue index |
+| `index measure <project>` | One line per distinct project, provenance or dialogue index |
+| `provenance <project> <digest\|revision>` | Every naming move, proved through provenance, its task entry and dialogue |
 
-The four proving verbs accept `--by <peer-id>` and `--at <endpoint>`. They select the owner's latest attestation unless `--by` names another author, use local nodes first, and otherwise reach that attester through the project's book or `--at`. They print `proved <digest> <peer-id>` for each authenticated index before the answer. Project and dialogue questions share one connection; no task tree is synced. A grading or landing also proves its referenced verdict or decision within the attempt before rendering those receipt fields.
+The proving verbs accept `--by <peer-id>` and `--at <endpoint>`. They select the owner's latest attestation unless `--by` names another author, use local nodes first, and otherwise reach that attester through the project's book or `--at`. They print `proved <digest> <peer-id>` for each authenticated index before the answer. Project, provenance and dialogue questions share one connection; no task tree is synced. A grading or landing also proves its referenced verdict or decision within the attempt before rendering those receipt fields.
+
+`provenance` accepts 40 hexadecimal digits for a SHA-1 revision, or 64 for both an evidence digest and a SHA-256 revision. The 64-digit form searches both families, retaining both kinds of match. Each answer prints `provenance <commit-anchor> <attempt>.<seq> <field> <holder>` followed by the authenticated move in replay form; a complete empty range proves that the chosen index has no matching record.
 
 A proof authenticates the attester's claim, not its agreement with the fold. `index check` re-derives at the attestation's project parents and each entry's task heads: `disagrees <task> <field>` identifies a false field, and `unchecked <task>` identifies an unavailable task frontier. Later receipts do not make a true historical claim disagree. Check and measure can fetch missing index nodes through authenticated full-range answers; they do not sync receipts.
 
