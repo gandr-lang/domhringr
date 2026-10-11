@@ -84,6 +84,8 @@ pub struct Move
     pub commit: CommitId,
     /// The decoded original receipt, never reconstructed from a display.
     pub receipt: Receipt,
+    /// The original receipt image, including any supported legacy layout.
+    pub image: Box<[u8]>,
 }
 
 /// Whether a proved next-attempt key carries a later dispatch.
@@ -288,7 +290,51 @@ pub fn read_move(
         author: value.author,
         commit: value.commit(),
         receipt,
+        image: value.blob.into_owned().into_boxed_slice(),
     })
+}
+
+/// Authenticate an attempt's complete range and retain its original moves.
+///
+/// # Specification
+/// - ensures: every returned coordinate belongs to `attempt`, in strict order;
+///   each receipt names `tree` and retains its original image.
+/// - fails: the proof, coordinate, or original receipt is malformed.
+/// - panics: none.
+///
+/// # Errors
+/// Returns `ProveError` for a different question or invalid proof or value.
+///
+/// # Adequacy
+/// - hypothesis: L1 range authentication distinguishes altered and foreign
+///   answers; L2 original bytes agree with the admitted receipt sources.
+/// - witness: `replay::tests::proved_attempts_replay_every_standing`
+#[spec(ensures: |ref output| output.as_ref().map_or(true, |moves|
+    moves.iter().all(|entry| entry.0.coordinates().0 == attempt && entry.1.receipt.tree() == tree)
+    && moves.windows(2).all(|pair| matches!(pair, [left, right] if left.0 < right.0))))]
+#[inline]
+pub fn play(
+    answer: &Answer,
+    digest: IndexDigest,
+    tree: TreeId,
+    attempt: crate::AttemptNumber,
+) -> Result<Vec<(crate::MoveKey, Move)>, ProveError>
+{
+    let range = attempt.range()?;
+    let Verified::Range(records) =
+        answer.verify(digest, IndexKind::Dialogue, &Query::Range(range))?
+    else {
+        return Err(ProveError::Question);
+    };
+    records
+        .iter()
+        .map(|record| {
+            let key = crate::MoveKey::try_from(record.key().as_ref())
+                .map_err(|_key| ProveError::Question)?;
+            let movement = read_move(tree, record.value())?;
+            Ok((key, movement))
+        })
+        .collect()
 }
 
 /// Interpret the proved key immediately after an attempt as dispatch or end.

@@ -841,4 +841,443 @@ mod tests
         }
         drop(server);
     }
+
+    /// Read a tree-key anchor used by these process fixtures.
+    ///
+    /// # Specification
+    /// trivial.
+    fn replay_tree(anchor: &domhringr_record_tree::Anchor) -> domhringr_record_tree::TreeId
+    {
+        let domhringr_record_tree::Anchor::Tree(domhringr_record_tree::Authority::Key(tree)) =
+            *anchor
+        else {
+            panic!("tree anchor");
+        };
+        tree
+    }
+
+    /// Release the receipt engine between native process invocations.
+    ///
+    /// # Specification
+    /// trivial.
+    fn replay_runtime() -> tokio::runtime::Runtime
+    {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_project_only_reader_replays_every_standing()
+    {
+        use domhringr_record_tree::Brief;
+        use domhringr_record_tree::Code;
+        use domhringr_record_tree::Current;
+        use domhringr_record_tree::Decision;
+        use domhringr_record_tree::Edition;
+        use domhringr_record_tree::Grade;
+        use domhringr_record_tree::Identity;
+        use domhringr_record_tree::Peer;
+        use domhringr_record_tree::Receipt;
+        use domhringr_record_tree::Revision;
+        use domhringr_record_tree::Ruling;
+        use domhringr_record_tree::StateDir;
+        use domhringr_record_tree::Status;
+        use domhringr_record_tree::Unread;
+        use gandr_storage_values::ManifestDigest;
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        let b = root.path().join("b");
+        let identity = finish(peer(&a).arg("id"));
+        let project = only(peer(&a).arg("open"));
+        let task = only(peer(&a).arg("open"));
+        let _bound = only(peer(&a).args(["bind", &format!("{project}tasks/one"), "anchor", &task]));
+        let tree = replay_tree(&task.parse().unwrap());
+        let port = free_port();
+        let contact = format!("{}@127.0.0.1:{port}", identity[0]);
+        let _present = only(peer(&a).args(["present", &project, "--port", &port]));
+        for stage in [
+            "undispatched",
+            "dispatched",
+            "reported",
+            "verified",
+            "graded",
+            "decided",
+            "landed",
+            "rework",
+            "abandon",
+        ] {
+            let expected = replay_runtime().block_on(async {
+                let state = StateDir::from(a.clone());
+                let identity = Identity::load_or_create(&state).unwrap();
+                let me = identity.peer_key();
+                let holder = Peer::open(&state, identity).unwrap();
+                let view = holder.view(tree).await.unwrap();
+                let dispatch = match *view.task().current() {
+                    | Current::Attempt(ref attempt) => attempt.dispatch(),
+                    | Current::Undispatched => domhringr_record_tree::CommitId::new([0; 32]),
+                };
+                let hash = BRIEF.parse().unwrap();
+                let value = ManifestDigest::from([42; 32]);
+                match stage {
+                    | "undispatched" => {},
+                    | "dispatched" => {
+                        holder
+                            .commit(
+                                tree,
+                                Receipt::dispatch(tree, me, Edition::CURRENT, Brief::Content(hash))
+                                    .unwrap(),
+                            )
+                            .await
+                            .unwrap();
+                    },
+                    | "reported" => {
+                        holder
+                            .commit(
+                                tree,
+                                Receipt::report(tree, dispatch, value, "report".parse().unwrap())
+                                    .unwrap(),
+                            )
+                            .await
+                            .unwrap();
+                    },
+                    | "verified" => {
+                        holder
+                            .commit(
+                                tree,
+                                Receipt::verified(
+                                    tree,
+                                    dispatch,
+                                    me,
+                                    hash,
+                                    "check".parse().unwrap(),
+                                    value,
+                                    Status::Exited(Code::from(0_i32)),
+                                )
+                                .unwrap(),
+                            )
+                            .await
+                            .unwrap();
+                    },
+                    | "graded" => {
+                        let verdict = holder
+                            .commit(
+                                tree,
+                                Receipt::verdict(tree, dispatch, me, hash, value, vec![(
+                                    hash,
+                                    Ruling::Unread(Unread::Tied),
+                                )])
+                                .unwrap(),
+                            )
+                            .await
+                            .unwrap();
+                        holder
+                            .commit(
+                                tree,
+                                Receipt::graded(
+                                    tree,
+                                    verdict,
+                                    vec![Grade::Refused],
+                                    Grade::Refused,
+                                )
+                                .unwrap(),
+                            )
+                            .await
+                            .unwrap();
+                    },
+                    | "decided" => {
+                        holder
+                            .commit(
+                                tree,
+                                Receipt::decide(tree, dispatch, me, Decision::Land).unwrap(),
+                            )
+                            .await
+                            .unwrap();
+                    },
+                    | "landed" => {
+                        let Current::Attempt(ref attempt) = *view.task().current()
+                        else {
+                            panic!("attempt");
+                        };
+                        let &domhringr_record_tree::Progress::Decided { decide, .. } =
+                            attempt.progress()
+                        else {
+                            panic!("decision");
+                        };
+                        holder
+                            .commit(
+                                tree,
+                                Receipt::landed(tree, decide, Revision::Sha1([9; 20])).unwrap(),
+                            )
+                            .await
+                            .unwrap();
+                    },
+                    | "rework" | "abandon" => {
+                        let dispatch = holder
+                            .commit(
+                                tree,
+                                Receipt::dispatch(tree, me, Edition::CURRENT, Brief::Content(hash))
+                                    .unwrap(),
+                            )
+                            .await
+                            .unwrap();
+                        let decision = if stage == "rework" {
+                            Decision::Rework {
+                                reason: "again".parse().unwrap(),
+                            }
+                        }
+                        else {
+                            Decision::Abandon
+                        };
+                        holder
+                            .commit(tree, Receipt::decide(tree, dispatch, me, decision).unwrap())
+                            .await
+                            .unwrap();
+                    },
+                    | _ => panic!("stage"),
+                }
+                let view = holder.view(tree).await.unwrap();
+                assert!(view.refused().is_empty());
+                let expected = view.task().current().to_string();
+                let prefix = if matches!(stage, "rework" | "abandon") {
+                    "decided"
+                }
+                else {
+                    stage
+                };
+                assert!(expected.starts_with(prefix));
+                drop(holder);
+                expected
+            });
+            let _indexed = only(peer(&a).args(["index", "derive", &project]));
+            let server = Running::serve(&a, OsStr::new(&port));
+            let _synced =
+                finish(peer(&b).args(["sync", &project, "--peer", &identity[1], "--at", &contact]));
+            let output = finish(peer(&b).args([
+                "index",
+                "replay",
+                &project,
+                "one",
+                "--by",
+                &identity[1],
+                "--at",
+                &contact,
+            ]));
+            assert_eq!(output.last(), Some(&format!("current {expected}")));
+            let attempts = match stage {
+                | "undispatched" => 0,
+                | "rework" => 2,
+                | "abandon" => 3,
+                | _ => 1,
+            };
+            assert_eq!(
+                output
+                    .iter()
+                    .filter(|line| line.starts_with("replayed "))
+                    .count(),
+                attempts
+            );
+            assert!(
+                finish(peer(&b).args(["heads", &task])).is_empty(),
+                "replay never imports the task"
+            );
+            drop(server);
+        }
+    }
+
+    #[test]
+    fn attested_plays_are_refused_at_the_move()
+    {
+        use alloc::borrow::Cow;
+        use alloc::collections::BTreeMap;
+
+        use domhringr_record_index::AttemptNumber;
+        use domhringr_record_index::Index;
+        use domhringr_record_index::IndexKind;
+        use domhringr_record_index::MoveKey;
+        use domhringr_record_index::SequenceNumber;
+        use domhringr_record_index::dialogue::MoveValue;
+        use domhringr_record_index::project::Nested;
+        use domhringr_record_index::project::TaskEntry;
+        use domhringr_record_index::project::TaskName;
+        use domhringr_record_index::prove;
+        use domhringr_record_index::prove::Query;
+        use domhringr_record_index::prove::Verified;
+        use domhringr_record_index::store::Store;
+        use domhringr_record_tree::CommitId;
+        use domhringr_record_tree::Current;
+        use domhringr_record_tree::Identity;
+        use domhringr_record_tree::Peer;
+        use domhringr_record_tree::Receipt;
+        use domhringr_record_tree::Revision;
+        use domhringr_record_tree::StateDir;
+        use gandr_storage_records::Record;
+        use gandr_storage_records::RecordTree;
+        use gandr_storage_records::TreeParams;
+        use gandr_storage_values::ManifestDigest;
+        use gandr_storage_values::TokenBody;
+        use gandr_storage_values::decode_flat;
+        use gandr_storage_values::encode_flat;
+        let Fixture {
+            root,
+            project,
+            task,
+            owner,
+            contact,
+            digest,
+            server,
+            ..
+        } = Fixture::new();
+        drop(server);
+        let a = root.path().join("a");
+        let b = root.path().join("b");
+        let tree = replay_tree(&task.parse().unwrap());
+        let project_tree = replay_tree(&project.parse().unwrap());
+        let state = StateDir::from(a.clone());
+        let store = Store::open(&state);
+        let original = store.load(digest.parse().unwrap()).unwrap();
+        let name: TaskName = "one".parse().unwrap();
+        let value = original.tree.lookup(name.key().as_borrowed()).unwrap();
+        let original_entry = decode_flat::<TaskEntry>(TokenBody::from(value.as_ref())).unwrap();
+        let TaskEntry::Held { dialogue, .. } = original_entry
+        else {
+            panic!("held task");
+        };
+        let dialogue = store.load(dialogue).unwrap();
+        let key = MoveKey::new(AttemptNumber(1), SequenceNumber(0)).owned();
+        let first_dispatch =
+            prove::read_move(tree, dialogue.tree.lookup(key.as_borrowed()).unwrap())
+                .unwrap()
+                .commit;
+        let mut nested = BTreeMap::new();
+        for record in original.tree.records() {
+            if record.key().as_ref() == [0, u8::from(IndexKind::Provenance)] {
+                let Nested(digest) = decode_flat(TokenBody::from(record.value().as_ref())).unwrap();
+                nested.insert(IndexKind::Provenance, digest);
+            }
+        }
+        for forgery in ["report", "landed", "current", "omitted"] {
+            let mut records = dialogue.tree.records().to_vec();
+            let (attempt, seq) = if forgery == "report" { (1, 3) } else { (2, 2) };
+            if matches!(forgery, "report" | "landed") {
+                let receipt = if forgery == "report" {
+                    Receipt::report(
+                        tree,
+                        first_dispatch,
+                        ManifestDigest::from([9; 32]),
+                        "after retirement".parse().unwrap(),
+                    )
+                    .unwrap()
+                }
+                else {
+                    Receipt::landed(tree, CommitId::new([9; 32]), Revision::Sha1([9; 20])).unwrap()
+                };
+                let blob = encode_flat(&receipt).unwrap();
+                let value = encode_flat(&MoveValue {
+                    author: owner.parse().unwrap(),
+                    blob: Cow::Borrowed(blob.as_ref()),
+                })
+                .unwrap();
+                records.push(Record::new(
+                    MoveKey::new(AttemptNumber(attempt), SequenceNumber(seq)).owned(),
+                    value.as_ref(),
+                ));
+            }
+            if forgery == "omitted" {
+                records.retain(|record| {
+                    record.key().as_ref()
+                        != MoveKey::new(AttemptNumber(1), SequenceNumber(2)).as_ref()
+                });
+            }
+            records.sort_unstable_by(|left, right| left.key().as_ref().cmp(right.key().as_ref()));
+            let refs: Vec<_> = records.iter().map(Record::as_record_ref).collect();
+            let claimed = Index::new(
+                IndexKind::Dialogue,
+                RecordTree::build(&refs, TreeParams::current()).unwrap(),
+            );
+            let claimed_digest = store.keep(&claimed).unwrap();
+            let query = Query::Range(AttemptNumber(attempt).range().unwrap());
+            let proof = prove::answer(&claimed, &query).unwrap();
+            assert!(
+                matches!(
+                    proof
+                        .verify(claimed_digest, IndexKind::Dialogue, &query)
+                        .unwrap(),
+                    Verified::Range(_)
+                ),
+                "the hostile claim has a valid range proof"
+            );
+            let mut entry = original_entry.clone();
+            let TaskEntry::Held {
+                ref mut dialogue,
+                ref mut current,
+                ..
+            } = entry
+            else {
+                panic!("held task");
+            };
+            *dialogue = claimed_digest;
+            if forgery == "current" {
+                *current = Current::Undispatched;
+            }
+            let project_index = domhringr_record_index::project::build(
+                &BTreeMap::from([(name.clone(), entry)]),
+                &nested,
+            )
+            .unwrap();
+            let project_digest = store.keep(&project_index).unwrap();
+            replay_runtime().block_on(async {
+                let identity = Identity::load_or_create(&state).unwrap();
+                Peer::open(&state, identity)
+                    .unwrap()
+                    .commit(
+                        project_tree,
+                        Receipt::indexed(project_tree, project_digest).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            });
+            let port = contact.rsplit_once(':').unwrap().1;
+            let server = Running::serve(&a, OsStr::new(port));
+            let _synced =
+                finish(peer(&b).args(["sync", &project, "--peer", &owner, "--at", &contact]));
+            let output = run(peer(&b).args(["index", "replay", &project, "one", "--at", &contact]));
+            assert!(finish(peer(&b).args(["heads", &task])).is_empty());
+            if forgery == "omitted" {
+                assert!(output.status.success(), "{output:?}");
+                let actual = String::from_utf8(output.stdout).unwrap();
+                assert!(actual.contains("replayed 1 reported "));
+                assert!(actual.contains("replayed 2 reported "));
+                let _synced =
+                    finish(peer(&b).args(["sync", &task, "--peer", &owner, "--at", &contact]));
+                let checked = run(peer(&b).args(["index", "check", &project]));
+                assert_eq!(checked.status.code(), Some(3_i32));
+                assert_eq!(
+                    String::from_utf8(checked.stdout).unwrap().trim(),
+                    "disagrees one dialogue"
+                );
+            }
+            else {
+                assert_eq!(output.status.code(), Some(1_i32));
+                let error = String::from_utf8(output.stderr).unwrap();
+                if forgery == "current" {
+                    assert!(
+                        error.contains("current mismatch: entry Undispatched; replay Attempt"),
+                        "{error}"
+                    );
+                }
+                else {
+                    assert!(
+                        error.contains(&format!(
+                            "move {attempt}.{seq}: edition {} {forgery}:",
+                            domhringr_record_tree::Edition::CURRENT
+                        )),
+                        "{error}"
+                    );
+                }
+            }
+            drop(server);
+        }
+    }
 }

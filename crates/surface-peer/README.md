@@ -245,12 +245,15 @@ Run these commands after `domhringr-peer --state <dir>`:
 | `index task <project> <name>` | `task <anchor> <standing>`, or an explicit unheld entry |
 | `index move <project> <name> <attempt>.<seq>` | One authenticated move in the replay language |
 | `index play <project> <name> <attempt>` | Every move in that attempt, in canonical order |
+| `index replay <project> <name>` | Every attempt replayed under its dispatch's protocol; full standing checked against the entry |
 | `index after <project> <name> <attempt>` | `after <n> none` or `after <n> <dispatch-id>` |
 | `index check <project> [--by <peer-id>]` | `agrees`, or findings with exit status 3 |
 | `index measure <project>` | One line per distinct project, provenance or dialogue index |
 | `provenance <project> <digest\|revision>` | Every naming move, proved through provenance, its task entry and dialogue |
 
 The proving verbs accept `--by <peer-id>` and `--at <endpoint>`. They select the owner's latest attestation unless `--by` names another author, use local nodes first, and otherwise reach that attester through the project's book or `--at`. They print `proved <digest> <peer-id>` for each authenticated index before the answer. Project, provenance and dialogue questions share one connection; no task tree is synced. A grading or landing also proves its referenced verdict or decision within the attempt before rendering those receipt fields.
+
+`index play` proves membership without checking protocol conformance. `index replay` checks every proved attempt through the arena monitor without syncing task receipts. It prints the moves and `replayed <attempt> <standing>` for each attempt, then `current <standing>`. A protocol refusal exits 1 and names the movement and its `<attempt>.<seq>`; a full typed standing mismatch names both the entry and replay values. An omitted move can still conform, so agreement with the receipt fold remains `index check`'s responsibility.
 
 `provenance` accepts 40 hexadecimal digits for a SHA-1 revision, or 64 for both an evidence digest and a SHA-256 revision. The 64-digit form searches both families, retaining both kinds of match. Each answer prints `provenance <commit-anchor> <attempt>.<seq> <field> <holder>` followed by the authenticated move in replay form; a complete empty range proves that the chosen index has no matching record.
 

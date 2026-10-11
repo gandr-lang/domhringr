@@ -562,6 +562,107 @@ pub enum Current
     Attempt(Attempt),
 }
 
+impl Current
+{
+    /// Project an admitted move into its task standing without checking
+    /// authority.
+    ///
+    /// # Specification
+    /// - requires: the caller has admitted the step under its dispatch
+    ///   protocol.
+    /// - ensures: a dispatch starts a fresh attempt; a matching answer updates
+    ///   its slot or report, or advances progress without lowering its rank.
+    ///   Answers to a superseded dispatch leave the standing unchanged.
+    /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 lifecycle and superseded-dispatch witnesses distinguish
+    ///   slot, report, progress precedence and dispatch selection.
+    /// - witness: `fold::tests::an_attempt_advances_through_its_lifecycle`
+    /// - witness: `fold::tests::a_task_prints_one_line_per_step_and_its_standing`
+    #[spec(ensures: !matches!(step, Step::Dispatch { .. })
+        || matches!(&*self, Self::Attempt(attempt) if attempt.dispatch == commit))]
+    #[inline]
+    pub fn record(
+        &mut self,
+        commit: CommitId,
+        step: &Step,
+    )
+    {
+        if let Step::Dispatch {
+            seat,
+            edition,
+            ref brief,
+        } = *step
+        {
+            *self = Self::Attempt(Attempt {
+                dispatch: commit,
+                edition,
+                brief: brief.clone(),
+                slot: Slot::Held(seat),
+                answer: Answer::Awaited,
+                progress: Progress::Unchecked,
+            });
+            return;
+        }
+        if let Self::Attempt(ref mut attempt) = *self {
+            match *step {
+                | Step::Report { dispatch, .. } if dispatch == attempt.dispatch => {
+                    attempt.answer = Answer::Reported(commit);
+                },
+                | Step::Handoff { dispatch, to, .. } if dispatch == attempt.dispatch => {
+                    attempt.slot = Slot::Held(to);
+                },
+                | Step::Retire { dispatch, author } if dispatch == attempt.dispatch => {
+                    attempt.slot = Slot::Retired {
+                        by: author,
+                        at: commit,
+                    };
+                },
+                | Step::Verified { dispatch, .. } if dispatch == attempt.dispatch => {
+                    attempt.advance(Progress::Verified(commit));
+                },
+                | Step::Graded {
+                    dispatch, composed, ..
+                } if dispatch == attempt.dispatch => {
+                    attempt.advance(Progress::Graded {
+                        grading: commit,
+                        composed,
+                    });
+                },
+                | Step::Decide {
+                    dispatch,
+                    ref decision,
+                    ..
+                } if dispatch == attempt.dispatch => {
+                    attempt.advance(Progress::Decided {
+                        decide: commit,
+                        decision: decision.clone(),
+                    });
+                },
+                | Step::Landed {
+                    dispatch, merge, ..
+                } if dispatch == attempt.dispatch => {
+                    attempt.advance(Progress::Landed {
+                        landed: commit,
+                        merge,
+                    });
+                },
+                | Step::Dispatch { .. }
+                | Step::Report { .. }
+                | Step::Handoff { .. }
+                | Step::Retire { .. }
+                | Step::Pause { .. }
+                | Step::Verdict { .. }
+                | Step::Verified { .. }
+                | Step::Graded { .. }
+                | Step::Decide { .. }
+                | Step::Landed { .. } => {},
+            }
+        }
+    }
+}
+
 impl fmt::Display for Current
 {
     /// Write where the task stands, as one line without its newline:
@@ -772,19 +873,13 @@ impl Task
         brief: Brief,
     )
     {
-        self.current = Current::Attempt(Attempt {
-            dispatch: commit,
-            edition,
-            brief: brief.clone(),
-            slot: Slot::Held(seat),
-            answer: Answer::Awaited,
-            progress: Progress::Unchecked,
-        });
-        self.steps.push((commit, Step::Dispatch {
+        let step = Step::Dispatch {
             seat,
             edition,
             brief,
-        }));
+        };
+        self.current.record(commit, &step);
+        self.steps.push((commit, step));
     }
 
     /// Record the admitted `step` of `commit`: a report, a handoff, a
@@ -811,61 +906,7 @@ impl Task
         step: Step,
     )
     {
-        if let Current::Attempt(ref mut attempt) = self.current {
-            match step {
-                | Step::Report { dispatch, .. } if dispatch == attempt.dispatch => {
-                    attempt.answer = Answer::Reported(commit);
-                },
-                | Step::Handoff { dispatch, to, .. } if dispatch == attempt.dispatch => {
-                    attempt.slot = Slot::Held(to);
-                },
-                | Step::Retire { dispatch, author } if dispatch == attempt.dispatch => {
-                    attempt.slot = Slot::Retired {
-                        by: author,
-                        at: commit,
-                    };
-                },
-                | Step::Verified { dispatch, .. } if dispatch == attempt.dispatch => {
-                    attempt.advance(Progress::Verified(commit));
-                },
-                | Step::Graded {
-                    dispatch, composed, ..
-                } if dispatch == attempt.dispatch => {
-                    attempt.advance(Progress::Graded {
-                        grading: commit,
-                        composed,
-                    });
-                },
-                | Step::Decide {
-                    dispatch,
-                    ref decision,
-                    ..
-                } if dispatch == attempt.dispatch => {
-                    attempt.advance(Progress::Decided {
-                        decide: commit,
-                        decision: decision.clone(),
-                    });
-                },
-                | Step::Landed {
-                    dispatch, merge, ..
-                } if dispatch == attempt.dispatch => {
-                    attempt.advance(Progress::Landed {
-                        landed: commit,
-                        merge,
-                    });
-                },
-                | Step::Dispatch { .. }
-                | Step::Report { .. }
-                | Step::Handoff { .. }
-                | Step::Retire { .. }
-                | Step::Pause { .. }
-                | Step::Verdict { .. }
-                | Step::Verified { .. }
-                | Step::Graded { .. }
-                | Step::Decide { .. }
-                | Step::Landed { .. } => {},
-            }
-        }
+        self.current.record(commit, &step);
         self.steps.push((commit, step));
     }
 }

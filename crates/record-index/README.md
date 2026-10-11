@@ -1,6 +1,6 @@
 # domhringr-record-index
 
-Derived dialogue, project and provenance indexes, authenticated by manifests and checked against the receipt fold.
+Derived dialogue, project and provenance indexes, authenticated by manifests, replayed through named session protocols and checked against the receipt fold.
 
 ## Records
 
@@ -19,6 +19,12 @@ An owner's or granted member's `Indexed` receipt attests a project manifest. Its
 Each manifest binds its index kind, layout, opaque record-boundary commitment, record count and root-node identity. Its name is BLAKE3 of the complete image. Foreign kinds, layouts and commitments fail before any node is opened. A reader reseals the record root from the checked manifest; a proof never supplies a root to trust.
 
 Layout 2 adds refusals to held entries. It changes every manifest identity, including empty indexes; layout 1 images are refused before node access. Deriving again replaces the local cache and an old own attestation with the current layout. Receipt and proof-stream versions are unchanged.
+
+## Attested replay
+
+Proof membership and protocol conformance are independent. `prove::play` verifies the complete attempt range and returns ordered coordinates, authors, commit identities and original receipt bytes. `replay::replay` feeds those moves to the arena monitor under the dispatch’s edition: one slot and decision channel per attempt, one judge channel per verdict and one runner channel per runner. Unknown editions and invalid transitions are refused at their `(attempt, seq)` with the movement named.
+
+Replay resolves grading and landing references only from earlier moves in that attempt and projects admitted steps through `Current::record`. It checks neither signed causal authority nor completeness against the task's receipt tree. Omitting a move can leave a conformant play; historical `index check` detects that omission when the task frontier is held.
 
 ## Storage and transport
 
@@ -45,6 +51,7 @@ The measured provenance crossing is 1,204 records in either edition: root 8,639 
 | Derive above the fold | Maintain indexes during receipt admission | Admission itself needs authenticated index queries |
 | Kind-bound manifest images | Use a record root or a value manifest as the index name | Record-root metadata changes, requiring a new manifest layout |
 | Original receipt bytes in move values | Re-encode displayed moves | The receipt language supplies a canonical, lossless transformation with preserved identity |
+| Replay through the arena monitor and share the fold's standing projection | Maintain another receipt automaton or trust the claimed standing | The monitor gains a resumable cursor, allowing replay without rebuilding channel prefixes |
 | Content-addressed node files | A separate database table | Measured file overhead exceeds the cost of a transactional store |
 | `quenchant-arith` at the storage sibling’s pin, with defaults off | Primitive arithmetic loses the nominal boundary; local wrappers duplicate its checked and saturating families | The shared arithmetic contract changes or the dependency is no longer maintained |
 | Dedicated proof protocol | Mix derived bytes into receipt sync or evidence transfer | Batching or subscription requires another protocol version |

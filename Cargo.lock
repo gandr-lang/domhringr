@@ -768,8 +768,10 @@ version = "0.0.0"
 dependencies = [
  "blake3",
  "data-encoding",
+ "domhringr-arena-session",
  "domhringr-record-tree",
  "future_form",
+ "gandr-core-session",
  "gandr-storage-records",
  "gandr-storage-values",
  "iroh",
@@ -840,6 +842,7 @@ dependencies = [
 name = "domhringr-surface-peer"
 version = "0.0.0"
 dependencies = [
+ "domhringr-arena-session",
  "domhringr-judge-oracle",
  "domhringr-record-evidence",
  "domhringr-record-index",

@@ -53,6 +53,7 @@
 //! domhringr-peer --state <dir> index task <project> <name> [--by <peer-id>] [--at <endpoint>]
 //! domhringr-peer --state <dir> index move <project> <name> <attempt>.<seq> [--by <peer-id>] [--at <endpoint>]
 //! domhringr-peer --state <dir> index play <project> <name> <attempt> [--by <peer-id>] [--at <endpoint>]
+//! domhringr-peer --state <dir> index replay <project> <name> [--by <peer-id>] [--at <endpoint>]
 //! domhringr-peer --state <dir> index after <project> <name> <attempt> [--by <peer-id>] [--at <endpoint>]
 //! domhringr-peer --state <dir> index check <project> [--by <peer-id>]
 //! domhringr-peer --state <dir> index measure <project>
@@ -364,6 +365,7 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> index task <project> <task> [--by <peer-id>] [--at <endpoint>]
        domhringr-peer --state <dir> index move <project> <task> <attempt>.<seq> [--by <peer-id>] [--at <endpoint>]
        domhringr-peer --state <dir> index play <project> <task> <attempt> [--by <peer-id>] [--at <endpoint>]
+       domhringr-peer --state <dir> index replay <project> <task> [--by <peer-id>] [--at <endpoint>]
        domhringr-peer --state <dir> index after <project> <task> <attempt> [--by <peer-id>] [--at <endpoint>]
        domhringr-peer --state <dir> index check <project> [--by <peer-id>]
        domhringr-peer --state <dir> index measure <project>
@@ -502,7 +504,7 @@ impl fmt::Display for Verb
     {
         f.write_str(match *self {
             | Self::Id => "id",
-            | Self::Index => "index derive|task|move|play|after|check|measure <project> [<task>] [<coordinate>] [--by <peer-id>] [--at <endpoint>]",
+            | Self::Index => "index derive|task|move|play|replay|after|check|measure <project> [<task>] [<coordinate>] [--by <peer-id>] [--at <endpoint>]",
             | Self::Provenance => "provenance <project> <digest|revision> [--by <peer-id>] [--at <endpoint>]",
             | Self::Serve => "serve [--port <port>] [--surface <program>]",
             | Self::Open => "open",

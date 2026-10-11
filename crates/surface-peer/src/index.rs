@@ -2,6 +2,7 @@
 
 mod provenance;
 mod render;
+mod replay;
 
 use core::fmt::Write as _;
 use std::ffi::OsStr;
@@ -106,6 +107,8 @@ enum Question
     Play(TaskName, AttemptNumber),
     /// Whether the next attempt begins, or the dialogue has ended.
     After(TaskName, AttemptNumber),
+    /// Replay every attested attempt and check the entry's standing.
+    Replay(TaskName),
 }
 
 impl Question
@@ -118,6 +121,7 @@ impl Question
     {
         match *self {
             | Self::Task(ref name)
+            | Self::Replay(ref name)
             | Self::Move(ref name, _)
             | Self::Play(ref name, _)
             | Self::After(ref name, _) => name,
@@ -168,11 +172,11 @@ pub fn parse(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     let action = action.to_str().ok_or(UsageError::Operands(Verb::Index))?;
     if !matches!(
         action,
-        "derive" | "task" | "move" | "play" | "after" | "check" | "measure"
+        "derive" | "task" | "move" | "play" | "replay" | "after" | "check" | "measure"
     ) {
         return Err(UsageError::Operands(Verb::Index));
     }
-    let proving = matches!(action, "task" | "move" | "play" | "after");
+    let proving = matches!(action, "task" | "move" | "play" | "replay" | "after");
     let mut operands = Vec::new();
     let mut by = Aim::Owner;
     let mut at = At::Book;
@@ -200,6 +204,14 @@ pub fn parse(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
         | ("derive", &[]) => Action::Derive,
         | ("measure", &[]) => Action::Measure,
         | ("check", &[]) => Action::Check(by),
+        | ("replay", &[ref name]) => {
+            let name = read_name(name)?;
+            Action::Prove {
+                question: Question::Replay(name),
+                by,
+                at,
+            }
+        },
         | ("task", &[ref name]) => {
             let name = read_name(name)?;
             Action::Prove {
@@ -277,6 +289,18 @@ pub enum IndexError
     /// Proof contents do not match the requested semantic shape.
     #[error("index answer does not describe the requested move or entry")]
     Shape,
+    /// An attested play fails its dispatch's protocol.
+    #[error(transparent)]
+    Replay(#[from] domhringr_record_index::replay::ReplayError),
+    /// The complete replay and entry disagree, including non-display fields.
+    #[error("current mismatch: entry {claimed:?}; replay {replayed:?}")]
+    Standing
+    {
+        /// The entry's authenticated claim.
+        claimed: Box<domhringr_record_tree::Current>,
+        /// The standing independently reached by replay.
+        replayed: Box<domhringr_record_tree::Current>,
+    },
     /// Receipt folds cannot be read.
     #[error(transparent)]
     View(#[from] domhringr_record_tree::ViewError),
@@ -650,6 +674,9 @@ async fn answer(
         | Verified::Range(_records) => return Err(IndexError::Shape),
     };
     let mut output = format!("proved {digest} {}\n", reader.author);
+    if matches!(&question, Question::Replay(_name)) {
+        return replay::answer(reader, entry, output).await;
+    }
     if matches!(&question, Question::Task(_name)) {
         match entry {
             | TaskEntry::Held { tree, current, .. } => {

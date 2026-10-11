@@ -26,6 +26,7 @@ pub mod measure;
 pub mod project;
 pub mod prove;
 pub mod provenance;
+pub mod replay;
 pub mod store;
 pub mod stream;
 mod wire;

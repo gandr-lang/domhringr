@@ -203,9 +203,15 @@ pub(super) async fn answer(
                 attribution.holder
             )?;
             writeln!(output, "proved {dialogue} {}", reader.author)?;
-            (reader, output) =
-                render::movement(reader, tree, dialogue, reference.position, movement, output)
-                    .await?;
+            (reader, output) = render::movement(
+                reader,
+                tree,
+                dialogue,
+                reference.position,
+                &movement,
+                output,
+            )
+            .await?;
         }
     }
     Ok((reader, output))
