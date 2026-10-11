@@ -12,6 +12,7 @@ categories = ["network-programming"]
 publish.workspace = true
 
 [dependencies]
+anodized = { workspace = true }
 data-encoding = { workspace = true }
 domhringr-record-tree = { workspace = true }
 gandr-storage-chunker = { workspace = true }

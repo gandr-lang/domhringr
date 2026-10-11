@@ -12,6 +12,7 @@ categories = ["data-structures"]
 publish.workspace = true
 
 [dependencies]
+anodized = { workspace = true }
 gandr-core-session = { workspace = true }
 gandr-kernel-core = { workspace = true }
 gandr-kernel-term = { workspace = true }

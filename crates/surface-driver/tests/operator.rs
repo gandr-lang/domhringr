@@ -247,6 +247,12 @@ criteria.false = "The diff changes another file."
     ///
     /// # Specification
     /// - panics: unless it exits 0.
+    /// - executable: none — the helper is its own specification: a process
+    ///   assertion whose oracle is the caller's observed repository state.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the operator lands one change and reworks another.
+    /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
     fn read(command: &mut Command) -> String
     {
         let output = command.output().unwrap();
@@ -262,6 +268,12 @@ criteria.false = "The diff changes another file."
     ///
     /// # Specification
     /// - panics: unless it exits as `exit` says.
+    /// - executable: none — the helper is its own specification: a process exit
+    ///   assertion, exercised by decided and undecided outcomes.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — refused grading exits undecided; met grading decides.
+    /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
     fn ended(
         command: &mut Command,
         exit: Exit,
@@ -291,6 +303,12 @@ criteria.false = "The diff changes another file."
     ///
     /// # Specification
     /// - panics: unless it exits 1 having printed no landing.
+    /// - executable: none — the helper is its own specification: it asserts the
+    ///   failed child's exit and absence of a landing.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a conflicting merge leaves the branch unchanged.
+    /// - witness: `operator::tests::a_refused_merge_commits_nothing`
     fn refused(command: &mut Command) -> String
     {
         let output = command.output().unwrap();
@@ -354,6 +372,13 @@ rm -rf "$work"
         ///   presented themselves in it, and its store holds both presences;
         ///   the operator's store is closed, so the driver can open it.
         /// - panics: when any of it cannot be made.
+        /// - executable: none — fixture setup creates processes and durable
+        ///   stores; the operator loop observes the resulting project and
+        ///   seats.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — both seats report into the operator's project.
+        /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
         fn new(written: [Written; 2]) -> Self
         {
             let root = tempfile::tempdir().unwrap();
@@ -525,6 +550,14 @@ rm -rf "$work"
         ///   event.
         /// - panics: unless the driver prints the dispatch's anchor and
         ///   `woken`, and the seat reports within [`DEADLINE`].
+        /// - executable: none — dispatch and report events cross process
+        ///   boundaries; the loop witness verifies the admitted dispatch and
+        ///   report.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — verification acts on the dispatched seat's
+        ///   report.
+        /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
         fn dispatch(
             &mut self,
             task: Task,
@@ -573,6 +606,12 @@ rm -rf "$work"
         ///
         /// # Specification
         /// - panics: unless `open` lists the task.
+        /// - executable: none — the helper is its own specification; the loop
+        ///   compares the selected standing with expected receipt anchors.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — each loop transition changes the listed standing.
+        /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
         fn standing(
             &self,
             task: Task,
@@ -591,6 +630,13 @@ rm -rf "$work"
         ///
         /// # Specification
         /// - panics: unless the driver exits 0.
+        /// - executable: none — the helper is its own specification; it
+        ///   delegates the command exit assertion to `ended`.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — verification records the change's verifier
+        ///   output.
+        /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
         fn verify(
             &self,
             task: Task,
@@ -659,6 +705,14 @@ rm -rf "$work"
         /// - ensures: the task's standing is graded refused, nothing decided.
         /// - panics: unless the run printed one transcript and one question and
         ///   composed refused.
+        /// - executable: none — seeding updates a table after a child process
+        ///   runs; the loop then observes the seeded ruling and resulting
+        ///   decision.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the seeded table distinguishes met and unmet
+        ///   changes.
+        /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
         fn seed(
             &self,
             task: Task,

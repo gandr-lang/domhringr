@@ -17,6 +17,7 @@ use std::process::Command;
 use std::process::ExitStatus;
 use std::process::Stdio;
 
+use anodized::spec;
 use domhringr_record_tree::Code;
 use domhringr_record_tree::Content;
 use domhringr_record_tree::Status;
@@ -56,6 +57,7 @@ impl Verifier
     /// - hypothesis: L3 — witnessed through the playbook's parser.
     /// - witness: `playbook::tests::a_playbook_reads_its_steps_in_order`
     /// - witness: `playbook::tests::a_malformed_playbook_is_refused_at_its_field`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |verifier| !verifier.command.is_empty()))]
     pub(crate) fn read(value: Value<'_>) -> Result<Self, Refusal>
     {
         let mut table = value.table(Keys(&["command", "args"]))?;
@@ -106,6 +108,8 @@ impl Verifier
     ///   be waited on, and [`VerifyError::Unended`] for a status that names
     ///   neither a code nor a signal.
     /// - panics: none.
+    /// - executable: none — child execution and pipe ordering require an
+    ///   external observer; the shell witness fixes output and termination.
     /// - intension: the output is read to its end before the process is waited
     ///   on, so a verifier writing more than a pipe holds does not block; a
     ///   process the verifier leaves holding the pipe holds the run open until
@@ -162,6 +166,8 @@ impl Verifier
 ///   ended by a signal reads as [`Status::Signalled`].
 /// - fails: [`VerifyError::Unended`] for a status naming neither.
 /// - panics: none.
+/// - executable: none — the function is its own specification; the process
+///   witness observes normal exits and signal termination independently.
 ///
 /// # Errors
 /// - [`VerifyError::Unended`]: the status names neither a code nor a signal.

@@ -38,6 +38,7 @@ use core::fmt;
 use core::str::FromStr;
 use std::path::Path;
 
+use anodized::spec;
 use domhringr_judge_oracle::Question;
 use domhringr_judge_oracle::Transcript;
 use domhringr_record_evidence::EvidenceError;
@@ -125,6 +126,8 @@ impl Rubric
     ///   cannot be read, and [`TranscriptError::Evidence`] when the value plane
     ///   refuses the transcript.
     /// - panics: none.
+    /// - executable: none — a second file read observes a different instant;
+    ///   the transcript witness compares independently authored fixture bytes.
     ///
     /// # Errors
     /// - [`TranscriptError`]: as listed above.
@@ -196,6 +199,7 @@ impl FromStr for Rubric
     ///   inverted and an equal band, and a criterion of two lines.
     /// - witness: `rubric::tests::a_rubric_reads_its_state_band_and_questions`
     /// - witness: `rubric::tests::a_malformed_rubric_is_refused_at_its_field`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |rubric| !rubric.state.is_empty() && !rubric.questions.is_empty()))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -270,6 +274,7 @@ impl Band
     /// - hypothesis: L3 — witnessed through the rubric's parser.
     /// - witness: `rubric::tests::a_rubric_reads_its_state_band_and_questions`
     /// - witness: `rubric::tests::a_malformed_rubric_is_refused_at_its_field`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |band| band.low < band.high))]
     fn read(value: Value<'_>) -> Result<Self, Refusal>
     {
         let mut table = value.table(Keys(&["low", "high"]))?;
@@ -311,6 +316,8 @@ impl Band
     ///   when it is at or below the low bound, and [`Grade::Undecided`]
     ///   strictly between; an unread ruling is [`Grade::Refused`].
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the band
+    ///   witness enumerates both thresholds, their interior and unread rulings.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a band of `0.25` and `0.75` grades readouts on `A` of
@@ -377,6 +384,7 @@ impl FromStr for StateFile
     ///   field.
     /// - witness: `rubric::tests::a_rubric_reads_its_state_band_and_questions`
     /// - witness: `rubric::tests::a_malformed_rubric_is_refused_at_its_field`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |file| file.0 == text && std::path::Path::new(&file.0).is_relative()))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {

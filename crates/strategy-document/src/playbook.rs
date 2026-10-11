@@ -29,6 +29,7 @@ use core::str::FromStr;
 use std::path::Path;
 use std::path::PathBuf;
 
+use anodized::spec;
 use domhringr_record_tree::StepId;
 
 use crate::document::Key;
@@ -111,6 +112,7 @@ impl FromStr for Playbook
     ///   text that is not TOML.
     /// - witness: `playbook::tests::a_playbook_reads_its_steps_in_order`
     /// - witness: `playbook::tests::a_malformed_playbook_is_refused_at_its_field`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |playbook| !playbook.steps.is_empty()))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -164,6 +166,7 @@ impl Step
     /// - hypothesis: L3 — witnessed through the playbook's parser.
     /// - witness: `playbook::tests::a_playbook_reads_its_steps_in_order`
     /// - witness: `playbook::tests::a_malformed_playbook_is_refused_at_its_field`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |step| !step.why.is_empty()))]
     fn read(value: Value<'_>) -> Result<Self, Refusal>
     {
         let mut table = value.table(Keys(&["id", "why", "verifier", "question"]))?;
@@ -289,6 +292,7 @@ impl FromStr for RubricFile
     ///   absolute rubric path is refused at its field.
     /// - witness: `load::tests::a_plan_reads_its_rubrics_beside_its_playbook`
     /// - witness: `playbook::tests::a_malformed_playbook_is_refused_at_its_field`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |file| file.0.as_os_str() == text))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {

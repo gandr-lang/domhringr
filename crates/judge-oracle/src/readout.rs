@@ -17,6 +17,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use anodized::spec;
 use domhringr_record_tree::Letter;
 use domhringr_record_tree::Probability;
 use domhringr_record_tree::Readout;
@@ -74,6 +75,7 @@ pub enum Ceiling
 ///   most each meet their own outcome.
 /// - witness: `readout::tests::the_options_share_the_mass_on_their_letters`
 /// - witness: `readout::tests::a_distribution_that_answers_nothing_is_refused`
+#[spec(ensures: |ref output| output.as_ref().map_or(true, |readout| readout.probabilities().count() == question.options().len()))]
 pub fn read(
     question: &Question,
     reported: &[Candidate],

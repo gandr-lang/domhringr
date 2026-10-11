@@ -21,6 +21,7 @@
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
+use anodized::spec;
 use domhringr_record_tree::Content;
 use gandr_storage_values::CanonicalValue;
 use gandr_storage_values::ConstructorTag;
@@ -107,6 +108,7 @@ impl<'content> Iterator for Split<'content>
     ///   any other split refuses it.
     /// - witness: `lines::tests::contents_round_trip_through_their_lines`
     /// - witness: `lines::tests::a_line_split_otherwise_is_refused`
+    #[spec(ensures: |ref output| output.as_ref().map_or_else(|| self.0.is_empty(), |line| !line.as_ref().is_empty() && line.as_ref().len() <= LINE_BYTES))]
     fn next(&mut self) -> Option<Self::Item>
     {
         let window = self.0.get(.. LINE_BYTES).unwrap_or(self.0);
@@ -125,9 +127,17 @@ impl<'content> Iterator for Split<'content>
 /// - fails: [`ValueError::UnexpectedConstructor`] naming the `Line` tag at
 ///   `position`, the line's open record, otherwise.
 /// - panics: none.
+/// - executable: none — the function is its own specification; independently
+///   written malformed values exercise each forbidden line shape.
 ///
 /// # Errors
 /// - [`ValueError::UnexpectedConstructor`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — empty, oversized, prematurely split and inner-newline
+///   lines are refused at their opening record; canonical content round-trips.
+/// - witness: `lines::tests::contents_round_trip_through_their_lines`
+/// - witness: `lines::tests::a_line_split_otherwise_is_refused`
 fn admit(
     line: TokenBytes<'_>,
     place: Place,
@@ -160,6 +170,8 @@ impl CanonicalValue for Lines<'_>
     ///   value, with no recursion.
     /// - fails: the sink's refusals.
     /// - panics: none.
+    /// - executable: none — the generic sink has no observation API; the
+    ///   independent decoder and corpus goldens check the emitted records.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refuses.
@@ -198,6 +210,8 @@ impl CanonicalValue for Lines<'_>
     ///   `Line` before `Start`, or for a line the split would not produce,
     ///   naming its open record; the reader's refusals.
     /// - panics: none.
+    /// - executable: none — the reader is consumed; round-trip witnesses and
+    ///   independently written malformed values retain the input oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.

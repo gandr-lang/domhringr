@@ -118,6 +118,7 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use anodized::spec;
 use domhringr_judge_oracle::ConfigError;
 use domhringr_judge_oracle::EndpointError;
 use domhringr_judge_oracle::ParseTableError;
@@ -289,6 +290,12 @@ impl Verb
     ///   `decide` takes `--rubric`, `--repo` and `--static`; `land` takes
     ///   `--repo`.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the parser
+    ///   witnesses exercise the finite option table.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — each verb accepts its documented options.
+    /// - witness: `tests::every_verb_reads_its_options`
     const fn flags(self) -> &'static [Flag]
     {
         match self {
@@ -682,6 +689,10 @@ enum Completion
 ///   value are each refused by name.
 /// - witness: `tests::every_verb_reads_its_options`
 /// - witness: `tests::a_malformed_command_line_is_refused`
+#[spec(ensures: |ref ret| ret.as_ref().map_or(true, |invocation| match invocation.command {
+    Command::Decide { ref rubrics, .. } => !rubrics.is_empty(),
+    Command::Open | Command::Dispatch { .. } | Command::Verify { .. } | Command::Land { .. } => true,
+}))]
 fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
 {
     let verb = match arguments.next()? {
@@ -802,9 +813,16 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
 ///   verbs.
 /// - fails: [`UsageError::Command`] for any other word.
 /// - panics: none.
+/// - executable: none — the function is its own specification; the command-line
+///   witnesses exercise the verb table and its refusal.
 ///
 /// # Errors
 /// - [`UsageError::Command`]: the word names no verb.
+///
+/// # Adequacy
+/// - hypothesis: L3 — each verb reads, and an unknown verb is refused.
+/// - witness: `tests::every_verb_reads_its_options`
+/// - witness: `tests::a_malformed_command_line_is_refused`
 fn verb(word: OsString) -> Result<Verb, UsageError>
 {
     match word.to_str() {
@@ -824,9 +842,16 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
 ///   UTF-8 read with replacement characters, which no task name holds.
 /// - fails: [`UsageError::Task`] as [`TaskName`] refuses.
 /// - panics: none.
+/// - executable: none — the function is its own specification; it delegates
+///   task admission and only translates its error.
 ///
 /// # Errors
 /// - [`UsageError::Task`]: the text is no task's name or anchor.
+///
+/// # Adequacy
+/// - hypothesis: L3 — name and anchor operands read; malformed tasks refuse.
+/// - witness: `tests::every_verb_reads_its_options`
+/// - witness: `tests::a_malformed_command_line_is_refused`
 fn read_task(text: &OsString) -> Result<TaskName, UsageError>
 {
     text.to_string_lossy().parse().map_err(UsageError::Task)
@@ -840,6 +865,8 @@ fn read_task(text: &OsString) -> Result<TaskName, UsageError>
 ///   [`ParseProjectError::NotTree`] for an anchor naming a path or a commit, or
 ///   its tree by a DNS name or a label.
 /// - panics: none.
+/// - executable: none — the function is its own specification; the parser
+///   witnesses distinguish bare tree anchors from other operands.
 ///
 /// # Errors
 /// - [`ParseProjectError`]: as listed above.
@@ -876,6 +903,7 @@ fn read_project(text: &OsStr) -> Result<TreeId, ParseProjectError>
 ///   a word that is neither is refused.
 /// - witness: `tests::every_verb_reads_its_options`
 /// - witness: `tests::a_malformed_command_line_is_refused`
+#[spec(ensures: |ref ret| !matches!(*ret, Ok(Brief::Content(_))) || text.len() == 64)]
 fn read_brief(text: &OsStr) -> Result<Brief, UsageError>
 {
     let text = text.to_string_lossy();
@@ -906,6 +934,8 @@ struct Settings
 ///   [`RunError::Project`] when `DOMHRINGR_PROJECT` is no bare anchor in the
 ///   key form.
 /// - panics: none.
+/// - executable: none — environment precedence depends on process state;
+///   process witnesses isolate the operator's environment.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -946,6 +976,8 @@ fn settings(project: Project) -> Result<Settings, RunError>
 /// - fails: [`RunError::Runtime`] when the runtime cannot start, otherwise as
 ///   [`execute`].
 /// - panics: none.
+/// - executable: none — runtime teardown and command effects require process
+///   observation, not a predicate over the completion value.
 ///
 /// # Errors
 /// - [`RunError::Runtime`]: the runtime cannot start.
@@ -974,6 +1006,8 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - fails: as [`settings`], [`RunError::Identity`] and [`RunError::Open`] when
 ///   the identity or the store cannot be opened, and as [`act`].
 /// - panics: none.
+/// - executable: none — identity, store and command effects require the process
+///   witness; a completion value cannot attest to them.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -1005,6 +1039,8 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
 ///   ends.
 /// - fails: as each command fails.
 /// - panics: none.
+/// - executable: none — dispatch and endpoint shutdown are asynchronous effects
+///   observed by the operator process witnesses.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -1098,9 +1134,15 @@ async fn act(
 ///   sees it at once.
 /// - fails: [`RunError::Output`] when standard output cannot be written.
 /// - panics: none.
+/// - executable: none — a return value cannot observe the bytes a pipe reader
+///   receives or the flush; the process witnesses read those lines.
 ///
 /// # Errors
 /// - [`RunError::Output`]: the write or the flush fails.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the operator's piped output exposes each command result.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 fn emit(lines: &dyn fmt::Display) -> Result<(), RunError>
 {
     let mut stdout = std::io::stdout().lock();
@@ -1115,9 +1157,15 @@ fn emit(lines: &dyn fmt::Display) -> Result<(), RunError>
 ///   each preceded by `: `, and a newline.
 /// - fails: the write's own error when standard error cannot be written.
 /// - panics: none.
+/// - executable: none — diagnostics are external stream effects; the refused
+///   merge witness observes the error from a child process.
 ///
 /// # Errors
 /// - [`std::io::Error`]: standard error cannot be written.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a refused merge reports a failure and commits nothing.
+/// - witness: `operator::tests::a_refused_merge_commits_nothing`
 fn report(error: &dyn Error) -> std::io::Result<()>
 {
     let mut stderr = std::io::stderr().lock();
@@ -1139,6 +1187,14 @@ fn report(error: &dyn Error) -> std::io::Result<()>
 ///   the reason when the command fails. When standard error cannot be written
 ///   the exit status is the only report.
 /// - panics: none.
+/// - executable: none — process exit and diagnostics require a parent process
+///   to observe them; the operator witnesses provide that boundary.
+///
+/// # Adequacy
+/// - hypothesis: L3 — successful commands and a refused merge expose distinct
+///   process outcomes.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
+/// - witness: `operator::tests::a_refused_merge_commits_nothing`
 fn main() -> ExitCode
 {
     let invocation = match parse(lexopt::Parser::from_env()) {

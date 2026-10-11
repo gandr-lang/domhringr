@@ -26,6 +26,17 @@
 // fields outside wire form, arithmetic on nominal types. Selected here because
 // Dylint's `-D` cannot reach rustc through `cargo dylint`; see
 // `.config/mise/tasks/mise-tasks-check.toml`.
+// Temporary until the executable-specs-record backfill covers this crate.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        spec_attribute_present,
+        adequacy_present,
+        maybe_shape,
+        erased_error_signature,
+        spec_attribute_unqualified
+    )
+)]
 #![cfg_attr(
     dylint_lib = "quenchant_dylints",
     deny(option_signature, option_field, primitive_arithmetic)

@@ -19,6 +19,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::str::Utf8Error;
 
+use anodized::spec;
 use domhringr_record_evidence::EvidenceError;
 use domhringr_record_evidence::Staged;
 use domhringr_record_tree::Content;
@@ -84,6 +85,7 @@ impl Question
     ///   each meet their own refusal.
     /// - witness: `question::tests::a_question_is_named_by_the_hash_of_its_form`
     /// - witness: `question::tests::a_question_offers_two_to_twenty_six_one_line_options`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |question| (FEWEST..=MOST).contains(&question.options().len())))]
     #[inline]
     pub fn new(
         text: String,
@@ -187,6 +189,8 @@ impl CanonicalValue for Form
     /// - fails: propagates the sink's refusal unchanged, and the value plane's
     ///   overflow refusal for more options than a word counts.
     /// - panics: none.
+    /// - executable: none — a generic sink exposes no readback; the independent
+    ///   token-record golden in the witness checks the emitted sequence.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -228,6 +232,8 @@ impl CanonicalValue for Form
     ///   and the reader's own refusals for fewer options than the count, more,
     ///   or any other record.
     /// - panics: none.
+    /// - executable: none — decoding consumes the reader; the round-trip
+    ///   witness checks the original records against the returned form.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -286,6 +292,8 @@ impl Transcript
     /// - fails: [`EvidenceError::Commit`] when the value plane refuses the
     ///   content as a value.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; staging
+    ///   identity and UTF-8 classification are checked by the manifest witness.
     ///
     /// # Errors
     /// - [`EvidenceError::Commit`]: as listed above.
@@ -335,6 +343,8 @@ impl Transcript
     /// - ensures: the content read as UTF-8.
     /// - fails: [`TextError`] for content that is not UTF-8.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the witness
+    ///   compares text with the original bytes and exercises invalid UTF-8.
     ///
     /// # Errors
     /// - [`TextError`]: as listed above.

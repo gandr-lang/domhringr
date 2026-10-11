@@ -12,6 +12,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::str::FromStr;
 
+use anodized::spec;
 use domhringr_record_evidence::Evidence;
 use domhringr_record_tree::Aim;
 use domhringr_record_tree::Anchor;
@@ -87,9 +88,15 @@ impl TaskName
     /// - ensures: `Ok` for a bare name, and for an anchor in `project`.
     /// - fails: [`RunError::OtherProject`] for an anchor in another project.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the operator
+    ///   witness uses bare task names within the selected project.
     ///
     /// # Errors
     /// - [`RunError::OtherProject`]: the anchor names another project.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — bare tasks resolve in the selected project.
+    /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
     fn within(
         &self,
         project: TreeId,
@@ -128,6 +135,7 @@ impl FromStr for TaskName
     ///   anchor in a task's place are refused.
     /// - witness: `tests::every_verb_reads_its_options`
     /// - witness: `tests::a_malformed_command_line_is_refused`
+    #[spec(ensures: |ref ret| ret.as_ref().map_or(true, |task| task.path.as_ref().split('/').count() == 2))]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
         let task_path = |name: &str| {
@@ -214,6 +222,8 @@ enum Found
 ///   view names.
 /// - fails: as [`find`], and [`RunError::Unbound`] when the path is unbound.
 /// - panics: none.
+/// - executable: none — task resolution depends on the persistent project view;
+///   the operator witness acts on the bound task.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -243,9 +253,15 @@ async fn task(
 ///   project, [`RunError::View`] when the project cannot be folded, and
 ///   [`RunError::NotTask`] when the path is bound to anything else.
 /// - panics: none.
+/// - executable: none — the project view is read asynchronously; another read
+///   would repeat the lookup rather than provide an independent oracle.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — dispatch binds tasks later commands resolve.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 async fn find(
     peer: &Peer,
     project: TreeId,
@@ -265,7 +281,13 @@ async fn find(
 /// tree's bare anchor in the key form, with that tree, in path order.
 ///
 /// # Specification
-/// trivial.
+/// - ensures: selects one-segment task bindings to keyed trees, in path order.
+/// - panics: none.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the project lists both of its dispatched tasks.
+/// - witness: `operator::tests::open_lists_every_seat_and_task`
+#[spec(ensures: |ref ret| ret.len() <= view.bindings().len())]
 fn tasks(view: &View) -> Vec<(Path, TreeId)>
 {
     view.bindings()
@@ -315,6 +337,8 @@ pub struct Dispatching<'state>
 ///   committed, to be re-sent — and [`RunError::Output`] when standard output
 ///   cannot be written.
 /// - panics: none.
+/// - executable: none — dispatch persistence, endpoint shutdown and waking a
+///   remote seat require the process witnesses to observe their effects.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -406,6 +430,8 @@ pub enum Unreached
 /// - fails: [`Unreached::Route`] when neither book names the seat, or a tree
 ///   cannot be folded, and [`Unreached::Itself`] when the seat is this peer.
 /// - panics: none.
+/// - executable: none — routing reads mutable project and task books; the
+///   operator witness observes the seat reached through each book.
 ///
 /// # Errors
 /// - [`Unreached`]: as listed above.
@@ -475,9 +501,15 @@ async fn awaited(
 ///   the task with it ([`Node::sync`]).
 /// - fails: as [`reach`], and [`Unreached::Sync`] when the sync fails.
 /// - panics: none.
+/// - executable: none — synchronization changes an external store over a
+///   network; the process witness reads the newly received report.
 ///
 /// # Errors
 /// - [`Unreached`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the operator learns of the report by synchronization.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 async fn catch_up(
     node: &Node,
     project: TreeId,
@@ -576,9 +608,15 @@ async fn unheld(
 /// - fails: [`RunError::Reach`] as [`reach`] fails, and [`RunError::Fetch`] as
 ///   the fetch refuses.
 /// - panics: none.
+/// - executable: none — network fetch and evidence persistence are effects; the
+///   operator witness reads the fetched report from its local store.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the report digest resolves to locally held content.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 async fn fetch(
     node: &Node,
     project: TreeId,
@@ -611,6 +649,8 @@ async fn fetch(
 ///   [`RunError::Bind`] when the endpoint cannot bind, and as [`catch_up`] and
 ///   [`fetch`], the endpoint closed first.
 /// - panics: none.
+/// - executable: none — synchronization, fetching and endpoint lifetime require
+///   external observation across the operator and seat processes.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -661,9 +701,15 @@ pub async fn caught_up(
 ///   [`RunError::Bind`] when the endpoint cannot bind, and as [`fetch`], the
 ///   endpoint closed first.
 /// - panics: none.
+/// - executable: none — conditional network access and endpoint cleanup are
+///   effects; the operator witness reads the fetched evidence.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the operator holds the report before acting on it.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 async fn holding(
     store: Store,
     project: TreeId,
@@ -708,6 +754,8 @@ async fn holding(
 ///   error cannot be written, and [`RunError::Output`] when standard output
 ///   cannot be written.
 /// - panics: none.
+/// - executable: none — listing combines network synchronization and output;
+///   the process witnesses read the lines and the task standings they report.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -784,6 +832,11 @@ fn in_project(
 ///
 /// # Errors
 /// - [`RunError::View`]: a task cannot be folded.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the listing names both tasks and seats.
+/// - witness: `operator::tests::open_lists_every_seat_and_task`
+#[spec(ensures: |ref ret| ret.as_ref().map_or(true, |lines| lines.ends_with('\n')))]
 async fn listing(
     peer: &Peer,
     operator: PeerKey,

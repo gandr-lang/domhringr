@@ -20,6 +20,7 @@
 
 use core::time::Duration;
 
+use anodized::spec;
 use domhringr_record_tree::Content;
 use domhringr_record_tree::DialError;
 use domhringr_record_tree::Endpoint;
@@ -87,6 +88,7 @@ impl core::str::FromStr for ParsedDigest
     /// - hypothesis: L3 — a digest round-trips through its text, and 63 and 65
     ///   digits, an uppercase digit and a non-hex digit are each refused.
     /// - witness: `fetch::tests::a_digest_reads_back_from_its_text`
+    #[spec(ensures: |ref output| output.is_err() || text.len() == 64)]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -154,6 +156,12 @@ impl Answer
     ///
     /// # Errors
     /// - [`ServeError::Oversized`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a holder's framed answer decodes into the original
+    ///   content at an independent reader, including multi-chunk values.
+    /// - witness: `fetch::tests::a_reader_fetches_what_a_holder_holds`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |answer| answer.0.first() == Some(&HELD)))]
     fn held(held: &Held) -> Result<Self, ServeError>
     {
         let mut answer = Self(vec![HELD]);
@@ -174,6 +182,12 @@ impl Answer
     ///
     /// # Errors
     /// - [`ServeError::Oversized`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — framed manifest and chunk images reconstruct the
+    ///   original content when decoded across the fetch stream.
+    /// - witness: `fetch::tests::a_reader_fetches_what_a_holder_holds`
+    #[spec(ensures: |ref output| output.is_err() || self.0.ends_with(image.as_ref()))]
     fn framed<Image>(
         &mut self,
         image: &Image,
@@ -246,6 +260,13 @@ impl<'answer> Cursor<'answer>
     /// - ensures: the bytes the length prefix counts, the cursor past them.
     /// - fails: [`Malformed`] when the answer ends inside the frame.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the fetch
+    ///   witness checks the encoder-decoder round-trip across the stream.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — each framed image decodes to reconstruct the original
+    ///   content; malformed frame boundaries are outside this witness's scope.
+    /// - witness: `fetch::tests::a_reader_fetches_what_a_holder_holds`
     fn framed(&mut self) -> Result<Framed<'answer>, Malformed>
     {
         let Some((length, rest)) = self.0.split_first_chunk::<4>()
@@ -267,6 +288,13 @@ impl<'answer> Cursor<'answer>
     /// - ensures: [`Next::End`] exactly when nothing is left.
     /// - fails: [`Malformed`] when fewer than 32 bytes are left.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the fetch
+    ///   witness distinguishes complete and missing-chunk inventories.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — complete inventories yield original content while a
+    ///   missing chunk produces its named refusal, never partial content.
+    /// - witness: `fetch::tests::a_reader_fetches_what_a_holder_holds`
     fn next(&mut self) -> Result<Next, Malformed>
     {
         if self.0.is_empty() {
@@ -307,6 +335,9 @@ impl<'answer> Cursor<'answer>
 ///   `digest`'s, and with [`EvidenceError::Store`] when the store cannot keep
 ///   it.
 /// - panics: none.
+/// - executable: none — stream timing, closure and persistence require an
+///   external peer; the fetch witness observes both peers and the reopened
+///   store.
 ///
 /// # Errors
 /// - [`FetchError`]: as listed above.
@@ -343,6 +374,12 @@ pub async fn fetch(
 /// # Errors
 /// - [`FetchError::Stream`], [`FetchError::Send`], [`FetchError::Finish`],
 ///   [`FetchError::Receive`], [`FetchError::Silent`]: as [`fetch`].
+///
+/// # Adequacy
+/// - hypothesis: L3 — an independent holder recognizes the requested digest and
+///   the reader receives its whole answer; timeout timing is untested.
+/// - witness: `fetch::tests::a_reader_fetches_what_a_holder_holds`
+#[spec(ensures: |ref output| output.as_ref().map_or(true, |answer| answer.0.len() <= ANSWER_BYTES))]
 async fn ask(
     connection: &iroh::endpoint::Connection,
     digest: ManifestDigest,
@@ -367,9 +404,16 @@ async fn ask(
 /// - ensures: as [`fetch`] states once the answer is read.
 /// - fails: as [`fetch`], but for the stream.
 /// - panics: none.
+/// - executable: none — admission persists files that can change afterward; the
+///   fetch witness independently reopens content and checks missing chunks.
 ///
 /// # Errors
 /// - [`FetchError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — complete content is kept and reads back, a missing chunk
+///   is named and no incomplete manifest is retained.
+/// - witness: `fetch::tests::a_reader_fetches_what_a_holder_holds`
 fn admit(
     evidence: &Evidence,
     digest: ManifestDigest,
@@ -447,6 +491,8 @@ pub enum Served
 ///   [`ServeError::Request`] for a request that is no digest's line, and
 ///   [`ServeError::Oversized`] for a chunk too long to frame.
 /// - panics: none.
+/// - executable: none — stream writes and connection lifetime need a remote
+///   observer; the fetch witness checks the reader's received content.
 ///
 /// # Errors
 /// - [`ServeError`]: as listed above.
@@ -472,9 +518,16 @@ pub async fn answer(
 /// - ensures: as [`answer`] states, but for the wait.
 /// - fails: as [`answer`].
 /// - panics: none.
+/// - executable: none — the stream and filesystem are external effects; the
+///   reader in the fetch witness checks the answer independently.
 ///
 /// # Errors
 /// - [`ServeError`]: as [`answer`].
+///
+/// # Adequacy
+/// - hypothesis: L3 — a holder answers complete, missing-chunk and unheld
+///   values, each distinguished by the reader's result.
+/// - witness: `fetch::tests::a_reader_fetches_what_a_holder_holds`
 async fn respond(
     evidence: &Evidence,
     connection: &iroh::endpoint::Connection,

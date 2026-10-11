@@ -167,7 +167,9 @@ jobs:
         uses: &upload-artifact actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: junit-${{ runner.os }}-${{ runner.arch }}
-          path: target/nextest/ci/junit.xml
+          path: |
+            target/nextest/ci/junit.xml
+            target/enforcing/nextest/ci/junit.xml
           if-no-files-found: ignore
       - &restore-test-state
         name: restore complete test state
@@ -192,7 +194,7 @@ jobs:
         name: archive build state
         if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'merge_group' && steps.test-state-restore.outputs.cache-hit != 'true') }}
         shell: bash
-        run: tar -cf - target/debug | zstd -T0 -3 -f -o "build-state-$GITHUB_JOB.tar.zst"
+        run: tar -cf - target/debug target/enforcing/debug | zstd -T0 -3 -f -o "build-state-$GITHUB_JOB.tar.zst"
       - &upload-build-state
         name: upload build state
         if: ${{ env.ACT != 'true' && hashFiles('build-state-*.tar.zst') != '' }}
@@ -357,6 +359,10 @@ jobs:
         run: cargo build --locked --workspace --all-targets --profile test
       - name: test every workspace target
         run: mise run test -- --profile ci
+      - name: test every workspace target with specifications enforced
+        env:
+          NEXTEST_PROFILE: ci
+        run: mise run check:tests-enforcing
       - name: check private-item rustdoc
         env:
           RUSTDOCFLAGS: -D warnings

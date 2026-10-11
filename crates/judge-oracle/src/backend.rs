@@ -11,6 +11,7 @@
 use core::str::FromStr;
 use std::collections::HashMap;
 
+use anodized::spec;
 use domhringr_record_evidence::ParseDigestError;
 use domhringr_record_evidence::ParsedDigest;
 use domhringr_record_tree::ContentHash;
@@ -36,9 +37,17 @@ pub trait Backend
     ///   letter of the option holding the most, never a default letter.
     /// - fails: [`Refusal`] when no answer is read, naming why.
     /// - panics: none.
+    /// - executable: none — the returned future has no synchronous readout;
+    ///   backend witnesses observe the answer after completion.
     ///
     /// # Errors
     /// - [`Refusal`]: no answer was read.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — recorded and HTTP answers distinguish a read ruling
+    ///   from named refusals on the same question and transcript.
+    /// - witness: `backend::tests::a_table_answers_what_it_records`
+    /// - witness: `chat::tests::the_endpoint_is_asked_for_one_letter_and_read`
     fn ask(
         &self,
         question: &Question,
@@ -88,6 +97,8 @@ impl Refusal
     ///   put to [`Unread::Malformed`] — and a recorded one to the reason it
     ///   records.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the witness
+    ///   enumerates refusals against their independently named record reasons.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a refusal of each variant is mapped and compared with
@@ -175,6 +186,8 @@ impl FromIterator<(ContentHash, ManifestDigest, Ruling)> for Static
     /// - ensures: a pair of names holds the ruling of the last triple naming
     ///   it, and a pair no triple names holds none.
     /// - panics: none.
+    /// - executable: none — the iterator is consumed; checking last-write
+    ///   precedence would require retaining and replaying its input.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — through the table's text, a pair named twice holds
@@ -221,6 +234,7 @@ impl FromStr for Static
     ///   unrecorded one; a short line, a bad hash, a bad digest and a bad
     ///   ruling each meet their own refusal at their line.
     /// - witness: `backend::tests::a_table_answers_what_it_records`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |table| table.0.len() <= text.lines().filter(|line| !line.is_empty()).count()))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -261,6 +275,8 @@ impl Backend for Static
     ///   unread pair, and [`MalformedError::Unlisted`] for a pair the table
     ///   does not hold; the transcript's text is never read.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the table
+    ///   witness compares recorded, unread and unlisted answers after polling.
     ///
     /// # Errors
     /// - [`Refusal`]: as listed above.

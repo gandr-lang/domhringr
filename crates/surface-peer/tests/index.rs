@@ -1,5 +1,17 @@
 //! Keyed questions proved by the peer binary without importing task trees.
 
+// Temporary until the executable-specs-record backfill covers this crate.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        spec_attribute_present,
+        adequacy_present,
+        maybe_shape,
+        erased_error_signature,
+        spec_attribute_unqualified
+    )
+)]
+
 extern crate alloc;
 
 #[cfg(test)]

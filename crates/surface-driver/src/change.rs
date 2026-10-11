@@ -17,6 +17,7 @@ use std::process::Command;
 use std::process::Output;
 use std::process::Stdio;
 
+use anodized::spec;
 use domhringr_record_evidence::Evidence;
 use domhringr_record_tree::Answer;
 use domhringr_record_tree::CommitId;
@@ -92,6 +93,7 @@ impl FromStr for Change
     ///   branch and commit; a missing commit, a short one, an uppercase one and
     ///   a branch beginning with `-` are each refused by name.
     /// - witness: `change::tests::a_change_is_a_branch_and_a_commit`
+    #[spec(ensures: |ref ret| ret.as_ref().map_or(true, |change| !change.branch.is_empty() && text.starts_with(&change.branch)))]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
         let mut words = text.splitn(3, ' ');
@@ -177,6 +179,7 @@ pub struct Reported
 ///   seat's script reports, and read the report the operator fetched by the
 ///   content named.
 /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
+#[spec(ensures: |ref ret| ret.as_ref().map_or(true, |report| view.task().steps().iter().any(|&(commit, _)| commit == report.dispatch)))]
 pub fn reported(view: &View) -> Result<Reported, RunError>
 {
     let Current::Attempt(ref attempt) = *view.task().current()
@@ -228,6 +231,8 @@ pub fn reported(view: &View) -> Result<Reported, RunError>
 /// - fails: [`RunError::Evidence`] as the read refuses, and
 ///   [`RunError::Output`] when standard output cannot be written.
 /// - panics: none.
+/// - executable: none — evidence admission and pipe output are effects; the
+///   process witness reads the announced content from the store.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -307,6 +312,8 @@ impl fmt::Display for GitAction
 ///   with every variable of [`REPOSITORY_VARIABLES`] removed from its
 ///   environment and its standard input closed.
 /// - panics: none.
+/// - executable: none — the function is its own specification; process
+///   witnesses observe which repository the configured command acts on.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — the process tests run every git command of the loop
@@ -329,9 +336,15 @@ fn git(directory: &Path) -> Command
 /// - fails: [`RunError::Git`] when the command cannot start or its output
 ///   cannot be read.
 /// - panics: none.
+/// - executable: none — process execution has no pure oracle; the operator
+///   witnesses observe the resulting repository state.
 ///
 /// # Errors
 /// - [`RunError::Git`]: the command cannot run.
+///
+/// # Adequacy
+/// - hypothesis: L3 — git commands operate on the change's repository.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 fn ran(
     command: &mut Command,
     action: GitAction,
@@ -350,9 +363,15 @@ fn ran(
 /// - ensures: returns the command's output when it exits 0.
 /// - fails: as [`ran`], and as [`refused`] when it exits otherwise.
 /// - panics: none.
+/// - executable: none — the function is its own specification; the merge
+///   witnesses distinguish successful commands from refusals.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a successful merge lands the reported change.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 fn succeeded(
     command: &mut Command,
     action: GitAction,
@@ -372,6 +391,11 @@ fn succeeded(
 /// - ensures: [`RunError::Refused`] carrying what the command wrote to standard
 ///   error, or else to standard output, its lines trimmed and joined by `; `.
 /// - panics: none.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a conflicting merge reports its refusal.
+/// - witness: `operator::tests::a_refused_merge_commits_nothing`
+#[spec(ensures: |ref ret| matches!(*ret, RunError::Refused { ref message, .. } if !message.contains(['\n', '\r'])))]
 fn refused(
     action: GitAction,
     output: &Output,
@@ -398,9 +422,15 @@ fn refused(
 /// - ensures: `Ok` when `git cat-file -e <commit>^{commit}` exits 0.
 /// - fails: as [`ran`], and [`RunError::Missing`] otherwise.
 /// - panics: none.
+/// - executable: none — commit existence is external repository state;
+///   observing it again would repeat the git operation.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — verification checks out the exact reported commit.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 fn holds(
     repository: &Path,
     commit: Revision,
@@ -441,6 +471,8 @@ impl Checkout
     /// - fails: as [`holds`], [`RunError::Temporary`] when the directory cannot
     ///   be made, and as [`succeeded`] when git refuses the worktree.
     /// - panics: none.
+    /// - executable: none — worktree registration and checkout are filesystem
+    ///   effects observed by the verifier process.
     ///
     /// # Errors
     /// - [`RunError`]: as listed above.
@@ -489,9 +521,15 @@ impl Checkout
     /// - fails: as [`succeeded`] when git refuses; the temporary directory is
     ///   removed even so.
     /// - panics: none.
+    /// - executable: none — worktree removal is an external effect; the
+    ///   operator witness inspects the remaining registered worktrees.
     ///
     /// # Errors
     /// - [`RunError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — verification leaves no temporary worktree registered.
+    /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
     pub fn remove(self) -> Result<(), RunError>
     {
         let removed = succeeded(
@@ -516,6 +554,8 @@ impl Checkout
 ///   made, as [`succeeded`] when git refuses, and [`RunError::Write`] when a
 ///   file cannot be written.
 /// - panics: none.
+/// - executable: none — the files reflect git history and filesystem writes;
+///   the transcript witness reads their bytes independently.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -567,6 +607,8 @@ pub fn state(
 ///   it stopped part way (`git merge --abort`) so the repository is as it was;
 ///   [`RunError::Revision`] when `HEAD` reads as no revision; and as [`ran`].
 /// - panics: none.
+/// - executable: none — merge atomicity concerns external repository state;
+///   process witnesses compare the branch and worktree.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -641,6 +683,8 @@ fn merge(
 ///   nothing committed, and [`RunError::Random`], [`RunError::Commit`] and
 ///   [`RunError::Output`].
 /// - panics: none.
+/// - executable: none — git state and committed receipts must be observed
+///   together from the process boundary, not by repeating the landing.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.

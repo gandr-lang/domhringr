@@ -16,6 +16,7 @@ use core::fmt;
 use core::fmt::Write as _;
 use core::str::FromStr;
 
+use anodized::spec;
 use domhringr_judge_oracle::QuestionError;
 use domhringr_record_tree::NotProbability;
 use domhringr_record_tree::ParseStepIdError;
@@ -373,6 +374,8 @@ impl FromStr for Name
     ///   written.
     /// - fails: as [`StepId`]'s parser refuses.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the rubric
+    ///   witnesses exercise the delegated identifier parser at named fields.
     ///
     /// # Errors
     /// - [`ParseStepIdError`]: the text is not an identifier.
@@ -446,6 +449,7 @@ impl<'input> TryFrom<&'input str> for Value<'input>
     /// - hypothesis: L3 — a playbook holding an unclosed table header is
     ///   refused at the root with the line and column of the header's end.
     /// - witness: `playbook::tests::a_malformed_playbook_is_refused_at_its_field`
+    #[spec(ensures: |ref output| output.as_ref().map_or_else(|refusal| refusal.field.0.is_empty(), |value| value.field.0.is_empty()))]
     #[inline]
     fn try_from(text: &'input str) -> Result<Self, Self::Error>
     {
@@ -507,6 +511,7 @@ impl<'input> Value<'input>
     ///   a field missing beside it, and a step that is no table at its place.
     /// - witness: `playbook::tests::a_malformed_playbook_is_refused_at_its_field`
     /// - witness: `rubric::tests::a_malformed_rubric_is_refused_at_its_field`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |table| table.entries.len() <= keys.0.len()))]
     pub(crate) fn table(
         self,
         keys: Keys,
@@ -538,6 +543,8 @@ impl<'input> Value<'input>
     ///   `refused` makes of the first key in order that does not read, at that
     ///   key.
     /// - panics: none.
+    /// - executable: none — generic names have no comparison or rendering
+    ///   bound; rubric witnesses independently check names and field paths.
     ///
     /// # Errors
     /// - [`Reason::Type`]: the value is no table.
@@ -581,6 +588,8 @@ impl<'input> Value<'input>
     ///   its position.
     /// - fails: [`Reason::Type`] for a value that is no array.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; malformed
+    ///   playbook witnesses check positions after the source array is consumed.
     ///
     /// # Errors
     /// - [`Reason::Type`]: the value is no array.
@@ -612,6 +621,8 @@ impl<'input> Value<'input>
     /// - ensures: the string's text.
     /// - fails: [`Reason::Type`] for a value that is no string.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; playbook
+    ///   witnesses compare strings and distinguish non-string values.
     ///
     /// # Errors
     /// - [`Reason::Type`]: the value is no string.
@@ -642,6 +653,8 @@ impl<'input> Value<'input>
     /// - fails: [`Reason::Type`] for a value that is no string, then
     ///   [`Reason::Empty`] for the empty string.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; playbook and
+    ///   rubric witnesses distinguish empty strings from mistyped fields.
     ///
     /// # Errors
     /// - [`Reason::Type`]: the value is no string.
@@ -669,6 +682,8 @@ impl<'input> Value<'input>
     /// - fails: [`Reason::Type`] for a value that is no string, then the reason
     ///   `refused` makes of the parser's refusal.
     /// - panics: none.
+    /// - executable: none — the generic parser provides no independent
+    ///   comparison; document witnesses check concrete values and refusals.
     ///
     /// # Errors
     /// - [`Reason::Type`]: the value is no string.
@@ -701,6 +716,8 @@ impl<'input> Value<'input>
     ///   among them — then [`Reason::Probability`] for a float outside `[0, 1]`
     ///   or not a number.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; rubric
+    ///   witnesses distinguish numeric bounds, integers and invalid floats.
     ///
     /// # Errors
     /// - [`Reason::Type`]: the value is no float.
@@ -780,6 +797,7 @@ impl<'input> Table<'input>
     ///   missing.
     /// - witness: `playbook::tests::a_malformed_playbook_is_refused_at_its_field`
     /// - witness: `rubric::tests::a_malformed_rubric_is_refused_at_its_field`
+    #[spec(ensures: !self.entries.contains_key(key.0))]
     pub(crate) fn require(
         &mut self,
         key: Key,

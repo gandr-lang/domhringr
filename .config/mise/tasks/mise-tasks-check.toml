@@ -32,6 +32,7 @@ run = "cargo clippy --workspace --all-targets --locked"
 ["check:dylint"]
 description = "quenchant's policy library over the workspace"
 env.CARGO_INCREMENTAL = "0"
+env.DYLINT_RUSTFLAGS = "-D spec_attribute_present -D adequacy_present -D maybe_shape -D erased_error_signature -D spec_attribute_unqualified"
 # The plugin links through dylint-link, which renames the artifact with the
 # toolchain suffix Dylint loads by; Cargo's linker variable is per target.
 env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "dylint-link"
@@ -92,25 +93,33 @@ run = "typos"
 description = "Unit and integration tests over every target"
 depends = ["test"]
 
+# Reuse the build/sign/run path, with an isolated enforcing artifact graph.
+["check:tests-enforcing"]
+description = "Unit and integration tests with executable specifications enforced"
+env.RUSTFLAGS = "--cfg anodized_panic"
+env.CARGO_TARGET_DIR = "{{ config_root }}/target/enforcing"
+run = "mise run test -- --profile {{ env.NEXTEST_PROFILE | default(value='default') }}"
+
 [test]
 description = "Build, sign, and run tests with nextest arguments"
-raw_args = true
+usage = 'arg "[args]" var=#true double_dash="required"'
 tools.jq = "1.8.1"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
+eval "args=(${usage_args:-})"
 target=$(cargo metadata --manifest-path Cargo.toml --locked --no-deps --format-version 1 | jq -r '.target_directory')
 cargo build --package domhringr-surface-peer --bin domhringr-peer --no-default-features --locked
 export DOMHRINGR_EDITION_ONE="$target/debug/domhringr-peer-edition-one"
 cp "$target/debug/domhringr-peer" "$DOMHRINGR_EDITION_ONE"
-cargo nextest run --workspace --locked --no-run "$@"
+cargo nextest run --workspace --locked --no-run "${args[@]}"
 if [[ -n "${CODESIGN_IDENTITY:-}" && "$(uname -s)" == "Darwin" ]]; then
   find "$target/debug" "$target/debug/deps" -maxdepth 1 -type f -perm -u+x ! -name '*.*' \
     -exec codesign --force --sign "$CODESIGN_IDENTITY" --identifier org.gandr-lang.domhringr.test {} +
 elif [[ "$(uname -s)" == "Darwin" ]]; then
   echo "test: CODESIGN_IDENTITY is unset; skipping code signing. Firewall prompts may recur; see README.md." >&2
 fi
-cargo nextest run --workspace --locked "$@"
+cargo nextest run --workspace --locked "${args[@]}"
 '''
 
 # Git writes conflict markers as EXACTLY seven marker characters followed by
