@@ -165,7 +165,7 @@ impl Manifest
         let mut image = Vec::with_capacity(96);
         image.extend_from_slice(DOMAIN);
         image.push(u8::from(self.kind));
-        image.extend_from_slice(&1_u16.to_le_bytes());
+        image.extend_from_slice(&2_u16.to_le_bytes());
         image.extend_from_slice(&length.to_le_bytes());
         image.extend_from_slice(commitment.as_ref());
         image.extend_from_slice(&u64::from(self.count).to_le_bytes());
@@ -200,7 +200,7 @@ impl Manifest
         let mut hasher = blake3::Hasher::new();
         let _domain = hasher.update(DOMAIN);
         let _kind = hasher.update(&[u8::from(self.kind)]);
-        let _layout = hasher.update(&1_u16.to_le_bytes());
+        let _layout = hasher.update(&2_u16.to_le_bytes());
         let _length = hasher.update(&length.to_le_bytes());
         let _boundary = hasher.update(commitment.as_ref());
         let _count = hasher.update(&u64::from(self.count).to_le_bytes());
@@ -211,7 +211,7 @@ impl Manifest
     /// Validate a manifest before consulting any node.
     ///
     /// # Specification
-    /// - ensures: accepts only the expected kind, layout one and the current
+    /// - ensures: accepts only the expected kind, layout two and the current
     ///   boundary commitment, with exactly one count and root identity.
     /// - fails: foreign fields, truncated fields and trailing bytes are named.
     /// - panics: none.
@@ -242,7 +242,7 @@ impl Manifest
             return Err(ManifestError::Kind);
         }
         let layout = cursor.fixed::<2>()?;
-        if u16::from_le_bytes(layout.0) != 1 {
+        if u16::from_le_bytes(layout.0) != 2 {
             return Err(ManifestError::Layout);
         }
         let length = cursor.fixed::<8>()?;
@@ -326,7 +326,7 @@ mod tests
             Err(ManifestError::Kind)
         ));
         let mut layout = image.clone();
-        layout.0[28] = 2;
+        layout.0[28] = 1;
         assert!(matches!(
             Manifest::decode(&layout, IndexKind::Dialogue),
             Err(ManifestError::Layout)

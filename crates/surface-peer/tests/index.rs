@@ -640,7 +640,7 @@ mod tests
     ///
     /// # Specification
     /// - ensures: B reports an unchecked task before syncing it, agrees after
-    ///   syncing, and measures the same project and dialogue as their holder.
+    ///   syncing, and measures the same project, provenance and dialogue.
     /// - panics: on any status, check or measurement mismatch.
     #[test]
     fn a_peer_holding_the_trees_checks_the_attestation()
@@ -669,9 +669,10 @@ mod tests
                 .reader()
                 .args(["index", "measure", &fixture.project]),
         );
-        assert_eq!(measured.len(), 2);
+        assert_eq!(measured.len(), 3);
         assert!(measured[0].starts_with("index project "));
-        assert!(measured[1].starts_with("index dialogue "));
+        assert!(measured[1].starts_with("index provenance "));
+        assert!(measured[2].starts_with("index dialogue "));
         let project = fixture.project.clone();
         let state = fixture.root.path().join("a");
         drop(fixture.server);
@@ -679,5 +680,165 @@ mod tests
             measured,
             finish(peer(&state).args(["index", "measure", &project]))
         );
+    }
+
+    #[test]
+    fn a_transcript_resolves_to_its_verdict_by_proof()
+    {
+        use domhringr_record_tree::Anchor;
+        use domhringr_record_tree::Authority;
+        use domhringr_record_tree::Code;
+        use domhringr_record_tree::Decision;
+        use domhringr_record_tree::Grade;
+        use domhringr_record_tree::Identity;
+        use domhringr_record_tree::Peer;
+        use domhringr_record_tree::Receipt;
+        use domhringr_record_tree::Revision;
+        use domhringr_record_tree::Ruling;
+        use domhringr_record_tree::StateDir;
+        use domhringr_record_tree::Status;
+        use domhringr_record_tree::Unread;
+        use gandr_storage_values::ManifestDigest;
+        let Fixture {
+            root,
+            project,
+            task,
+            owner,
+            contact,
+            server,
+            ..
+        } = Fixture::new();
+        drop(server);
+        let a = root.path().join("a");
+        let b = root.path().join("b");
+        let transcript = ManifestDigest::from([42; 32]);
+        let revision = Revision::Sha256([42; 32]);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let expected: Vec<_> = runtime.block_on(async {
+            let state = StateDir::from(a.clone());
+            let identity = Identity::load_or_create(&state).unwrap();
+            let holder = Peer::open(&state, identity).unwrap();
+            let Anchor::Tree(Authority::Key(tree)) = task.parse::<Anchor>().unwrap()
+            else {
+                panic!("task tree");
+            };
+            let view = holder.view(tree).await.unwrap();
+            let domhringr_record_tree::Current::Attempt(ref attempt) = *view.task().current()
+            else {
+                panic!("current attempt");
+            };
+            let dispatch = attempt.dispatch();
+            let operator = holder.identity().peer_key();
+            let hash = BRIEF.parse().unwrap();
+            holder
+                .commit(
+                    tree,
+                    Receipt::verified(
+                        tree,
+                        dispatch,
+                        operator,
+                        hash,
+                        "check".parse().unwrap(),
+                        ManifestDigest::from([41; 32]),
+                        Status::Exited(Code::from(0_i32)),
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            let verdict = holder
+                .commit(
+                    tree,
+                    Receipt::verdict(tree, dispatch, operator, hash, transcript, vec![(
+                        hash,
+                        Ruling::Unread(Unread::Tied),
+                    )])
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            holder
+                .commit(
+                    tree,
+                    Receipt::graded(tree, verdict, vec![Grade::Refused], Grade::Refused).unwrap(),
+                )
+                .await
+                .unwrap();
+            let decided = holder
+                .commit(
+                    tree,
+                    Receipt::decide(tree, dispatch, operator, Decision::Land).unwrap(),
+                )
+                .await
+                .unwrap();
+            holder
+                .commit(tree, Receipt::landed(tree, decided, revision).unwrap())
+                .await
+                .unwrap();
+            let view = holder.view(tree).await.unwrap();
+            drop(holder);
+            view.task()
+                .steps()
+                .iter()
+                .filter_map(|&(commit, ref step)| match step {
+                    | &domhringr_record_tree::Step::Verdict { .. }
+                    | &domhringr_record_tree::Step::Landed { .. } => {
+                        Some(domhringr_record_tree::StepLine { commit, step }.to_string())
+                    },
+                    | _other => None,
+                })
+                .flat_map(|text| text.lines().map(str::to_owned).collect::<Vec<_>>())
+                .collect()
+        });
+        drop(runtime);
+        let indexed = only(peer(&a).args(["index", "derive", &project]));
+        let digest = indexed.split_whitespace().nth(2).unwrap();
+        let port = contact.rsplit(':').next().unwrap();
+        let server = Running::serve(&a, OsStr::new(port));
+        let _synced = finish(peer(&b).args(["sync", &project, "--peer", &owner, "--at", &contact]));
+        assert!(finish(peer(&b).args(["heads", &task])).is_empty());
+        let answer = finish(peer(&b).args([
+            "provenance",
+            &project,
+            &transcript.to_string(),
+            "--at",
+            &contact,
+        ]));
+        assert_eq!(answer[0], format!("proved {digest} {owner}"));
+        let moves: Vec<_> = answer
+            .iter()
+            .filter(|line| {
+                line.starts_with("verdict ")
+                    || line.starts_with("ruling ")
+                    || line.starts_with("landed ")
+            })
+            .cloned()
+            .collect();
+        assert_eq!(
+            moves, expected,
+            "the same 64-digit subject names both a transcript and a SHA-256 landing"
+        );
+        let fields: Vec<_> = answer
+            .iter()
+            .filter(|line| line.starts_with("provenance "))
+            .map(|line| line.split_whitespace().rev().take(2).collect::<Vec<_>>())
+            .collect();
+        assert_eq!(fields, [vec![owner.as_str(), "transcript"], vec![
+            owner.as_str(),
+            "revision"
+        ]]);
+        assert!(
+            finish(peer(&b).args(["heads", &task])).is_empty(),
+            "proving never imports the task tree"
+        );
+        for subject in ["not-a-digest", "ABCDEF", "00"] {
+            let invalid = run(peer(&b).args(["provenance", &project, subject]));
+            assert_eq!(invalid.status.code(), Some(2_i32));
+        }
+        drop(server);
     }
 }

@@ -99,7 +99,7 @@ path = "crates/record-evidence"
 # features: none; the keyed plane has one implementation.
 # consumers:
 # - seat-slot
-# - surface-driver (dev)
+# - surface-driver
 # - surface-peer
 [workspace.dependencies.domhringr-record-index]
 path = "crates/record-index"

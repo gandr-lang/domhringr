@@ -127,6 +127,48 @@ impl TaskName
     }
 }
 
+/// A refused commit and the fold's exact explanation at the indexed frontier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refused
+{
+    /// The commit rejected by the fold.
+    pub commit: CommitId,
+    /// The display observation retained for an index-only listing.
+    reason: String,
+}
+
+impl From<&(CommitId, domhringr_record_tree::Refusal)> for Refused
+{
+    /// Retain a refusal without reinterpreting its explanation.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn from(value: &(CommitId, domhringr_record_tree::Refusal)) -> Self
+    {
+        Self {
+            commit: value.0,
+            reason: value.1.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for Refused
+{
+    /// Write the fold's refusal explanation unchanged.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result
+    {
+        f.write_str(&self.reason)
+    }
+}
+
 /// A task's fold at named heads, or an explicit unheld binding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[expect(
@@ -148,6 +190,8 @@ pub enum TaskEntry
         attempts: AttemptNumber,
         /// The dialogue manifest at that frontier.
         dialogue: IndexDigest,
+        /// Refused commits in the fold's order, including their explanations.
+        refused: Vec<Refused>,
     },
     /// The project binds the tree, but the deriver does not hold its Open.
     Unheld
@@ -179,7 +223,7 @@ impl CanonicalValue for TaskEntry
     ///
     /// # Specification
     /// - ensures: tag one carries tree, counted heads, current, attempts and
-    ///   dialogue; tag two carries only the tree. Neither discards a field.
+    ///   dialogue, then counted refusals; tag two carries only the tree.
     /// - fails: propagates sink refusals and unrepresentable head counts.
     /// - panics: none.
     /// - executable: none — the generic sink exposes no readback; entries
@@ -206,6 +250,7 @@ impl CanonicalValue for TaskEntry
                 ref current,
                 ref attempts,
                 ref dialogue,
+                ref refused,
             } => {
                 sink.open(ConstructorTag::from(1))?;
                 sink.bytes(TokenBytes::from(tree.as_ref()))?;
@@ -221,6 +266,16 @@ impl CanonicalValue for TaskEntry
                 current.emit_tokens(sink)?;
                 sink.word(CanonicalWord::from(u64::from(attempts.0)))?;
                 sink.bytes(TokenBytes::from(dialogue.as_ref()))?;
+                let count = u64::try_from(refused.len()).map_err(|_count| {
+                    ValueError::ArithmeticOverflow {
+                        quantity: gandr_storage_values::ValueQuantity::TokenCount,
+                    }
+                })?;
+                sink.word(CanonicalWord::from(count))?;
+                for refusal in refused {
+                    sink.bytes(TokenBytes::from(refusal.commit.as_bytes().as_slice()))?;
+                    sink.bytes(TokenBytes::from(refusal.reason.as_bytes()))?;
+                }
             },
             | Self::Unheld { ref tree } => {
                 sink.open(ConstructorTag::from(2))?;
@@ -277,12 +332,27 @@ impl CanonicalValue for TaskEntry
                 let dialogue = reader.read_bytes()?;
                 let dialogue =
                     <[u8; 32]>::try_from(<&[u8]>::from(dialogue)).map_err(|_width| refused())?;
+                let count = reader.read_word()?;
+                let mut refusals = Vec::new();
+                for _refusal in 0 .. u64::from(count) {
+                    let commit = reader.read_bytes()?;
+                    let commit =
+                        <[u8; 32]>::try_from(<&[u8]>::from(commit)).map_err(|_width| refused())?;
+                    let reason = reader.read_bytes()?;
+                    let reason =
+                        core::str::from_utf8(<&[u8]>::from(reason)).map_err(|_utf8| refused())?;
+                    refusals.push(Refused {
+                        commit: CommitId::new(commit),
+                        reason: reason.to_owned(),
+                    });
+                }
                 Self::Held {
                     tree,
                     heads: Heads::from_iter(heads),
                     current,
                     attempts: AttemptNumber(attempts),
                     dialogue: IndexDigest::from(dialogue),
+                    refused: refusals,
                 }
             },
             | 2 => Self::Unheld { tree },
@@ -505,6 +575,7 @@ mod tests
                     ref current,
                     attempts,
                     dialogue,
+                    ref refused,
                 } = entry
                 else {
                     panic!("held task");
@@ -512,6 +583,14 @@ mod tests
                 assert_eq!(tree, testing::tree());
                 assert_eq!(actual_heads, &heads);
                 assert_eq!(current, expected);
+                assert_eq!(
+                    refused,
+                    &view
+                        .refused()
+                        .iter()
+                        .map(super::Refused::from)
+                        .collect::<Vec<_>>()
+                );
                 assert_eq!(
                     attempts,
                     AttemptNumber(
@@ -538,7 +617,7 @@ mod tests
             assert_eq!(reached, [0, 1, 2, 3, 4, 5, 6]);
             let view = peer.view(project).await.unwrap();
             let derived = Deriver::default()
-                .project(&peer, &view, &store)
+                .project(&peer, project, &view, &store)
                 .await
                 .unwrap();
             drop(peer);
@@ -552,7 +631,19 @@ mod tests
                 derived.entries[&"unheld".parse().unwrap()],
                 TaskEntry::Unheld { .. }
             ));
+            let mut nested = BTreeMap::new();
             for record in derived.index.tree.records() {
+                if record.key().as_ref() == [0, u8::from(crate::IndexKind::Provenance)] {
+                    let digest =
+                        decode_flat::<super::Nested>(TokenBody::from(record.value().as_ref()))
+                            .unwrap();
+                    assert!(
+                        nested
+                            .insert(crate::IndexKind::Provenance, digest.0)
+                            .is_none()
+                    );
+                    continue;
+                }
                 assert_eq!(record.key().as_ref().first(), Some(&1));
                 let name = core::str::from_utf8(&record.key().as_ref()[1 ..])
                     .unwrap()
@@ -562,7 +653,7 @@ mod tests
                     decode_flat::<TaskEntry>(TokenBody::from(record.value().as_ref())).unwrap();
                 assert_eq!(decoded, derived.entries[&name]);
             }
-            let rebuilt = super::build(&derived.entries, &BTreeMap::new()).unwrap();
+            let rebuilt = super::build(&derived.entries, &nested).unwrap();
             assert_eq!(rebuilt.manifest, derived.index.manifest);
         });
     }
