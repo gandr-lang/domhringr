@@ -23,11 +23,15 @@ use crate::dialogue;
 use crate::store::Store;
 use crate::testing;
 
-/// Real encoded moves and task standings from the fixed-key receipt fixture.
+/// Real encoded moves, task standings and evidence attributions.
 ///
 /// # Specification
 /// trivial.
-async fn shapes() -> (Vec<OwnedRecordValue>, Vec<OwnedRecordValue>)
+async fn shapes() -> (
+    Vec<OwnedRecordValue>,
+    Vec<OwnedRecordValue>,
+    Vec<OwnedRecordValue>,
+)
 {
     let fixture = testing::Fixture::new().await;
     let directory = tempfile::tempdir().unwrap();
@@ -36,6 +40,16 @@ async fn shapes() -> (Vec<OwnedRecordValue>, Vec<OwnedRecordValue>)
     let store = Store::open(&state);
     let view = peer.view(testing::tree()).await.unwrap();
     let dialogue = dialogue::derive(view.task()).unwrap();
+    let mut provenance = crate::provenance::Records::default();
+    provenance.extend(testing::tree(), &dialogue.index).unwrap();
+    let provenance = provenance.build().unwrap();
+    let attributions = provenance
+        .tree
+        .records()
+        .iter()
+        .filter(|record| record.key().as_ref().first() == Some(&1))
+        .map(|record| OwnedRecordValue::from(record.value().as_ref()))
+        .collect();
     let moves = dialogue
         .index
         .tree
@@ -53,7 +67,7 @@ async fn shapes() -> (Vec<OwnedRecordValue>, Vec<OwnedRecordValue>)
         entries.push(OwnedRecordValue::from(image.as_ref()));
     }
     drop(peer);
-    (moves, entries)
+    (moves, entries, attributions)
 }
 
 /// Repeat real value shapes at distinct coordinates of the index's key
@@ -84,7 +98,15 @@ fn index(
                     .parse::<crate::project::TaskName>()
                     .unwrap()
                     .key(),
-                | IndexKind::Provenance => panic!("provenance has its own measurement fixture"),
+                | IndexKind::Provenance => {
+                    crate::provenance::Subject::Evidence(testing::evidence()).key(
+                        testing::tree(),
+                        MoveKey::new(
+                            AttemptNumber(1),
+                            SequenceNumber(u32::try_from(position).unwrap()),
+                        ),
+                    )
+                },
             };
             Record::new(key, value.clone())
         })
@@ -123,7 +145,7 @@ fn row(measurement: Measurement) -> (Row, Levels)
 fn the_proof_sizes_are_pinned()
 {
     testing::runtime().block_on(async {
-        let (moves, entries) = shapes().await;
+        let (moves, entries, attributions) = shapes().await;
         let (dialogue, project) =
             if domhringr_record_tree::Edition::CURRENT == domhringr_record_tree::Edition::ONE {
                 (
@@ -140,16 +162,16 @@ fn the_proof_sizes_are_pinned()
                         [5153, 300, 16848, 16815, 48630],
                     ],
                     [
-                        [16, 0, 5552, 5552, 6478],
-                        [32, 2, 172, 9636, 12477],
-                        [64, 3, 234, 10245, 14163],
-                        [128, 8, 544, 16097, 20905],
-                        [256, 14, 916, 23009, 28872],
-                        [512, 35, 2218, 23009, 30174],
-                        [1024, 81, 5070, 23009, 33026],
-                        [2048, 152, 9472, 23009, 37428],
-                        [4096, 280, 17408, 23035, 47336],
-                        [5608, 371, 23050, 23035, 55614],
+                        [16, 2, 172, 3126, 6631],
+                        [32, 2, 172, 9049, 12554],
+                        [64, 6, 420, 9464, 13217],
+                        [128, 11, 730, 9464, 13838],
+                        [256, 21, 1350, 11021, 21412],
+                        [512, 37, 2342, 11648, 22406],
+                        [1024, 57, 3582, 23170, 42381],
+                        [2048, 123, 7674, 23170, 46473],
+                        [4096, 253, 15734, 23585, 57001],
+                        [6143, 381, 23670, 23611, 65593],
                     ],
                 )
             }
@@ -168,27 +190,40 @@ fn the_proof_sizes_are_pinned()
                         [4691, 293, 16456, 16439, 46041],
                     ],
                     [
-                        [16, 0, 5552, 5552, 6478],
-                        [32, 2, 172, 6723, 12451],
-                        [64, 4, 296, 7561, 15488],
-                        [128, 9, 606, 14152, 23685],
-                        [256, 18, 1164, 14152, 24243],
-                        [512, 26, 1660, 23035, 39238],
-                        [1024, 56, 3520, 23035, 41098],
-                        [2048, 117, 7302, 23035, 46701],
-                        [4096, 253, 15734, 23035, 61801],
-                        [6079, 371, 23050, 23035, 69117],
+                        [16, 2, 172, 3126, 6631],
+                        [32, 2, 172, 9049, 12554],
+                        [64, 4, 296, 9879, 19834],
+                        [128, 8, 544, 12704, 20082],
+                        [256, 16, 1040, 20414, 24862],
+                        [512, 27, 1722, 20414, 28381],
+                        [1024, 59, 3706, 23585, 35552],
+                        [2048, 119, 7426, 23585, 39272],
+                        [4096, 251, 15610, 23585, 49243],
+                        [6189, 380, 23608, 23585, 67400],
                     ],
                 )
             };
+        let provenance = [
+            [16, 2, 290, 1902, 2860],
+            [32, 2, 290, 4030, 4988],
+            [64, 4, 532, 6025, 8821],
+            [128, 8, 1016, 6025, 9305],
+            [256, 19, 2347, 6025, 10636],
+            [512, 31, 3799, 8552, 17541],
+            [1024, 56, 6824, 8552, 22162],
+            [2048, 127, 15415, 8552, 30753],
+            [4096, 250, 30298, 8552, 45636],
+            [1204, 71, 8639, 8552, 23977],
+        ];
         for (kind, shapes, expected) in [
             (IndexKind::Dialogue, moves, dialogue),
             (IndexKind::Project, entries, project),
+            (IndexKind::Provenance, attributions, provenance),
         ] {
             for (position, expected) in expected.into_iter().enumerate() {
                 let count = expected[0];
                 let built = index(kind, RecordCount::from(count), &shapes);
-                let levels = if position == 9 {
+                let levels = if expected[1] != 0 && expected[2] >= expected[3] {
                     Levels::Open
                 }
                 else {
@@ -199,7 +234,7 @@ fn the_proof_sizes_are_pinned()
                     (Row(expected), levels),
                     "{kind:?}"
                 );
-                if levels == Levels::Open {
+                if position == 9 {
                     let before = index(
                         kind,
                         RecordCount::from(u64::from(

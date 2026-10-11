@@ -1,5 +1,6 @@
 //! Derive, attest, prove, check and measure the keyed plane.
 
+mod provenance;
 mod render;
 
 use core::fmt::Write as _;
@@ -42,6 +43,7 @@ use gandr_storage_records::RecordTree;
 use gandr_storage_records::TreeParams;
 use gandr_storage_values::TokenBody;
 use gandr_storage_values::decode_flat;
+pub use provenance::parse_provenance;
 
 use crate::Completion;
 use crate::Operand;
@@ -70,6 +72,16 @@ enum Action
     {
         /// The authenticated task or dialogue coordinate.
         question: Question,
+        /// The project attester whose manifest is authoritative.
+        by: Aim,
+        /// The routing choice used on a local index miss.
+        at: At,
+    },
+    /// Trace evidence or revision subjects to their original naming moves.
+    Provenance
+    {
+        /// Both families when a 256-bit subject is textually ambiguous.
+        subjects: Vec<domhringr_record_index::provenance::Subject>,
         /// The project attester whose manifest is authoritative.
         by: Aim,
         /// The routing choice used on a local index miss.
@@ -125,6 +137,9 @@ pub enum ParseError
     /// A move coordinate has no separating period.
     #[error("expected a move coordinate <attempt>.<seq>")]
     Coordinate,
+    /// A subject is neither a manifest digest nor a Git revision.
+    #[error("expected a lowercase 40- or 64-digit digest or revision")]
+    Subject,
 }
 
 /// Parse the index verbs, refusing irrelevant options rather than ignoring
@@ -316,6 +331,9 @@ pub enum IndexError
     /// Exact answer extents could not be measured.
     #[error(transparent)]
     Measure(#[from] measure::MeasureError),
+    /// A provenance key or naming record is malformed.
+    #[error(transparent)]
+    Provenance(#[from] domhringr_record_index::provenance::ProvenanceError),
     /// Text output could not be formatted.
     #[error(transparent)]
     Format(#[from] core::fmt::Error),
@@ -526,7 +544,8 @@ async fn execute(
         if author != view.owner() && !view.members().contains(&author) {
             return Err(IndexError::Authority);
         }
-        let derived = Deriver::default().project(&peer, &view, &store).await?;
+        let mut deriver = Deriver::owned(&peer, project, &view, &store)?;
+        let derived = deriver.project(&peer, project, &view, &store).await?;
         let digest = derived.index.manifest.identity()?;
         if view
             .indexes()
@@ -542,7 +561,9 @@ async fn execute(
         return Ok((Completion::Success, format!("indexed {commit} {digest}\n")));
     }
     let (by, at) = match action {
-        | Action::Prove { by, ref at, .. } => (by, at.clone()),
+        | Action::Prove { by, ref at, .. } | Action::Provenance { by, ref at, .. } => {
+            (by, at.clone())
+        },
         | Action::Check(by) => (by, At::Book),
         | Action::Measure | Action::Derive => (Aim::Owner, At::Book),
     };
@@ -561,6 +582,11 @@ async fn execute(
         link: Link::Local { peer, at },
     };
     match action {
+        | Action::Provenance { subjects, .. } => {
+            let (reader, output) = provenance::answer(reader, attestation, subjects).await?;
+            reader.close().await;
+            Ok((Completion::Success, output))
+        },
         | Action::Prove { question, .. } => {
             let (reader, output) = answer(reader, attestation.index, question).await?;
             reader.close().await;
@@ -647,6 +673,14 @@ async fn measurements(
     measurement(&mut output, digest, &index)?;
     let mut dialogues = alloc::collections::BTreeSet::new();
     for record in index.tree.records() {
+        if record.key().as_ref() == [0, u8::from(IndexKind::Provenance)] {
+            let domhringr_record_index::project::Nested(digest) =
+                decode_flat(TokenBody::from(record.value().as_ref()))?;
+            let (next, provenance) = reader.load(digest, IndexKind::Provenance).await?;
+            reader = next;
+            measurement(&mut output, digest, &provenance)?;
+            continue;
+        }
         if record.key().as_ref().first() != Some(&1) {
             continue;
         }

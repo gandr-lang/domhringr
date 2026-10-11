@@ -16,7 +16,7 @@ The `domhringr` binary is the operator's: it lists a project's seats and tasks, 
 
 ## Synopsis
 
-**What.** `domhringr` runs the task loop for one operator: `open` lists the project, `dispatch` puts a seat to work on a task, `verify` runs a playbook's verifiers on the change the seat reports, `decide` grades it by rubrics and decides to land or rework it, and `land` merges it. Every step is a receipt in the task's tree, and every command reads the task as the fold derives it; the report, each verifier's output and each transcript are evidence, read from and kept in the operator's evidence store.
+**What.** `domhringr` runs the task loop for one operator: `open` lists the project, `dispatch` puts a seat to work on a task, `verify` runs a playbook's verifiers on the change the seat reports, `decide` grades it by rubrics and decides to land or rework it, and `land` merges it. Every step is a receipt in the task's tree. Acting commands read the fold; `open` reads its derived index. The report, each verifier's output and each transcript are evidence, read from and kept in the operator's evidence store.
 
 **Why.** The loop — dispatch, report, verify, judge, decide, land — has to run from the record alone, with no server holding its state: any synced member can pick it up where the journal says it stands, and each choice is the receipt of the key that made it.
 
@@ -26,6 +26,7 @@ The `domhringr` binary is the operator's: it lists a project's seats and tasks, 
 
 - `domhringr-record-tree`, [crate documentation](../record-tree/README.md): the store, the task view and its lifecycle, the `Decide` and `Landed` receipts.
 - `domhringr-record-evidence`, [crate documentation](../record-evidence/README.md): the evidence store a report is read from and outputs and transcripts are kept in, and the fetch from a seat.
+- `domhringr-record-index`, [crate documentation](../record-index/README.md): cached standings and refusals, provenance and attested project manifests.
 - `domhringr-seat-slot`, [crate documentation](../seat-slot/README.md): the wake and the seat that reports.
 - `domhringr-strategy-document`, [crate documentation](../strategy-document/README.md): playbooks, rubrics, verifiers, grades and their composition.
 - `domhringr-judge-oracle`, [crate documentation](../judge-oracle/README.md): the judge's backends and their configuration.
@@ -88,6 +89,8 @@ A `<task>` is its name in the project — ASCII letters, digits, `-`, `_` and `.
 | `decide` | `change`; `report`; `step <id> <status>` per verified step; per rubric `rubric`, `transcript`, `ruling`, `verdict`, `grade` and `graded` lines; `composed <grade>`; `decide <commit-id> <decision>` | `Verdict` and `Graded` per rubric, then `Decide` unless undecided |
 | `land` | `change <branch> <commit>`, `report <digest>`, `landed <commit-id> <revision>` | `Landed` |
 
+After committing, `dispatch`, `verify`, `decide` and `land` close their endpoint, derive the store's project index and commit one `Indexed` when its manifest differs from the operator's latest claim. Multiple receipts in one command still yield one attestation. A re-sent dispatch commits no attestation, even if waking the seat syncs a report. `open` updates only the local cache and commits nothing.
+
 The exit status is 0 on success, 1 when a command fails, 2 for a command line that cannot be run, and 3 when `decide` decides nothing. Diagnostics go to standard error.
 
 Dispatches name the newest edition compiled into the driver: edition 2 by default, edition 1 with `--no-default-features`. Reading a task always uses its dispatch's edition. `open` surfaces unknown-edition and protocol-order refusals by commit anchor; `operator::tests::open_names_unknown_protocol_refusals` witnesses the unknown-edition case.
@@ -96,12 +99,13 @@ Dispatches name the newest edition compiled into the driver: edition 2 by defaul
 
 A task's tree folds to its current attempt — the latest dispatch — and how far the attempt has gone. The standing is the last line of the peer's `replay` and the end of each `task` line `open` prints.
 
+`open` prints standings and refusals from the index, refreshing tasks only when their heads moved or their cached images are missing. Routing for sync may fold task books; the no-refold rule applies to listing and refresh, not routing.
+
 | Standing | Reached by | Command |
 | -------- | ---------- | ------- |
 | `undispatched` | the task's `Open` | `dispatch`, minting the task |
 | `dispatched <dispatch> <holder>` | `Dispatch` | `dispatch` |
 | `reported <dispatch> <report>` | the holder's `Report` | the seat |
-| `stalled <dispatch> <retirement>` | the holder's `Retire`, with no report | the seat |
 | `verified <dispatch> <verification>` | `Verified` | `verify` |
 | `graded <dispatch> <grading> <composed>` | `Graded` | `decide` |
 | `decided <dispatch> <decision-commit> <decision>` | `Decide` | `decide` |
@@ -115,7 +119,7 @@ A seat reports its change as its summary, the first line of its report: `<branch
 
 ## Decisions
 
-**A task is a tree of its own, bound in the project.** `dispatch` mints a tree for a new task, opens it as this peer, and binds `tasks/<name>` in the project to its anchor; `open` reads the project's bindings under `tasks/` to find the tasks, and each task's own fold for its standing. A task is the tree its seat receipts live in, as the record already shapes it, and the project is the one place that names them.
+**A task is a tree of its own, bound in the project.** `dispatch` mints a tree for a new task, opens it as this peer, and binds `tasks/<name>` in the project to its anchor; `open` reads the project's derived entries for each task's standing and refusals. The local cache retains refreshes between commands, keyed by task heads; an unchanged standing alone is not enough, because a newly refused receipt changes the frontier. A task is the tree its seat receipts live in, and the project is the one place that names them.
 
 - one tree for the project and every task: one slot per tree, so one task at a time.
 - tasks named by their tree anchors alone, kept by the operator: a second operator syncing the project would not find them.

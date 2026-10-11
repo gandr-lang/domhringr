@@ -99,27 +99,51 @@ pub(super) async fn question(
                 | Verified::Range(_records) => return Err(IndexError::Shape),
             };
             let movement = prove::read_move(tree, value)?;
-            if matches!(
-                movement.receipt.kind(),
-                Kind::Graded { .. } | Kind::Landed { .. }
-            ) {
-                // These receipts intentionally omit fields carried by their
-                // verdict or decision. Prove that context in this same attempt,
-                // over this same connection; never fetch the receipt tree.
-                let (attempt, _seq) = key.coordinates();
-                let (reader, context) = play(reader, tree, digest, attempt).await?;
-                let related = context
-                    .iter()
-                    .map(|movement| (movement.commit, movement))
-                    .collect();
-                emit(&mut output, &movement, &related)?;
-                Ok((reader, output))
-            }
-            else {
-                emit(&mut output, &movement, &BTreeMap::new())?;
-                Ok((reader, output))
-            }
+            self::movement(reader, tree, digest, key, movement, output).await
         },
+    }
+}
+
+/// Render an authenticated move, proving context only for indirect fields.
+///
+/// # Specification
+/// - ensures: grading and landing context comes from the same attested attempt;
+///   direct moves need no second membership request.
+/// - fails: malformed references, proofs or transport are refused.
+/// - panics: none.
+///
+/// # Errors
+/// - [`IndexError`]: proof, reference or output failure.
+///
+/// # Adequacy
+/// - hypothesis: L1 — a project-only reader obtains the original move line.
+/// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
+/// - witness: `index::tests::a_transcript_resolves_to_its_verdict_by_proof`
+pub(super) async fn movement(
+    reader: Reader,
+    tree: TreeId,
+    digest: IndexDigest,
+    key: MoveKey,
+    movement: Move,
+    mut output: String,
+) -> Result<(Reader, String), IndexError>
+{
+    if matches!(
+        movement.receipt.kind(),
+        Kind::Graded { .. } | Kind::Landed { .. }
+    ) {
+        let (attempt, _seq) = key.coordinates();
+        let (reader, context) = play(reader, tree, digest, attempt).await?;
+        let related = context
+            .iter()
+            .map(|movement| (movement.commit, movement))
+            .collect();
+        emit(&mut output, &movement, &related)?;
+        Ok((reader, output))
+    }
+    else {
+        emit(&mut output, &movement, &BTreeMap::new())?;
+        Ok((reader, output))
     }
 }
 

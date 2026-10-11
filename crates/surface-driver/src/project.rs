@@ -7,6 +7,7 @@
 //! reached through the task's book first and the project's after.
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -14,6 +15,10 @@ use core::str::FromStr;
 
 use anodized::spec;
 use domhringr_record_evidence::Evidence;
+use domhringr_record_index::derive::Deriver;
+use domhringr_record_index::project::TaskEntry;
+use domhringr_record_index::project::TaskName as IndexedName;
+use domhringr_record_index::store::Store as IndexStore;
 use domhringr_record_tree::Aim;
 use domhringr_record_tree::Anchor;
 use domhringr_record_tree::Answer;
@@ -277,33 +282,6 @@ async fn find(
     }
 }
 
-/// The tasks `view`, a project's, binds: each path `tasks/<name>` bound to a
-/// tree's bare anchor in the key form, with that tree, in path order.
-///
-/// # Specification
-/// - ensures: selects one-segment task bindings to keyed trees, in path order.
-/// - panics: none.
-///
-/// # Adequacy
-/// - hypothesis: L3 — the project lists both of its dispatched tasks.
-/// - witness: `operator::tests::open_lists_every_seat_and_task`
-#[spec(ensures: |ref ret| ret.len() <= view.bindings().len())]
-fn tasks(view: &View) -> Vec<(Path, TreeId)>
-{
-    view.bindings()
-        .iter()
-        .filter_map(|(path, bound)| {
-            let name = path.as_ref().strip_prefix(TASKS)?.strip_prefix('/')?;
-            match bound.1 {
-                | Target::Anchor(Anchor::Tree(Authority::Key(tree))) if !name.contains('/') => {
-                    Some((path.clone(), tree))
-                },
-                | Target::Anchor(_) | Target::Endpoint(_) | Target::Datum(_) => None,
-            }
-        })
-        .collect()
-}
-
 /// Where a dispatch is committed: the state directory a new task's key is
 /// minted beneath, the operator, and the project.
 #[derive(Clone, Copy)]
@@ -401,6 +379,9 @@ pub async fn dispatch(
     let woken =
         domhringr_seat_slot::wake(&node, &remote, &Wake::new(tree, dispatch, on.operator)).await;
     node.close().await;
+    if resent.is_none() {
+        attest(node.peer(), on.state, on.project).await?;
+    }
     drop(node);
     woken?;
     emit(&"woken\n")
@@ -738,6 +719,8 @@ async fn holding(
 }
 
 /// List the seats and the tasks of `project`, as `operator`.
+/// The listing uses only locally derived entries; task frontiers invalidate
+/// them even when only a refused receipt changed.
 ///
 /// # Specification
 /// - ensures: syncs each task whose seat holds its slot without a report from
@@ -769,18 +752,33 @@ async fn holding(
 /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 pub async fn open(
     peer: Peer,
+    state: &StateDir,
     operator: PeerKey,
     project: TreeId,
 ) -> Result<(), RunError>
 {
     let view = peer.view(project).await?;
-    let tasks = tasks(&view);
-    let mut awaiting = Vec::new();
-    for &(ref path, tree) in &tasks {
-        if let Awaiting::Seat(seat) = awaited(&peer, tree).await? {
-            awaiting.push((path, tree, seat));
-        }
-    }
+    let indexes = IndexStore::open(state);
+    let mut deriver = Deriver::owned(&peer, project, &view, &indexes)?;
+    let before = deriver.project(&peer, project, &view, &indexes).await?;
+    let awaiting: Vec<_> = before
+        .entries
+        .iter()
+        .filter_map(|(name, entry)| {
+            let TaskEntry::Held {
+                tree,
+                current: Current::Attempt(ref attempt),
+                ..
+            } = *entry
+            else {
+                return None;
+            };
+            match (attempt.slot(), attempt.answer()) {
+                | (Slot::Held(seat), Answer::Awaited) => Some((name, tree, seat)),
+                | _answered => None,
+            }
+        })
+        .collect();
     let store = if awaiting.is_empty() {
         Store::Local(peer)
     }
@@ -789,61 +787,60 @@ pub async fn open(
     };
     let mut reported = Ok(());
     if let Store::Bound(ref node) = store {
-        for (path, tree, seat) in awaiting {
+        for (name, tree, seat) in awaiting {
             if let Err(failure) = catch_up(node, project, tree, seat).await {
                 let unsynced = RunError::Unsynced {
-                    task: in_project(project, path),
+                    task: in_project(project, name),
                     cause: Box::new(failure),
                 };
                 reported = reported.and_then(|()| report(&unsynced));
             }
         }
     }
-    let listed = listing(store.peer(), operator, project, &view, &tasks).await;
     store.close().await;
+    let derived = match store {
+        | Store::Local(_) => before,
+        | Store::Bound(_) => {
+            deriver
+                .project(store.peer(), project, &view, &indexes)
+                .await?
+        },
+    };
+    let listed = listing(operator, project, &view, &derived.entries);
     drop(store);
     reported.map_err(RunError::Diagnostics)?;
-    emit(&listed?)
+    emit(&listed)
 }
 
-/// The anchor of `path` in `project`.
+/// The anchor of an indexed task name in its project.
 ///
 /// # Specification
 /// trivial.
 fn in_project(
     project: TreeId,
-    path: &Path,
-) -> Anchor
+    name: &IndexedName,
+) -> String
 {
-    Anchor::Path {
-        authority: Authority::Key(project),
-        path: path.clone(),
-    }
+    format!("{}tasks/{name}", Anchor::key(project))
 }
 
-/// The lines `open` writes for `project`, whose view is `view` and whose
-/// tasks are `tasks`, as `operator`.
+/// The lines `open` writes, read only from the project book and task entries.
 ///
 /// # Specification
-/// - ensures: as [`open`] writes them.
-/// - fails: [`RunError::View`] when a task tree the store holds cannot be
-///   folded.
+/// - ensures: every indexed standing and refusal is printed in task-name order.
 /// - panics: none.
 ///
-/// # Errors
-/// - [`RunError::View`]: a task cannot be folded.
-///
 /// # Adequacy
-/// - hypothesis: L3 — the listing names both tasks and seats.
-/// - witness: `operator::tests::open_lists_every_seat_and_task`
-#[spec(ensures: |ref ret| ret.as_ref().map_or(true, |lines| lines.ends_with('\n')))]
-async fn listing(
-    peer: &Peer,
+/// - hypothesis: L3 — indexed listings agree with folded tasks at every
+///   standing.
+/// - witness: `operator::tests::open_reads_the_index_as_the_fold_reads_the_trees`
+#[spec(ensures: |ref ret| ret.ends_with('\n'))]
+fn listing(
     operator: PeerKey,
     project: TreeId,
     view: &View,
-    tasks: &[(Path, TreeId)],
-) -> Result<String, RunError>
+    tasks: &BTreeMap<IndexedName, TaskEntry>,
+) -> String
 {
     let mut lines = vec![format!("project {}\n", Anchor::key(project))];
     for (seat, presence) in view.book() {
@@ -851,21 +848,65 @@ async fn listing(
             lines.push(format!("seat {seat} {presence}\n"));
         }
     }
-    for &(ref path, tree) in tasks {
-        let standing = match peer.view(tree).await {
-            | Ok(task) => {
-                for &(commit, ref refusal) in task.refused() {
+    for (name, entry) in tasks {
+        let standing = match *entry {
+            | TaskEntry::Held {
+                tree,
+                ref current,
+                ref refused,
+                ..
+            } => {
+                for refusal in refused {
                     lines.push(format!(
                         "refused {} {refusal}\n",
-                        Anchor::commit(tree, commit)
+                        Anchor::commit(tree, refusal.commit)
                     ));
                 }
-                task.task().current().to_string()
+                current.to_string()
             },
-            | Err(ViewError::Unopened(_)) => String::from("unheld"),
-            | Err(failure) => return Err(RunError::View(failure)),
+            | TaskEntry::Unheld { .. } => String::from("unheld"),
         };
-        lines.push(format!("task {} {standing}\n", in_project(project, path)));
+        lines.push(format!("task {} {standing}\n", in_project(project, name)));
     }
-    Ok(lines.concat())
+    lines.concat()
+}
+
+/// Attest a changed derivation after the endpoint has closed.
+///
+/// # Specification
+/// - requires: no endpoint is accepting concurrent syncs for `peer`.
+/// - ensures: all nodes precede one own `Indexed` when its manifest differs; an
+///   identical manifest commits nothing. Parents are the project heads read.
+/// - fails: fold, derivation, manifest or receipt persistence failure.
+/// - panics: none.
+/// - executable: none — durable index publication and receipt commits require
+///   the process witness to observe the resulting store and attestations.
+///
+/// # Errors
+/// - [`RunError`]: a required read, derivation or commit failed.
+///
+/// # Adequacy
+/// - hypothesis: L3 — each committing command publishes exactly once.
+/// - witness: `operator::tests::a_committing_command_attests_a_changed_index_once`
+pub async fn attest(
+    peer: &Peer,
+    state: &StateDir,
+    project: TreeId,
+) -> Result<(), RunError>
+{
+    let view = peer.view(project).await?;
+    let store = IndexStore::open(state);
+    let mut deriver = Deriver::owned(peer, project, &view, &store)?;
+    let derived = deriver.project(peer, project, &view, &store).await?;
+    let digest = derived.index.manifest.identity()?;
+    let author = peer.identity().peer_key();
+    if view
+        .indexes()
+        .get(&author)
+        .is_none_or(|claim| claim.index != digest)
+    {
+        let receipt = Receipt::indexed(project, digest)?;
+        let _commit = peer.commit(project, receipt).await?;
+    }
+    Ok(())
 }

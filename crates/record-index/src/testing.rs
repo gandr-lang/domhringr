@@ -237,12 +237,26 @@ impl Fixture
     /// trivial.
     pub async fn new() -> Self
     {
-        let opened = seal(
-            &owner(),
-            &opening(&iroh::SecretKey::from_bytes(&[3; 32])),
-            BTreeSet::new(),
+        Self::with(
+            &iroh::SecretKey::from_bytes(&[3; 32]),
+            evidence(),
+            Revision::Sha1([9; 20]),
         )
-        .await;
+        .await
+    }
+
+    /// Build the same lifecycle under independently chosen subject identities.
+    ///
+    /// # Specification
+    /// trivial.
+    pub async fn with(
+        secret: &iroh::SecretKey,
+        evidence: ManifestDigest,
+        merge: Revision,
+    ) -> Self
+    {
+        let tree = TreeId::try_from(*secret.public().as_bytes()).unwrap();
+        let opened = seal(&owner(), &opening(secret), BTreeSet::new()).await;
         let root = opened.payload().head();
         let mut fixture = Self {
             commits: vec![opened],
@@ -252,20 +266,15 @@ impl Fixture
         let _grant = fixture
             .push(
                 &owner(),
-                Receipt::grant(tree(), key(&member())).unwrap(),
+                Receipt::grant(tree, key(&member())).unwrap(),
                 Fence(1),
             )
             .await;
         let dispatch = fixture
             .push(
                 &owner(),
-                Receipt::dispatch(
-                    tree(),
-                    key(&seat()),
-                    Edition::CURRENT,
-                    Brief::Content(hash()),
-                )
-                .unwrap(),
+                Receipt::dispatch(tree, key(&seat()), Edition::CURRENT, Brief::Content(hash()))
+                    .unwrap(),
                 Fence(2),
             )
             .await;
@@ -273,46 +282,31 @@ impl Fixture
         let _report = fixture
             .push(
                 &seat(),
-                Receipt::report(
-                    tree(),
-                    dispatch,
-                    evidence(),
-                    "first report".parse().unwrap(),
-                )
-                .unwrap(),
+                Receipt::report(tree, dispatch, evidence, "first report".parse().unwrap()).unwrap(),
                 Fence(30),
             )
             .await;
         let _retired = fixture
-            .push(
-                &seat(),
-                Receipt::retire(tree(), dispatch).unwrap(),
-                Fence(3),
-            )
+            .push(&seat(), Receipt::retire(tree, dispatch).unwrap(), Fence(3))
             .await;
         let dispatch = fixture
             .push(
                 &owner(),
-                Receipt::dispatch(
-                    tree(),
-                    key(&seat()),
-                    Edition::CURRENT,
-                    Brief::Content(hash()),
-                )
-                .unwrap(),
+                Receipt::dispatch(tree, key(&seat()), Edition::CURRENT, Brief::Content(hash()))
+                    .unwrap(),
                 Fence(4),
             )
             .await;
         fixture.dispatch = dispatch;
         if Edition::CURRENT == Edition::TWO {
             let _paused = fixture
-                .push(&seat(), Receipt::pause(tree(), dispatch).unwrap(), Fence(5))
+                .push(&seat(), Receipt::pause(tree, dispatch).unwrap(), Fence(5))
                 .await;
         }
         let reported = fixture
             .push(
                 &seat(),
-                Receipt::report(tree(), dispatch, evidence(), "reported".parse().unwrap()).unwrap(),
+                Receipt::report(tree, dispatch, evidence, "reported".parse().unwrap()).unwrap(),
                 Fence(6),
             )
             .await;
@@ -320,7 +314,7 @@ impl Fixture
         let _handoff = fixture
             .push(
                 &seat(),
-                Receipt::handoff(tree(), dispatch, key(&member())).unwrap(),
+                Receipt::handoff(tree, dispatch, key(&member())).unwrap(),
                 Fence(7),
             )
             .await;
@@ -328,12 +322,12 @@ impl Fixture
             .push(
                 &owner(),
                 Receipt::verified(
-                    tree(),
+                    tree,
                     dispatch,
                     key(&owner()),
                     hash(),
                     "check".parse().unwrap(),
-                    evidence(),
+                    evidence,
                     Status::Exited(Code::from(0_i32)),
                 )
                 .unwrap(),
@@ -344,7 +338,7 @@ impl Fixture
         let verdict = fixture
             .push(
                 &owner(),
-                Receipt::verdict(tree(), dispatch, key(&owner()), hash(), evidence(), vec![(
+                Receipt::verdict(tree, dispatch, key(&owner()), hash(), evidence, vec![(
                     hash(),
                     Ruling::Unread(Unread::Tied),
                 )])
@@ -355,7 +349,7 @@ impl Fixture
         let grading = fixture
             .push(
                 &owner(),
-                Receipt::graded(tree(), verdict, vec![Grade::Refused], Grade::Refused).unwrap(),
+                Receipt::graded(tree, verdict, vec![Grade::Refused], Grade::Refused).unwrap(),
                 Fence(10),
             )
             .await;
@@ -363,7 +357,7 @@ impl Fixture
         let decided = fixture
             .push(
                 &owner(),
-                Receipt::decide(tree(), dispatch, key(&owner()), Decision::Land).unwrap(),
+                Receipt::decide(tree, dispatch, key(&owner()), Decision::Land).unwrap(),
                 Fence(11),
             )
             .await;
@@ -371,7 +365,7 @@ impl Fixture
         let landed = fixture
             .push(
                 &owner(),
-                Receipt::landed(tree(), decided, Revision::Sha1([9; 20])).unwrap(),
+                Receipt::landed(tree, decided, merge).unwrap(),
                 Fence(12),
             )
             .await;

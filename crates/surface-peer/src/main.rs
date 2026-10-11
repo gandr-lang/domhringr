@@ -359,6 +359,7 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> transport <tree> <edition>
        domhringr-peer --state <dir> evidence <tree> <digest> [--peer <peer-id>] [--at <endpoint>]
                       [--local]
+       domhringr-peer --state <dir> provenance <project> <digest|revision> [--by <peer-id>] [--at <endpoint>]
        domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
        domhringr-peer --state <dir> judge ask <question> <transcript> [--static <file>]
        domhringr-peer --state <dir> judge verdict <tree> --rubric <content-hash> <transcript>
@@ -424,6 +425,8 @@ enum Verb
     Id,
     /// Derive, attest, prove, check or measure a keyed index.
     Index,
+    /// Prove which moves name an evidence digest or landed revision.
+    Provenance,
     /// Accept peers and answer wakes until killed.
     Serve,
     /// Open a tree.
@@ -510,6 +513,7 @@ impl fmt::Display for Verb
         f.write_str(match *self {
             | Self::Id => "id",
             | Self::Index => "index derive|task|move|play|after|check|measure <project> [<task>] [<coordinate>] [--by <peer-id>] [--at <endpoint>]",
+            | Self::Provenance => "provenance <project> <digest|revision> [--by <peer-id>] [--at <endpoint>]",
             | Self::Serve => "serve [--port <port>] [--surface <program>]",
             | Self::Open => "open",
             | Self::Grant => "grant <tree> <peer-id>",
@@ -1394,6 +1398,10 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     let state = StateDir::from(PathBuf::from(state.ok_or(UsageError::State)?));
     if verb == Verb::Index {
         let command = Command::Index(index::parse(&mut arguments)?);
+        return Ok(Invocation { state, command });
+    }
+    if verb == Verb::Provenance {
+        let command = Command::Index(index::parse_provenance(&mut arguments)?);
         return Ok(Invocation { state, command });
     }
     if verb == Verb::Serve {
@@ -2307,6 +2315,7 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
     match word.to_str() {
         | Some("id") => Ok(Verb::Id),
         | Some("index") => Ok(Verb::Index),
+        | Some("provenance") => Ok(Verb::Provenance),
         | Some("serve") => Ok(Verb::Serve),
         | Some("open") => Ok(Verb::Open),
         | Some("grant") => Ok(Verb::Grant),

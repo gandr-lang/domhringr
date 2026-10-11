@@ -11,6 +11,7 @@ use domhringr_record_tree::Peer;
 use domhringr_record_tree::TreeId;
 use domhringr_record_tree::ViewAtError;
 use domhringr_record_tree::ViewError;
+use gandr_storage_records::RecordTreeError;
 use gandr_storage_values::TokenBody;
 use gandr_storage_values::ValueError;
 use gandr_storage_values::decode_flat;
@@ -22,8 +23,11 @@ use crate::dialogue;
 use crate::dialogue::DialogueError;
 use crate::project;
 use crate::project::ProjectError;
+use crate::project::Refused;
 use crate::project::TaskEntry;
 use crate::project::TaskName;
+use crate::provenance;
+use crate::provenance::ProvenanceError;
 
 /// The independently checked field which disagrees with a claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +41,8 @@ pub enum Field
     Attempts,
     /// The admitted original moves derive another dialogue identity.
     Dialogue,
+    /// Refused commits or their explanations differ from the fold.
+    Refusals,
 }
 
 impl fmt::Display for Field
@@ -56,6 +62,7 @@ impl fmt::Display for Field
             | Self::Current => "current",
             | Self::Attempts => "attempts",
             | Self::Dialogue => "dialogue",
+            | Self::Refusals => "refusals",
         })
     }
 }
@@ -148,14 +155,21 @@ pub enum CheckError
     /// Manifest encoding failed.
     #[error(transparent)]
     Wire(#[from] WireError),
+    /// A dialogue cannot supply its provenance records.
+    #[error(transparent)]
+    Provenance(#[from] ProvenanceError),
+    /// Rebuilding provenance records failed.
+    #[error(transparent)]
+    Records(#[from] RecordTreeError),
 }
 
 /// Check the claim at its project parents and each entry's own task heads.
 ///
 /// # Specification
 /// - ensures: later receipts cannot stale a true claim; each held task's
-///   standing, attempt count and dialogue are independently re-derived; a
-///   missing local frontier is unchecked, never treated as agreement.
+///   standing, refusals, attempt count, dialogue and provenance are
+///   independently re-derived; a missing local frontier is unchecked, never
+///   agreement.
 /// - fails: wrong project identity, missing project past or malformed values.
 /// - panics: none.
 ///
@@ -182,8 +196,12 @@ pub async fn check(
     let mut bindings: BTreeMap<_, _> = project::bindings(&view).collect();
     let mut report = Report::default();
     let mut rebuilt = BTreeMap::new();
+    let mut provenance = provenance::Records::default();
     for record in index.tree.records() {
         let key = record.key();
+        if key.as_ref() == [0, u8::from(IndexKind::Provenance)] {
+            continue;
+        }
         let Some((&1, name)) = key.as_ref().split_first()
         else {
             report.0.push(Finding::Project);
@@ -210,6 +228,7 @@ pub async fn check(
             ref current,
             ref attempts,
             ref dialogue,
+            ref refused,
         } = claimed
         else {
             report.0.push(Finding::Unchecked(name));
@@ -225,10 +244,13 @@ pub async fn check(
         };
         let derived = dialogue::derive(view.task())?;
         let identity = derived.index.manifest.identity()?;
+        let refusals: Vec<_> = view.refused().iter().map(Refused::from).collect();
+        provenance.extend(*tree, &derived.index)?;
         let fields = [
             (Field::Current, current != view.task().current()),
             (Field::Attempts, *attempts != derived.attempts),
             (Field::Dialogue, *dialogue != identity),
+            (Field::Refusals, *refused != refusals),
         ];
         for (field, differs) in fields {
             if differs {
@@ -244,6 +266,7 @@ pub async fn check(
             current: view.task().current().clone(),
             attempts: derived.attempts,
             dialogue: identity,
+            refused: refusals,
         };
         let _previous = rebuilt.insert(name, entry);
     }
@@ -254,7 +277,10 @@ pub async fn check(
         });
     }
     if report.0.is_empty() {
-        let rebuilt = project::build(&rebuilt, &BTreeMap::new())?;
+        let provenance = provenance.build()?;
+        let digest = provenance.manifest.identity()?;
+        let nested = BTreeMap::from([(IndexKind::Provenance, digest)]);
+        let rebuilt = project::build(&rebuilt, &nested)?;
         if rebuilt.manifest != index.manifest {
             report.0.push(Finding::Project);
         }
