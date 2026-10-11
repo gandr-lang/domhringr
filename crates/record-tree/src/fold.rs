@@ -18,6 +18,8 @@ use core::fmt;
 use core::fmt::Write as _;
 
 use domhringr_arena_session::Arena;
+use domhringr_arena_session::Channel;
+use domhringr_arena_session::Choice;
 use domhringr_arena_session::Edition;
 use domhringr_arena_session::Movement;
 use domhringr_arena_session::Play;
@@ -323,8 +325,8 @@ impl View
     /// - hypothesis: L3 a dispatched seat reports; pre-report handoff and
     ///   retirement remain named refusals; reports on superseded dispatches,
     ///   verdicts on a held slot, and an attempt verified, graded, verified
-    ///   again, decided twice, landed and decided once more are each read back
-    ///   by a case of their own.
+    ///   again, decided to rework, then dispatched anew and landed are each
+    ///   read back by a case of their own.
     /// - witness: `fold::tests::the_dispatched_seat_reports_on_its_dispatch`
     /// - witness: `fold::tests::a_handoff_before_report_is_a_named_protocol_refusal`
     /// - witness: `fold::tests::retirement_before_report_is_refused_without_relinquishing_the_slot`
@@ -508,21 +510,15 @@ pub enum Refusal
     /// A verification whose author is not the runner it names: a runner's
     /// verification is signed by its own key.
     NotRunner,
-    /// A grading naming no verdict admitted among the receipt's ancestors.
-    NoVerdict,
     /// A grading whose grades do not answer its verdict's: one grade per
     /// answer, refused exactly where the judge read no ruling.
     Misgraded,
     /// A grading whose composed grade differs from its grades' conjunction.
     Miscomposed,
-    /// A landing naming no decision admitted among the receipt's ancestors.
-    NoDecision,
     /// A decision whose author is not the operator it names, or a landing
     /// whose author is not its decision's operator: an operator's decision,
     /// and its landing, is signed by its own key.
     NotOperator,
-    /// A landing whose decision is not to land: rework or abandon.
-    NotLand,
 }
 
 impl fmt::Display for Refusal
@@ -553,12 +549,9 @@ impl fmt::Display for Refusal
             | Self::NotHolder => "not holder",
             | Self::NotJudge => "not judge",
             | Self::NotRunner => "not runner",
-            | Self::NoVerdict => "no verdict",
             | Self::Misgraded => "misgraded",
             | Self::Miscomposed => "miscomposed",
-            | Self::NoDecision => "no decision",
             | Self::NotOperator => "not operator",
-            | Self::NotLand => "not land",
         })
     }
 }
@@ -679,7 +672,7 @@ impl Course
         }
     }
 
-    /// Whether a verdict may rule on `dispatch` here.
+    /// Check the cross-channel relation to the current slot dispatch.
     ///
     /// # Specification
     /// - ensures: `Ok` iff `dispatch` is this course's dispatch, whoever holds
@@ -817,6 +810,72 @@ fn admit_move(
     record_move(play, edition, movement, commit)
 }
 
+/// Replay a channel move under the edition of its current dispatch.
+///
+/// # Specification
+/// - ensures: only a move naming the current dispatch reaches its monitor.
+/// - fails: an absent or superseded dispatch is not current; otherwise replay
+///   returns its named refusal without advancing the accepted prefix.
+/// - panics: none.
+///
+/// # Errors
+/// - [`Refusal`]: cross-channel, arena or protocol failure.
+///
+/// # Adequacy
+/// - hypothesis: L3 current and stale dispatches separate the cross-channel
+///   relation from duplicate-choice refusals in the monitor.
+/// - witness: `fold::tests::task_channels_refuse_second_choices`
+fn advance(
+    plays: &BTreeMap<CommitId, (Edition, Play)>,
+    course: Course,
+    dispatch: CommitId,
+    play: &mut Play,
+    movement: Movement,
+    commit: CommitId,
+) -> Result<(), Refusal>
+{
+    course.current(dispatch)?;
+    let &(edition, _) = plays.get(&dispatch).ok_or(Refusal::NotCurrent)?;
+    record_move(play, edition, movement, commit)
+}
+
+/// Replay a receipt with no causal predecessor on an empty channel.
+///
+/// # Specification
+/// - requires: movement is grading or landing, whose predecessor is absent.
+/// - fails: no current dispatch returns not current; otherwise the monitor
+///   refuses the move at the channel's initial state under that edition.
+/// - panics: none.
+///
+/// # Errors
+/// - [`Refusal`]: cross-channel, arena or protocol failure.
+///
+/// # Adequacy
+/// - hypothesis: L3 unknown and concurrent predecessors are both absent from
+///   the candidate's causal prefix and fail at the initial monitor state.
+/// - witness: `fold::tests::a_verdicts_judge_grades_its_answers`
+/// - witness: `fold::tests::a_landing_carries_out_a_decision_to_land`
+fn unstarted(
+    plays: &BTreeMap<CommitId, (Edition, Play)>,
+    course: Course,
+    channel: Channel,
+    movement: Movement,
+    commit: CommitId,
+) -> Result<(), Refusal>
+{
+    match course {
+        | Course::Dispatched { dispatch, .. } => advance(
+            plays,
+            course,
+            dispatch,
+            &mut Play::new(channel),
+            movement,
+            commit,
+        ),
+        | Course::Undispatched => Err(Refusal::NotCurrent),
+    }
+}
+
 /// An admitted decision, as a landing of it reads it.
 struct Decided
 {
@@ -824,13 +883,13 @@ struct Decided
     dispatch: CommitId,
     /// The operator who decided.
     operator: PeerKey,
-    /// What was decided.
-    decision: Decision,
 }
 
 /// An admitted verdict, as a grading of it reads it.
 struct Ruled
 {
+    /// The accepted verdict and grading prefix.
+    play: Play,
     /// The judge who ruled.
     judge: PeerKey,
     /// The dispatch ruled on.
@@ -916,10 +975,11 @@ struct Carry
 ///   an admitted decision to land among its ancestors, whose author is that
 ///   decision's operator, and whose decision's dispatch is the admitted
 ///   dispatch last in canonical order among its ancestors.
-/// - ensures: dispatch, report, handoff, retirement and pause must also conform
-///   to the selected Seat endpoint type. The accepted canonical prefix is
-///   maintained separately for each dispatch. A refused candidate never
-///   advances that prefix or changes causal authority.
+/// - ensures: every task move conforms to its binary channel under the
+///   dispatch's edition: slot per dispatch, judge per verdict, runner per
+///   runner and dispatch, decision per dispatch. A second grading, decision or
+///   landing is refused by the monitor. A refused candidate changes neither its
+///   accepted canonical prefix nor causal authority.
 /// - ensures: a refused commit is listed with the first refusal that holds,
 ///   checked in this order: [`Refusal::Undecodable`], [`Refusal::WrongTree`],
 ///   [`Refusal::Duplicate`] (an admitted commit earlier in canonical order
@@ -938,21 +998,14 @@ struct Carry
 ///   slot there, for a verdict [`Refusal::NotJudge`] when its author is not the
 ///   judge it names and for a verification [`Refusal::NotRunner`] when its
 ///   author is not the runner it names, then [`Refusal::NotCurrent`] when its
-///   dispatch is not the latest among its ancestors, for a grading
-///   [`Refusal::NoVerdict`] when its verdict is not admitted among its
-///   ancestors, [`Refusal::NotJudge`] when its author is not that verdict's
-///   judge, [`Refusal::Misgraded`] when its grades do not answer the verdict's,
-///   [`Refusal::Miscomposed`] when its composition differs from [`compose`],
-///   then [`Refusal::NotCurrent`] when the verdict's dispatch is not the latest
-///   among its ancestors; for a decision [`Refusal::NoAuthority`] when its
-///   author is neither the owner nor granted, [`Refusal::NotOperator`] when its
-///   author is not the operator it names, then [`Refusal::NotCurrent`] when its
-///   dispatch is not the latest among its ancestors; and for a landing
-///   [`Refusal::NoDecision`] when its decision is not admitted among its
-///   ancestors, [`Refusal::NotOperator`] when its author is not that decision's
-///   operator, [`Refusal::NotLand`] when that decision is not to land, then
-///   [`Refusal::NotCurrent`] when the decision's dispatch is not the latest
-///   among its ancestors.
+///   dispatch is not the latest among its ancestors. A grading or landing with
+///   no causal predecessor replays on an empty channel and receives a named
+///   protocol refusal. Otherwise grading checks judge, answer shape and
+///   composition, refusing [`Refusal::Miscomposed`] when its composition
+///   differs from [`compose`]. Landing checks the deciding operator, and both
+///   check the current dispatch before replay. A decision checks operator
+///   authority, identity and current dispatch before replay. Unknown editions
+///   never fall back to a local protocol.
 /// - ensures: each path's binding is the admitted bind of that path last in
 ///   canonical order, each label's introduction the admitted introduction of
 ///   that label last in canonical order, the claims the domains of every
@@ -1142,6 +1195,8 @@ pub fn fold(
     let mut ruled = BTreeMap::new();
     let mut decisions = BTreeMap::new();
     let mut plays = BTreeMap::new();
+    let mut runner_plays = BTreeMap::new();
+    let mut decision_plays = BTreeMap::new();
     for placed in (0_usize ..).map(Placed) {
         let ready_node = core::iter::from_fn(|| ready.pop_first())
             .find_map(|position| nodes.remove_entry(&position));
@@ -1324,34 +1379,45 @@ pub fn fold(
                                 rubric,
                                 transcript,
                                 answers,
-                            } => match past.course.current(dispatch) {
-                                | Ok(()) => {
-                                    let questions = answers
-                                        .iter()
-                                        .map(|&(question, ref ruling)| {
-                                            (question, match *ruling {
-                                                | Ruling::Read(_) => Reading::Read,
-                                                | Ruling::Unread(_) => Reading::Unread,
+                            } => {
+                                let mut play = Play::new(Channel::Judge);
+                                match advance(
+                                    &plays,
+                                    past.course,
+                                    dispatch,
+                                    &mut play,
+                                    Movement::Verdict,
+                                    node.commit,
+                                ) {
+                                    | Ok(()) => {
+                                        let questions = answers
+                                            .iter()
+                                            .map(|&(question, ref ruling)| {
+                                                (question, match *ruling {
+                                                    | Ruling::Read(_) => Reading::Read,
+                                                    | Ruling::Unread(_) => Reading::Unread,
+                                                })
                                             })
-                                        })
-                                        .collect();
-                                    let _ruled_before = ruled.insert(node.commit, Ruled {
-                                        judge,
-                                        dispatch,
-                                        rubric,
-                                        questions,
-                                    });
-                                    let _verdict_before = past.verdicts.insert(node.commit);
-                                    view.task.answer(node.commit, Step::Verdict {
-                                        dispatch,
-                                        judge,
-                                        rubric,
-                                        transcript,
-                                        answers,
-                                    });
-                                    None
-                                },
-                                | Err(refusal) => Some(refusal),
+                                            .collect();
+                                        let _ruled_before = ruled.insert(node.commit, Ruled {
+                                            play,
+                                            judge,
+                                            dispatch,
+                                            rubric,
+                                            questions,
+                                        });
+                                        let _verdict_before = past.verdicts.insert(node.commit);
+                                        view.task.answer(node.commit, Step::Verdict {
+                                            dispatch,
+                                            judge,
+                                            rubric,
+                                            transcript,
+                                            answers,
+                                        });
+                                        None
+                                    },
+                                    | Err(refusal) => Some(refusal),
+                                }
                             },
                             | Kind::Verified { runner, .. } if node.author != runner => {
                                 Some(Refusal::NotRunner)
@@ -1363,7 +1429,16 @@ pub fn fold(
                                 step,
                                 output,
                                 status,
-                            } => match past.course.current(dispatch) {
+                            } => match advance(
+                                &plays,
+                                past.course,
+                                dispatch,
+                                runner_plays
+                                    .entry((dispatch, runner))
+                                    .or_insert_with(|| Play::new(Channel::Runner)),
+                                Movement::Verified,
+                                node.commit,
+                            ) {
                                 | Ok(()) => {
                                     view.task.answer(node.commit, Step::Verified {
                                         dispatch,
@@ -1381,31 +1456,50 @@ pub fn fold(
                                 verdict,
                                 grades,
                                 composed,
-                            } => match grading(
-                                &ruled,
-                                &past,
-                                node.author,
-                                verdict,
-                                &grades,
-                                composed,
-                            ) {
-                                | Ok(ruling) => {
-                                    let grades = ruling
-                                        .questions
-                                        .iter()
-                                        .zip(grades)
-                                        .map(|(&(question, _), grade)| (question, grade))
-                                        .collect();
-                                    view.task.answer(node.commit, Step::Graded {
-                                        dispatch: ruling.dispatch,
-                                        verdict,
-                                        rubric: ruling.rubric,
-                                        grades,
-                                        composed,
-                                    });
-                                    None
+                            } => match ruled
+                                .get_mut(&verdict)
+                                .filter(|_ruling| past.verdicts.contains(&verdict))
+                            {
+                                | Some(ruling) => {
+                                    match grading(ruling, node.author, &grades, composed).and_then(
+                                        |()| {
+                                            advance(
+                                                &plays,
+                                                past.course,
+                                                ruling.dispatch,
+                                                &mut ruling.play,
+                                                Movement::Graded,
+                                                node.commit,
+                                            )
+                                        },
+                                    ) {
+                                        | Ok(()) => {
+                                            let grades = ruling
+                                                .questions
+                                                .iter()
+                                                .zip(grades)
+                                                .map(|(&(question, _), grade)| (question, grade))
+                                                .collect();
+                                            view.task.answer(node.commit, Step::Graded {
+                                                dispatch: ruling.dispatch,
+                                                verdict,
+                                                rubric: ruling.rubric,
+                                                grades,
+                                                composed,
+                                            });
+                                            None
+                                        },
+                                        | Err(refusal) => Some(refusal),
+                                    }
                                 },
-                                | Err(refusal) => Some(refusal),
+                                | None => unstarted(
+                                    &plays,
+                                    past.course,
+                                    Channel::Judge,
+                                    Movement::Graded,
+                                    node.commit,
+                                )
+                                .err(),
                             },
                             | Kind::Decide { operator, .. }
                                 if authorized && node.author != operator =>
@@ -1416,35 +1510,75 @@ pub fn fold(
                                 dispatch,
                                 operator,
                                 decision,
-                            } if authorized => match past.course.current(dispatch) {
-                                | Ok(()) => {
-                                    let _decided_before = decisions.insert(node.commit, Decided {
-                                        dispatch,
-                                        operator,
-                                        decision: decision.clone(),
-                                    });
-                                    let _decision_before = past.decisions.insert(node.commit);
-                                    view.task.answer(node.commit, Step::Decide {
-                                        dispatch,
-                                        operator,
-                                        decision,
-                                    });
-                                    None
-                                },
-                                | Err(refusal) => Some(refusal),
-                            },
-                            | Kind::Landed { decided, merge } => {
-                                match landing(&decisions, &past, node.author, decided) {
-                                    | Ok(dispatch) => {
-                                        view.task.answer(node.commit, Step::Landed {
+                            } if authorized => {
+                                let choice = match decision {
+                                    | Decision::Land => Choice::Land,
+                                    | Decision::Rework { .. } => Choice::Rework,
+                                    | Decision::Abandon => Choice::Abandon,
+                                };
+                                match advance(
+                                    &plays,
+                                    past.course,
+                                    dispatch,
+                                    decision_plays
+                                        .entry(dispatch)
+                                        .or_insert_with(|| Play::new(Channel::Decision)),
+                                    Movement::Decide(choice),
+                                    node.commit,
+                                ) {
+                                    | Ok(()) => {
+                                        let _decided_before = decisions
+                                            .insert(node.commit, Decided { dispatch, operator });
+                                        let _decision_before = past.decisions.insert(node.commit);
+                                        view.task.answer(node.commit, Step::Decide {
                                             dispatch,
-                                            decided,
-                                            operator: node.author,
-                                            merge,
+                                            operator,
+                                            decision,
                                         });
                                         None
                                     },
                                     | Err(refusal) => Some(refusal),
+                                }
+                            },
+                            | Kind::Landed { decided, merge } => {
+                                match decisions
+                                    .get(&decided)
+                                    .filter(|_decision| past.decisions.contains(&decided))
+                                {
+                                    | Some(decision) => match landing(decision, node.author)
+                                        .and_then(|()| {
+                                            advance(
+                                                &plays,
+                                                past.course,
+                                                decision.dispatch,
+                                                decision_plays
+                                                    .entry(decision.dispatch)
+                                                    .or_insert_with(|| {
+                                                        Play::new(Channel::Decision)
+                                                    }),
+                                                Movement::Landed,
+                                                node.commit,
+                                            )
+                                        }) {
+                                        | Ok(()) => {
+                                            view.task.answer(node.commit, Step::Landed {
+                                                dispatch: decision.dispatch,
+                                                decided,
+                                                operator: node.author,
+                                                merge,
+                                            });
+                                            None
+                                        },
+                                        | Err(refusal) => Some(refusal),
+                                    },
+                                    | None => unstarted(
+                                        &plays,
+                                        past.course,
+                                        Channel::Decision,
+                                        Movement::Landed,
+                                        node.commit,
+                                    )
+                                    .err(),
                                 }
                             },
                             | Kind::Grant { .. }
@@ -1569,50 +1703,34 @@ fn join<Member>(
     }
 }
 
-/// The admitted verdict a grading by `author` of `verdict` into `grades`
-/// grades, as `past` reads it.
+/// Check a grading's authorship, answer shape and composition.
 ///
 /// # Specification
-/// - ensures: `Ok` with the verdict as `ruled` holds it iff `verdict` is an
-///   admitted verdict in `past`, `author` is its judge, `grades` holds one
-///   grade per answer with [`Grade::Refused`] exactly where the ruling is
-///   unread, `composed` is [`compose`] of `grades`, and the verdict's dispatch
-///   is current in `past`.
-/// - fails: the first refusal that holds, in this order:
-///   [`Refusal::NoVerdict`], [`Refusal::NotJudge`], [`Refusal::Misgraded`],
-///   [`Refusal::Miscomposed`], [`Refusal::NotCurrent`].
+/// - ensures: the verdict's judge supplies one grade per answer, with refused
+///   exactly for unread rulings, and `composed` is [`compose`] of `grades`.
+/// - fails: wrong author, malformed grades and wrong composition remain
+///   distinct refusals; the channel monitor owns ordering and repetition.
 /// - panics: none.
 ///
 /// # Errors
-/// - [`Refusal::NoVerdict`]: no admitted verdict `verdict` is in `past`.
 /// - [`Refusal::NotJudge`]: `author` is not the verdict's judge.
 /// - [`Refusal::Misgraded`]: `grades` does not answer the verdict's answers.
 /// - [`Refusal::Miscomposed`]: `composed` differs from [`compose`] of `grades`.
-/// - [`Refusal::NotCurrent`]: the verdict's dispatch is not current in `past`.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — a grading by the judge is admitted, and one of an unknown
-///   verdict, of a verdict only concurrent with it, by another key, with a
-///   grade too few, a read answer refused, an unread answer met, and after a
-///   later dispatch each meet their own refusal. Each composition mismatch is
-///   refused without advancing the task; a correct descendant is admitted.
+/// - hypothesis: L3 wrong-author and answer-shape boundaries remain distinct
+///   from monitor refusals for missing or repeated grading. Each composition
+///   mismatch is refused without advancing the task; a correct descendant is
+///   admitted.
 /// - witness: `fold::tests::a_verdicts_judge_grades_its_answers`
 /// - witness: `fold::tests::a_gradings_composition_is_checked_before_it_advances_the_task`
-fn grading<'ruled>(
-    ruled: &'ruled BTreeMap<CommitId, Ruled>,
-    past: &Past,
+fn grading(
+    ruling: &Ruled,
     author: PeerKey,
-    verdict: CommitId,
     grades: &[Grade],
     composed: Grade,
-) -> Result<&'ruled Ruled, Refusal>
+) -> Result<(), Refusal>
 {
-    let Some(ruling) = ruled
-        .get(&verdict)
-        .filter(|_ruled| past.verdicts.contains(&verdict))
-    else {
-        return Err(Refusal::NoVerdict);
-    };
     if author != ruling.judge {
         return Err(Refusal::NotJudge);
     }
@@ -1629,55 +1747,33 @@ fn grading<'ruled>(
     if composed != compose(grades) {
         return Err(Refusal::Miscomposed);
     }
-    past.course.current(ruling.dispatch)?;
-    Ok(ruling)
+    Ok(())
 }
 
-/// The dispatch whose change a landing of `decided` by `author` lands, as
-/// `past` reads it.
+/// Check that a landing is signed by its deciding operator.
 ///
 /// # Specification
-/// - ensures: `Ok` with the decision's dispatch iff `decided` is an admitted
-///   decision in `past`, `author` is its operator, the decision is to land, and
-///   its dispatch is current in `past`.
-/// - fails: the first refusal that holds, in this order:
-///   [`Refusal::NoDecision`], [`Refusal::NotOperator`], [`Refusal::NotLand`],
-///   [`Refusal::NotCurrent`].
+/// - ensures: only the deciding operator may supply its landing.
+/// - fails: wrong authorship is not operator; the monitor owns the decision
+///   branch and landing order.
 /// - panics: none.
 ///
 /// # Errors
-/// - [`Refusal::NoDecision`]: no admitted decision `decided` is in `past`.
-/// - [`Refusal::NotOperator`]: `author` is not the decision's operator.
-/// - [`Refusal::NotLand`]: the decision is to rework or to abandon.
-/// - [`Refusal::NotCurrent`]: the decision's dispatch is not current in `past`.
+/// - [`Refusal`]: not operator.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — a landing of a decision to land by its operator is
-///   admitted, and one of an unknown decision, of a decision only concurrent
-///   with it, by the seat and by a member who did not decide, of a decision to
-///   rework, and after a later dispatch each meet their own refusal.
+/// - hypothesis: L3 authorship and stale-dispatch boundaries remain separate
+///   from the monitor's missing-decision and closed-channel refusals.
 /// - witness: `fold::tests::a_landing_carries_out_a_decision_to_land`
 fn landing(
-    decisions: &BTreeMap<CommitId, Decided>,
-    past: &Past,
+    decision: &Decided,
     author: PeerKey,
-    decided: CommitId,
-) -> Result<CommitId, Refusal>
+) -> Result<(), Refusal>
 {
-    let Some(decision) = decisions
-        .get(&decided)
-        .filter(|_decided| past.decisions.contains(&decided))
-    else {
-        return Err(Refusal::NoDecision);
-    };
     if author != decision.operator {
         return Err(Refusal::NotOperator);
     }
-    if decision.decision != Decision::Land {
-        return Err(Refusal::NotLand);
-    }
-    past.course.current(decision.dispatch)?;
-    Ok(decision.dispatch)
+    Ok(())
 }
 
 /// Record that `commit` admitted `operation`.
@@ -3409,13 +3505,24 @@ mod tests
                 stale.clone(),
             ])
             .unwrap();
-            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
+            for candidate in [&unknown, &concurrent] {
+                protocol_refusal(
+                    &view,
+                    id(candidate),
+                    domhringr_arena_session::Movement::Graded,
+                    gandr_core_session::Refusal::WrongPayloadIdentity,
+                );
+            }
+            let refused: BTreeMap<_, _> = view
+                .refused()
+                .iter()
+                .filter(|entry| entry.0 != id(&unknown) && entry.0 != id(&concurrent))
+                .cloned()
+                .collect();
             assert_eq!(
                 refused,
                 BTreeMap::from([
                     (id(&forged), Refusal::NotJudge),
-                    (id(&unknown), Refusal::NoVerdict),
-                    (id(&concurrent), Refusal::NoVerdict),
                     (id(&short), Refusal::Misgraded),
                     (id(&read_refused), Refusal::Misgraded),
                     (id(&unread_met), Refusal::Misgraded),
@@ -3445,6 +3552,167 @@ mod tests
                 "the judge's grading is a step naming its verdict's dispatch, rubric and \
                  questions"
             );
+        });
+    }
+
+    /// Assert a receipt's named, independently produced monitor refusal.
+    ///
+    /// # Specification
+    /// trivial.
+    fn protocol_refusal(
+        view: &View,
+        commit: CommitId,
+        movement: domhringr_arena_session::Movement,
+        reason: gandr_core_session::Refusal,
+    )
+    {
+        let refusal = &view
+            .refused()
+            .iter()
+            .find(|entry| entry.0 == commit)
+            .unwrap()
+            .1;
+        let Refusal::Protocol(ref refusal) = *refusal
+        else {
+            panic!("expected protocol refusal, got {refusal:?}");
+        };
+        assert_eq!(
+            (refusal.edition, refusal.movement),
+            (crate::Edition::ONE, movement)
+        );
+        assert!(
+            matches!(refusal.reason, domhringr_arena_session::Reason::Replay(gandr_core_session::ReplayError::Refused { reason: actual, .. }) if actual == reason)
+        );
+    }
+
+    #[test]
+    fn task_channels_refuse_second_choices()
+    {
+        let (a, s) = (owner(), other());
+        let j = MemorySigner::from_bytes(&[5; 32]);
+        runtime().block_on(async {
+            for concurrent in [false, true] {
+                let opened = commit(&a, tree(), &[], &open(&a)).await;
+                let dispatched = commit(&a, tree(), &[&opened], &dispatch(key(&s))).await;
+                let d = id(&dispatched);
+                let judged = commit(&j, tree(), &[&dispatched], &verdict(d, key(&j))).await;
+                let first_grade = commit(
+                    &j,
+                    tree(),
+                    &[&judged],
+                    &graded(id(&judged), vec![Grade::Met, Grade::Refused]),
+                )
+                .await;
+                let second_grade = commit(
+                    &j,
+                    tree(),
+                    &[if concurrent { &judged } else { &first_grade }],
+                    &graded(id(&judged), vec![Grade::Met, Grade::Refused]),
+                )
+                .await;
+                let first_decision = commit(
+                    &a,
+                    tree(),
+                    &[&first_grade, &second_grade],
+                    &decide(d, &a, Decision::Land),
+                )
+                .await;
+                let concurrent_parents = [&first_grade, &second_grade];
+                let causal_parents = [&first_decision];
+                let second_decision = commit(
+                    &a,
+                    tree(),
+                    if concurrent {
+                        concurrent_parents.as_slice()
+                    }
+                    else {
+                        causal_parents.as_slice()
+                    },
+                    &decide(d, &a, Decision::Land),
+                )
+                .await;
+                let decided = if concurrent && id(&second_decision) < id(&first_decision) {
+                    &second_decision
+                }
+                else {
+                    &first_decision
+                };
+                let first_landing = commit(
+                    &a,
+                    tree(),
+                    &[&first_decision, &second_decision],
+                    &landed(id(decided)),
+                )
+                .await;
+                let concurrent_parents = [&first_decision, &second_decision];
+                let causal_parents = [&first_landing];
+                let second_landing = commit(
+                    &a,
+                    tree(),
+                    if concurrent {
+                        concurrent_parents.as_slice()
+                    }
+                    else {
+                        causal_parents.as_slice()
+                    },
+                    &landed(id(decided)),
+                )
+                .await;
+                let grade_refused = if concurrent {
+                    id(&first_grade).max(id(&second_grade))
+                }
+                else {
+                    id(&second_grade)
+                };
+                let decision_refused = if concurrent {
+                    id(&first_decision).max(id(&second_decision))
+                }
+                else {
+                    id(&second_decision)
+                };
+                let landing_refused = if concurrent {
+                    id(&first_landing).max(id(&second_landing))
+                }
+                else {
+                    id(&second_landing)
+                };
+                let held = vec![
+                    opened,
+                    dispatched,
+                    judged,
+                    first_grade,
+                    second_grade,
+                    first_decision,
+                    second_decision,
+                    first_landing,
+                    second_landing,
+                ];
+                let view = fold(tree(), held.clone()).unwrap();
+                assert_eq!(view.refused().len(), 3);
+                protocol_refusal(
+                    &view,
+                    grade_refused,
+                    domhringr_arena_session::Movement::Graded,
+                    gandr_core_session::Refusal::ResumeAfterEnd,
+                );
+                protocol_refusal(
+                    &view,
+                    decision_refused,
+                    domhringr_arena_session::Movement::Decide(
+                        domhringr_arena_session::Choice::Land,
+                    ),
+                    gandr_core_session::Refusal::WrongDirection,
+                );
+                protocol_refusal(
+                    &view,
+                    landing_refused,
+                    domhringr_arena_session::Movement::Landed,
+                    gandr_core_session::Refusal::ResumeAfterEnd,
+                );
+                let reversed = fold(tree(), held.into_iter().rev().collect()).unwrap();
+                assert_eq!(reversed.refused(), view.refused());
+                assert_eq!(reversed.task(), view.task());
+            }
         });
     }
 
@@ -3556,77 +3824,75 @@ mod tests
             MemorySigner::from_bytes(&[7; 32]),
         );
         runtime().block_on(async {
-            let opened = commit(&a, tree(), &[], &open(&a)).await;
-            let granted = commit(&a, tree(), &[&opened], &grant(&m)).await;
-            let first = commit(&a, tree(), &[&granted], &dispatch(key(&s))).await;
-            let d = id(&first);
-            let reported = commit(&s, tree(), &[&first], &report(d, "done".into())).await;
-            let by_owner = commit(&a, tree(), &[&reported], &decide(d, &a, rework())).await;
-            let by_member = decide(d, &m, Decision::Land);
-            let by_member = commit(&m, tree(), &[&reported], &by_member).await;
-            let by_seat = decide(d, &s, Decision::Land);
-            let by_seat = commit(&s, tree(), &[&reported], &by_seat).await;
-            let by_stranger = decide(d, &stranger, Decision::Abandon);
-            let by_stranger = commit(&stranger, tree(), &[&reported], &by_stranger).await;
-            let forged = decide(d, &a, Decision::Land);
-            let forged = commit(&m, tree(), &[&reported], &forged).await;
-            let unknown = decide(CommitId::new([9; 32]), &a, Decision::Land);
-            let unknown = commit(&a, tree(), &[&reported], &unknown).await;
-            let second = commit(&a, tree(), &[&by_owner, &by_member], &dispatch(key(&s))).await;
-            let stale = decide(d, &a, Decision::Abandon);
-            let stale = commit(&a, tree(), &[&second], &stale).await;
-            let view = fold(tree(), vec![
-                opened,
-                granted,
-                first,
-                reported,
-                by_owner.clone(),
-                by_member.clone(),
-                by_seat.clone(),
-                by_stranger.clone(),
-                forged.clone(),
-                unknown.clone(),
-                second,
-                stale.clone(),
-            ])
-            .unwrap();
-            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
-            assert_eq!(
-                refused,
-                BTreeMap::from([
-                    (id(&by_seat), Refusal::NoAuthority),
-                    (id(&by_stranger), Refusal::NoAuthority),
-                    (id(&forged), Refusal::NotOperator),
-                    (id(&unknown), Refusal::NotCurrent),
-                    (id(&stale), Refusal::NotCurrent),
-                ]),
-                "a decision by the seat or a stranger, signed by a member for the owner, on \
-                 an unknown dispatch, or after a later dispatch is refused"
-            );
-            let decided: BTreeMap<_, _> = view
-                .task()
-                .steps()
-                .iter()
-                .filter(|entry| matches!(entry.1, Step::Decide { .. }))
-                .cloned()
-                .collect();
-            assert_eq!(
-                decided,
-                BTreeMap::from([
-                    (id(&by_owner), Step::Decide {
+            for operator in [&a, &m] {
+                let opened = commit(&a, tree(), &[], &open(&a)).await;
+                let granted = commit(&a, tree(), &[&opened], &grant(&m)).await;
+                let dispatched = commit(&a, tree(), &[&granted], &dispatch(key(&s))).await;
+                let d = id(&dispatched);
+                let admitted = commit(
+                    operator,
+                    tree(),
+                    &[&dispatched],
+                    &decide(d, operator, Decision::Land),
+                )
+                .await;
+                let by_seat =
+                    commit(&s, tree(), &[&dispatched], &decide(d, &s, Decision::Land)).await;
+                let by_stranger = commit(
+                    &stranger,
+                    tree(),
+                    &[&dispatched],
+                    &decide(d, &stranger, Decision::Abandon),
+                )
+                .await;
+                let forged =
+                    commit(&m, tree(), &[&dispatched], &decide(d, &a, Decision::Land)).await;
+                let unknown = commit(
+                    &a,
+                    tree(),
+                    &[&dispatched],
+                    &decide(CommitId::new([9; 32]), &a, Decision::Land),
+                )
+                .await;
+                let second = commit(&a, tree(), &[&admitted], &dispatch(key(&s))).await;
+                let stale = commit(&a, tree(), &[&second], &decide(d, &a, Decision::Abandon)).await;
+                let view = fold(tree(), vec![
+                    opened,
+                    granted,
+                    dispatched,
+                    admitted.clone(),
+                    by_seat.clone(),
+                    by_stranger.clone(),
+                    forged.clone(),
+                    unknown.clone(),
+                    second,
+                    stale.clone(),
+                ])
+                .unwrap();
+                assert_eq!(
+                    view.refused().iter().cloned().collect::<BTreeMap<_, _>>(),
+                    BTreeMap::from([
+                        (id(&by_seat), Refusal::NoAuthority),
+                        (id(&by_stranger), Refusal::NoAuthority),
+                        (id(&forged), Refusal::NotOperator),
+                        (id(&unknown), Refusal::NotCurrent),
+                        (id(&stale), Refusal::NotCurrent),
+                    ])
+                );
+                assert_eq!(
+                    view.task()
+                        .steps()
+                        .iter()
+                        .filter(|entry| matches!(entry.1, Step::Decide { .. }))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    vec![(id(&admitted), Step::Decide {
                         dispatch: d,
-                        operator: key(&a),
-                        decision: rework(),
-                    }),
-                    (id(&by_member), Step::Decide {
-                        dispatch: d,
-                        operator: key(&m),
-                        decision: Decision::Land,
-                    }),
-                ]),
-                "the owner's and a member's decisions on the current dispatch are the task's \
-                 steps"
-            );
+                        operator: key(operator),
+                        decision: Decision::Land
+                    })]
+                );
+            }
         });
     }
 
@@ -3636,68 +3902,83 @@ mod tests
         let (a, s) = (owner(), other());
         let m = MemorySigner::from_bytes(&[5; 32]);
         runtime().block_on(async {
-            let opened = commit(&a, tree(), &[], &open(&a)).await;
-            let granted = commit(&a, tree(), &[&opened], &grant(&m)).await;
-            let first = commit(&a, tree(), &[&granted], &dispatch(key(&s))).await;
-            let d = id(&first);
-            let reported = commit(&s, tree(), &[&first], &report(d, "done".into())).await;
-            let land = commit(&a, tree(), &[&reported], &decide(d, &a, Decision::Land)).await;
-            let reworked = commit(&a, tree(), &[&reported], &decide(d, &a, rework())).await;
-            let admitted = commit(&a, tree(), &[&land], &landed(id(&land))).await;
-            let by_seat = commit(&s, tree(), &[&land], &landed(id(&land))).await;
-            let by_member = commit(&m, tree(), &[&land], &landed(id(&land))).await;
-            let undecided = landed(CommitId::new([9; 32]));
-            let undecided = commit(&a, tree(), &[&reported], &undecided).await;
-            let concurrent = commit(&a, tree(), &[&reported], &landed(id(&land))).await;
-            let not_land = commit(&a, tree(), &[&reworked], &landed(id(&reworked))).await;
-            let second = commit(&a, tree(), &[&admitted, &reworked], &dispatch(key(&s))).await;
-            let stale = commit(&a, tree(), &[&second], &landed(id(&land))).await;
-            let view = fold(tree(), vec![
-                opened,
-                granted,
-                first,
-                reported,
-                land.clone(),
-                reworked,
-                admitted.clone(),
-                by_seat.clone(),
-                by_member.clone(),
-                undecided.clone(),
-                concurrent.clone(),
-                not_land.clone(),
-                second,
-                stale.clone(),
-            ])
-            .unwrap();
-            let refused: BTreeMap<_, _> = view.refused().iter().cloned().collect();
-            assert_eq!(
-                refused,
-                BTreeMap::from([
+            for choice in [Decision::Land, rework(), Decision::Abandon] {
+                let opened = commit(&a, tree(), &[], &open(&a)).await;
+                let granted = commit(&a, tree(), &[&opened], &grant(&m)).await;
+                let dispatched = commit(&a, tree(), &[&granted], &dispatch(key(&s))).await;
+                let d = id(&dispatched);
+                let decided =
+                    commit(&a, tree(), &[&dispatched], &decide(d, &a, choice.clone())).await;
+                let landing = commit(&a, tree(), &[&decided], &landed(id(&decided))).await;
+                let by_seat = commit(&s, tree(), &[&decided], &landed(id(&decided))).await;
+                let by_member = commit(&m, tree(), &[&decided], &landed(id(&decided))).await;
+                let undecided =
+                    commit(&a, tree(), &[&dispatched], &landed(CommitId::new([9; 32]))).await;
+                let concurrent = commit(&a, tree(), &[&dispatched], &landed(id(&decided))).await;
+                let second = commit(&a, tree(), &[&landing], &dispatch(key(&s))).await;
+                let stale = commit(&a, tree(), &[&second], &landed(id(&decided))).await;
+                let view = fold(tree(), vec![
+                    opened,
+                    granted,
+                    dispatched,
+                    decided.clone(),
+                    landing.clone(),
+                    by_seat.clone(),
+                    by_member.clone(),
+                    undecided.clone(),
+                    concurrent.clone(),
+                    second,
+                    stale.clone(),
+                ])
+                .unwrap();
+                for candidate in [&undecided, &concurrent] {
+                    protocol_refusal(
+                        &view,
+                        id(candidate),
+                        domhringr_arena_session::Movement::Landed,
+                        gandr_core_session::Refusal::WrongDirection,
+                    );
+                }
+                let expected = BTreeMap::from([
                     (id(&by_seat), Refusal::NotOperator),
                     (id(&by_member), Refusal::NotOperator),
-                    (id(&undecided), Refusal::NoDecision),
-                    (id(&concurrent), Refusal::NoDecision),
-                    (id(&not_land), Refusal::NotLand),
                     (id(&stale), Refusal::NotCurrent),
-                ]),
-                "a landing by the seat or a member who did not decide, without a decision in \
-                 its past, of a decision to rework, or after a later dispatch is refused"
-            );
-            assert_eq!(
-                view.task()
+                ]);
+                let landings = view
+                    .task()
                     .steps()
                     .iter()
                     .filter(|entry| matches!(entry.1, Step::Landed { .. }))
                     .cloned()
-                    .collect::<Vec<_>>(),
-                [(id(&admitted), Step::Landed {
-                    dispatch: d,
-                    decided: id(&land),
-                    operator: key(&a),
-                    merge: revision(),
-                })],
-                "the operator's landing names the dispatch its decision decided"
-            );
+                    .collect::<Vec<_>>();
+                if choice == Decision::Land {
+                    assert_eq!(landings, vec![(id(&landing), Step::Landed {
+                        dispatch: d,
+                        decided: id(&decided),
+                        operator: key(&a),
+                        merge: revision()
+                    })]);
+                }
+                else {
+                    protocol_refusal(
+                        &view,
+                        id(&landing),
+                        domhringr_arena_session::Movement::Landed,
+                        gandr_core_session::Refusal::ResumeAfterEnd,
+                    );
+                    assert!(landings.is_empty());
+                }
+                assert_eq!(
+                    view.refused()
+                        .iter()
+                        .filter(|entry| entry.0 != id(&undecided)
+                            && entry.0 != id(&concurrent)
+                            && entry.0 != id(&landing))
+                        .cloned()
+                        .collect::<BTreeMap<_, _>>(),
+                    expected
+                );
+            }
         });
     }
 
@@ -3719,10 +4000,9 @@ mod tests
             let failing = verified(d, key(&j), Code::from(1_i32));
             let reverifying = commit(&j, tree(), &[&grading], &failing).await;
             let reworked = commit(&a, tree(), &[&reverifying], &decide(d, &a, rework())).await;
-            let land = commit(&a, tree(), &[&reworked], &decide(d, &a, Decision::Land)).await;
+            let next = commit(&a, tree(), &[&reworked], &dispatch(key(&s))).await;
+            let land = commit(&a, tree(), &[&next], &decide(id(&next), &a, Decision::Land)).await;
             let landing = commit(&a, tree(), &[&land], &landed(id(&land))).await;
-            let abandoning = decide(d, &a, Decision::Abandon);
-            let abandoning = commit(&a, tree(), &[&landing], &abandoning).await;
             let steps = [
                 (first.clone(), Progress::Unchecked, "a dispatch"),
                 (reported.clone(), Progress::Unchecked, "its report"),
@@ -3760,13 +4040,14 @@ mod tests
                     },
                     "a decision to rework",
                 ),
+                (next, Progress::Unchecked, "a fresh dispatch after rework"),
                 (
                     land.clone(),
                     Progress::Decided {
                         decide: id(&land),
                         decision: Decision::Land,
                     },
-                    "a later decision, to land, which replaces it",
+                    "the new dispatch decision to land",
                 ),
                 (
                     landing.clone(),
@@ -3775,14 +4056,6 @@ mod tests
                         merge: revision(),
                     },
                     "the landing",
-                ),
-                (
-                    abandoning,
-                    Progress::Landed {
-                        landed: id(&landing),
-                        merge: revision(),
-                    },
-                    "a decision after the landing, which ranks below it",
                 ),
             ];
             let mut held = vec![opened];

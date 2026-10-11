@@ -1,6 +1,6 @@
 # domhringr-arena-session
 
-The Seat endpoint type, its operator dual, receipt replay and certified protocol widening. This crate has no I/O. The record plane supplies receipt identities and retains every refusal.
+Binary task channels, their duals, receipt replay and certified protocol widening. This crate has no I/O. The record plane supplies receipt identities and retains every refusal.
 
 ## Contents
 
@@ -19,11 +19,11 @@ The Seat endpoint type, its operator dual, receipt replay and certified protocol
 
 ## Synopsis
 
-**What.** This arena states the Seat endpoint and its operator dual as finite recursive session types. It monitors receipt moves and names the first protocol violation.
+**What.** This arena states the slot, judge, runner and operator-decision endpoints as finite recursive session types. Each has a structural dual. Replay names the first protocol violation.
 
 **Why.** A durable receipt is not necessarily a permitted protocol move. Replay needs a protocol independent of the record's author checks, and a protocol change needs checked evidence that old completed plays remain valid.
 
-**How.** The session engine constructs, dualizes and replays the endpoint syntax. It proposes subtype evidence for pause; native protocol codes and explicit payload bindings let the kernel check that evidence independently before transport.
+**How.** The session engine constructs, dualizes and replays each channel. It proposes subtype evidence for label widening; native protocol codes and explicit payload bindings let the kernel check that evidence independently before transport.
 
 ## References
 
@@ -33,6 +33,7 @@ The Seat endpoint type, its operator dual, receipt replay and certified protocol
 ## Provided features
 
 - Required reports and explicit handoff or retirement endings.
+- One verdict then one grading per judge channel; repeated runner verifications; one operator decision and at most one landing per dispatch.
 - Named prefix refusals without changing the accepted play.
 - Numeric editions compiled into the arena, with unknown editions refused by name.
 - Kernel-certified transport of completed plays between named editions.
@@ -64,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Run the directed endpoint witnesses through the workspace's test task:
 
 ```sh
-mise run test -p domhringr-arena-session
+mise run test -E 'package(domhringr-arena-session)'
 ```
 
 `domhringr-peer --state <dir> replay <tree> --local` checks each attempt under its dispatch's edition. `transport <tree> 2` certifies transport of the current complete play without modifying the record.
@@ -81,17 +82,27 @@ Here each named output is a label selection followed by a send of that receipt's
 
 `Edition::ONE` is this protocol. `Edition::TWO` adds a `pause` selection and receipt send in both post-dispatch phases. Pause retains the phase: before the first report it still owes a report; afterward it still permits another report or an ending. Pause is a recorded protocol move, not process suspension or cancellation. It never reopens an ended play.
 
+The other channels share the dispatch's edition. Their mover-side protocols are:
+
+| Channel | Instance | Protocol |
+| ------- | -------- | -------- |
+| Judge | Verdict commit | `!Verdict.!Graded.end` |
+| Runner | Runner and dispatch | `mu t. !Verified.t` |
+| Decision | Dispatch | `select { land: !Decide.!Landed.end, rework: !Decide.end, abandon: !Decide.end }` |
+
+`Play::new(Channel::Judge)`, `Runner` or `Decision` selects the corresponding channel; `Play::default()` selects the slot. Grading closes a judge channel. Rework and abandon close the decision channel immediately; land closes only after its landing. A runner prefix remains open, so it cannot be transported as a complete run. The dual swaps sends with receives and selections with offers.
+
 ## Replay
 
 `Play::record` expands a receipt move to the endpoint skeleton and calls `gandr-core-session`'s replay monitor. A conforming prefix returns the next expected action; only an explicit ending returns completion. A refusal names the receipt move, endpoint index, expected action, observed action and reason. It leaves the accepted prefix unchanged. `Play::inspect` makes the same observation without admitting even a conforming move.
 
-Each payload has a distinct opaque type identity. The payload digest is the receipt commit digest. This layer checks the protocol skeleton and those identities, not receipt signatures, author authority or the contents of a report. The record plane checks those independently. It replays the accepted moves for each dispatch in canonical commit order; causal authority remains a separate condition. Invalid signed receipts remain in the record as named facts, rather than being discarded during sync.
+Each payload has a distinct opaque type identity. Its digest names the receipt commit. This layer checks the protocol skeleton and identities, not signatures, authorship or receipt contents. The fold supplies each channel's accepted canonical prefix. Missing causal verdicts and decisions replay grading and landing on empty channels; second gradings, decisions and landings reach consumed states. Authorship and the relation to the current dispatch remain fold conditions. Refused signed receipts remain durable facts.
 
 ## Certified widening
 
-`Arena::new` constructs the compiled protocols: edition 1 always, edition 2 only with the `edition-2` feature. The library enables no feature by default. `Arena::session` refuses any edition absent from that catalogue.
+`Arena::new` constructs all channels of each compiled edition: edition 1 always, edition 2 only with the `edition-2` feature. The library enables no feature by default. `Arena::session(edition, channel)` refuses editions absent from that catalogue.
 
-`Arena::transport(source, target, play)` looks up both editions, derives their subtype relation, exports their native codes and payload bindings, then asks the kernel to form the certificate independently. No certificate is stored or shipped. Transport checks the bound endpoints and replays both source and destination. Receipt digests and endpoint moves are preserved. Edition 2 is not a subtype of edition 1; an incomplete play cannot be transported.
+`Arena::transport(source, target, play)` selects the play's channel in both editions, derives its subtype relation, exports native codes and payload bindings, then asks the kernel to form the certificate independently. No certificate is stored or shipped. Transport checks the bound endpoints and replays both source and destination, preserving receipt digests and endpoint moves. Incomplete plays and reverse narrowing are refused. The decision-widening fixture adds a `defer` label and transports complete land, rework and abandon plays; `defer` is not a production receipt.
 
 ## Decisions
 
@@ -103,7 +114,7 @@ Use `gandr-core-session` for syntax, duality, relation search and replay, and `g
 
 The arena precedes the record category: it knows only endpoint moves and opaque receipt digests, while the record plane adapts concrete signed receipts to it. Putting concrete record types in this crate would create a dependency cycle.
 
-The upstream monitor currently accepts complete slices rather than resumable cursors. Recording a sequence therefore replays its prefixes, with quadratic total work in the number of endpoint moves. The record fold owns one play per dispatch and constructs one checked arena per process. Refusal details are allocated only on the error path. A resumable upstream monitor is the reversal condition for prefix replay; a second local state machine is not a substitute.
+The upstream monitor accepts complete slices rather than resumable cursors. Recording a channel therefore replays its prefixes, with quadratic total work in its endpoint moves. The fold owns one slot and decision play per dispatch, one judge play per verdict, and one runner play per runner and dispatch; one checked arena serves the process. A resumable upstream monitor is the reversal condition for prefix replay. A second local state machine would duplicate protocol decisions.
 
 ## Specification and evidence
 
@@ -111,6 +122,11 @@ The upstream monitor currently accepts complete slices rather than resumable cur
 | ---------- | ------- |
 | Required report, repeated reports, named order refusal and rollback | `tests::named_refusal_preserves_the_prefix` |
 | Pause width, independent certification, unchanged transported digests and rejected reverse use | `tests::pause_is_certified_and_old_runs_transport` |
+| Judge, runner and decision protocols and their duals | `tests::task_channels_replay_with_their_duals` |
+| Missing predecessors, consumed choices and refusal rollback | `tests::task_channels_refuse_missing_and_repeated_moves` |
+| Decision-label widening, complete-play transport and rejected narrowing | `tests::decision_label_widening_transports_complete_plays` |
+| Second grading, decision and landing, causally and concurrently | `domhringr-record-tree`: `fold::tests::task_channels_refuse_second_choices` |
+| Operator processes land a met change and rework an unmet change | `domhringr`: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one` |
 | Mixed editions, unknown names and transport failures in one signed DAG | `domhringr-record-tree`: `fold::tests::dispatch_editions_govern_each_attempt` |
 | Editionless signed receipts retain edition 1 and its order refusals | `domhringr-record-tree`: `fold::tests::editionless_dispatches_keep_edition_one_refusals` |
 | Replay does not rewrite the durable record | `domhringr-record-tree`: `store::tests::protocol_editions_replay_one_unchanged_record` |
@@ -118,7 +134,7 @@ The upstream monitor currently accepts complete slices rather than resumable cur
 
 ## Replay findings
 
-The recorded fixtures remain executable as refusal witnesses; their receipt sequences are not rewritten to fit the type. The following dispositions are proposals, not extra admitted branches. Only pause is a certified widening in this crate. Witnesses are in `record-tree::fold::tests` unless another suite is named.
+The slot fixtures below are executable refusal witnesses. Their proposed dispositions do not add admitted branches. Pause is the production label widening; the decision-label widening is a certification fixture. Witnesses are in `record-tree::fold::tests` unless another suite is named.
 
 | Play / witness | Refused move and state | Proposed disposition |
 | -------------- | ---------------------- | -------------------- |
