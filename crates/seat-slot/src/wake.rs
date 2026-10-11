@@ -14,6 +14,7 @@ use core::fmt;
 use core::str::FromStr;
 use core::time::Duration;
 
+use anodized::spec;
 use domhringr_record_tree::Anchor;
 use domhringr_record_tree::Authority;
 use domhringr_record_tree::CommitId;
@@ -115,6 +116,8 @@ impl fmt::Display for Wake
     /// # Specification
     /// - ensures: [`Wake::from_str`] reads the text back to this wake.
     /// - panics: none.
+    /// - executable: none — the formatter is write-only; the wake fixture
+    ///   compares the wire text and parses it back.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a wake is written, read back equal, and compared with
@@ -142,8 +145,8 @@ impl FromStr for Wake
     /// Read a wake from its line, without the newline.
     ///
     /// # Specification
-    /// - ensures: accepts exactly what [`Wake`]'s display writes: a commit
-    ///   anchor in the key form, one space, and a peer id.
+    /// - ensures: accepts a commit anchor in the key form, one space, and a
+    ///   peer id; display normalizes the accepted hexadecimal casing.
     /// - fails: [`ParseWakeError::Shape`] for text without a space,
     ///   [`ParseWakeError::Anchor`] for an anchor that does not parse,
     ///   [`ParseWakeError::NotCommit`] for one naming no commit or naming its
@@ -160,6 +163,7 @@ impl FromStr for Wake
     ///   peer id each meet their own refusal.
     /// - witness: `wake::tests::a_wake_and_a_reply_are_one_line_each`
     /// - witness: `wake::tests::a_malformed_line_is_refused_by_name`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |wake| wake.to_string().eq_ignore_ascii_case(text)))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -236,6 +240,8 @@ impl fmt::Display for Reply
     /// # Specification
     /// - ensures: [`Reply::from_str`] reads the text back to this reply.
     /// - panics: none.
+    /// - executable: none — the formatter is write-only; the reply fixture
+    ///   observes and parses every wire alternative.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — every reply is written and read back equal.
@@ -272,6 +278,7 @@ impl FromStr for Reply
     ///   unknown word are refused.
     /// - witness: `wake::tests::a_wake_and_a_reply_are_one_line_each`
     /// - witness: `wake::tests::a_malformed_line_is_refused_by_name`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |reply| reply.to_string() == text))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -319,6 +326,7 @@ impl FromStr for Reply
 ///   seat's presence; a wake to a dispatch the seat does not hold is declined
 ///   by name.
 /// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
+#[spec(requires: wake.operator() == node.peer().identity().peer_key())]
 #[inline]
 pub async fn wake(
     node: &Node,
@@ -342,9 +350,17 @@ pub async fn wake(
 ///   is closed before the pull.
 /// - fails: as [`wake`], but for [`WakeError::Link`].
 /// - panics: none.
+/// - executable: none — connection lifetime and synchronization are
+///   asynchronous effects; the wake fixture observes the reply and pulled
+///   presence.
 ///
 /// # Errors
 /// - [`WakeError`]: as [`wake`].
+///
+/// # Adequacy
+/// - hypothesis: L3 — a held wake is answered and an unheld dispatch is
+///   declined through a real connection.
+/// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
 async fn exchange(
     node: &Node,
     remote: &RemotePeer,
@@ -377,10 +393,18 @@ async fn exchange(
 ///   seconds.
 /// - fails: as [`wake`] for the stream and the reply.
 /// - panics: none.
+/// - executable: none — stream writes, completion and deadline expiry are
+///   asynchronous effects; the wake fixture observes the successful and
+///   declined replies.
 ///
 /// # Errors
 /// - [`WakeError::Stream`], [`WakeError::Send`], [`WakeError::Receive`],
 ///   [`WakeError::Silent`], [`WakeError::Reply`]: as [`wake`].
+///
+/// # Adequacy
+/// - hypothesis: L3 — the network exchange returns woken or the named decline;
+///   deadline expiry is not exercised by this witness.
+/// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
 async fn ask(
     connection: &iroh::endpoint::Connection,
     wake: &Wake,
@@ -417,6 +441,9 @@ impl TryFrom<Vec<u8>> for Line
     /// - fails: [`ParseWakeError::Line`] for bytes that are not UTF-8, do not
     ///   end in a newline, or hold another.
     /// - panics: none.
+    /// - executable: none — the function is its own specification;
+    ///   malformed-line fixtures are the independent oracle for UTF-8 and
+    ///   newline framing.
     ///
     /// # Errors
     /// - [`ParseWakeError::Line`]: as listed above.

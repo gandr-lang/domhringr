@@ -4,18 +4,6 @@
 //! tree's book alone — for `whence` and `sync`, as their source lines say —
 //! until the presence is withdrawn, when the book no longer offers it.
 
-// Temporary until the executable-specs-record backfill covers this crate.
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    allow(
-        spec_attribute_present,
-        adequacy_present,
-        maybe_shape,
-        erased_error_signature,
-        spec_attribute_unqualified
-    )
-)]
-
 #[cfg(test)]
 mod tests
 {
@@ -53,6 +41,14 @@ mod tests
     /// - ensures: the command exited within [`DEADLINE`].
     /// - panics: when it cannot start or outlives the deadline (it is killed
     ///   first).
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
     fn output(command: &mut Command) -> std::process::Output
     {
         let mut child = command
@@ -78,6 +74,14 @@ mod tests
     /// - ensures: the command exited 0 within [`DEADLINE`].
     /// - panics: as [`output`], or when it exits non-zero (its standard error
     ///   is shown) or prints anything but UTF-8.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
     fn finish(command: &mut Command) -> Vec<String>
     {
         let output = output(command);
@@ -98,6 +102,14 @@ mod tests
     ///
     /// # Specification
     /// - panics: as [`finish`], or unless exactly one line was printed.
+    /// - executable: none — the function is its own specification; the process
+    ///   witness supplies the output or proof image and checks its
+    ///   interpretation.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
     fn only(command: &mut Command) -> String
     {
         let lines = finish(command);
@@ -114,6 +126,14 @@ mod tests
     /// - ensures: the command exited 1 within [`DEADLINE`], printing nothing to
     ///   standard output and one line to standard error.
     /// - panics: as [`output`], or on any other status or output.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
     fn refuse(command: &mut Command) -> String
     {
         let output = output(command);
@@ -166,6 +186,14 @@ mod tests
         ///   standard error passes through to the test's.
         /// - panics: when the process cannot start or its announcement is not
         ///   `ids` and `listening`.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
         fn start(
             state: &Path,
             port: &OsStr,
@@ -209,6 +237,14 @@ mod tests
         /// # Specification
         /// - panics: unless the next line is `accepted` with `dialer` and the
         ///   one after is a path line for it, each within [`DEADLINE`].
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
         fn admitted(
             &self,
             dialer: &OsStr,
@@ -232,6 +268,14 @@ mod tests
         /// # Specification
         /// - panics: when no line arrives within [`DEADLINE`], or the server's
         ///   output ends.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
         fn line(&self) -> String
         {
             self.lines.recv_timeout(DEADLINE).unwrap_or_else(|error| {
@@ -247,6 +291,14 @@ mod tests
         /// # Specification
         /// - ensures: the process has exited and been reaped.
         /// - panics: when the process cannot be killed or reaped.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
         fn drop(&mut self)
         {
             self.child.kill().unwrap();

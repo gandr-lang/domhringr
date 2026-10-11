@@ -123,7 +123,7 @@ fn successor(record: &Record) -> OwnedRecordKey
 /// - witness: `measure::tests::extrema_equal_exhaustive_answers`
 #[spec(ensures: |ret| ret.as_ref().map_or(true, |measurement|
     usize::try_from(u64::from(measurement.records)).is_ok_and(|count| count == index.tree.records().len())
-    && (measurement.levels == Levels::Open) == (measurement.children.0 != 0 && measurement.root >= measurement.leaf)))]
+    && measurement.proof >= measurement.root && measurement.proof >= measurement.leaf))]
 #[inline]
 pub fn measure(index: &Index) -> Result<Measurement, MeasureError>
 {

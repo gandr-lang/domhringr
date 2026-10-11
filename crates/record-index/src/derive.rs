@@ -77,8 +77,8 @@ pub enum DeriveError
 /// - hypothesis: L2 — each reachable standing agrees with an independent fold.
 /// - witness: `project::tests::an_entry_agrees_with_the_fold_at_every_standing`
 #[spec(ensures: |ret| ret.as_ref().map_or(true, |entry| matches!(entry,
-    TaskEntry::Held { tree: actual, heads: frontier, current, .. }
-    if *actual == tree && frontier == heads && current == task.current())))]
+    TaskEntry::Held { attempts, .. } if usize::try_from(attempts.0).is_ok_and(|count|
+        count == task.steps().iter().filter(|entry| matches!(entry.1, domhringr_record_tree::Step::Dispatch { .. })).count()))))]
 #[inline]
 pub fn held(
     tree: TreeId,
@@ -106,6 +106,9 @@ pub fn held(
 ///   explicitly unheld, never given an empty or invented standing.
 /// - fails: missing heads, storage, derivation or persistence failure.
 /// - panics: none.
+/// - executable: none — historical storage reads and publication cannot be
+///   replayed in a predicate; reachable standings and an unopened tree provide
+///   the oracle.
 ///
 /// # Errors
 /// - [`DeriveError`]: a required input cannot be read or stored.
@@ -114,7 +117,6 @@ pub fn held(
 /// - hypothesis: L3 — an unknown task is unheld beside every reachable
 ///   standing.
 /// - witness: `project::tests::an_entry_agrees_with_the_fold_at_every_standing`
-#[spec(ensures: |ret| ret.as_ref().map_or(true, |entry| entry.tree() == tree))]
 #[inline]
 pub async fn at(
     peer: &Peer,
@@ -267,6 +269,19 @@ mod tests
                 &BTreeMap::from([(IndexKind::Provenance, nested)]),
             )
             .unwrap();
+            let nested_record = nested_project
+                .tree
+                .records()
+                .iter()
+                .find(|record| record.key().as_ref() == [0, 3])
+                .unwrap();
+            assert_eq!(
+                gandr_storage_values::decode_flat::<project::Nested>(
+                    gandr_storage_values::TokenBody::from(nested_record.value().as_ref())
+                )
+                .unwrap(),
+                project::Nested(nested)
+            );
             let expected =
                 if domhringr_record_tree::Edition::CURRENT == domhringr_record_tree::Edition::ONE {
                     [

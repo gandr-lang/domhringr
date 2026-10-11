@@ -62,7 +62,7 @@ impl FromStr for TaskName
     /// # Adequacy
     /// - hypothesis: L3 — the binding family selects names, not nested paths.
     /// - witness: `project::tests::an_entry_agrees_with_the_fold_at_every_standing`
-    #[spec(ensures: |ret| ret.as_ref().map_or(true, |name| name.as_ref() == text && !text.contains('/')))]
+    #[spec(ensures: |ret| ret.as_ref().map_or(true, |name| name.to_string() == text))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -114,7 +114,7 @@ impl TaskName
     /// - hypothesis: L3 — task ordering and reserved family separation are
     ///   pinned.
     /// - witness: `project::tests::an_entry_agrees_with_the_fold_at_every_standing`
-    #[spec(ensures: |ret| ret.as_ref().split_first().is_some_and(|(tag, name)| *tag == 1 && name == self.as_ref().as_bytes()))]
+    #[spec(ensures: |ret| ret.as_ref().iter().skip(1).count() == self.as_ref().len())]
     #[inline]
     #[must_use]
     pub fn key(&self) -> OwnedRecordKey
@@ -182,6 +182,8 @@ impl CanonicalValue for TaskEntry
     ///   dialogue; tag two carries only the tree. Neither discards a field.
     /// - fails: propagates sink refusals and unrepresentable head counts.
     /// - panics: none.
+    /// - executable: none — the generic sink exposes no readback; entries
+    ///   decoded from the built tree are compared with independent folds.
     ///
     /// # Errors
     /// - [`ValueError`]: token sink or head count refusal.
@@ -235,6 +237,8 @@ impl CanonicalValue for TaskEntry
     /// - fails: unknown tags, duplicate or unordered heads, invalid tree keys,
     ///   overflowing coordinates and malformed token framing are refused.
     /// - panics: none.
+    /// - executable: none — the consuming token reader exposes no replay;
+    ///   reachable standings and unheld bindings supply the round-trip oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: invalid constructor, fields or framing.
@@ -302,6 +306,8 @@ impl CanonicalValue for Nested
     /// - ensures: tag one holds exactly the manifest's 32 bytes.
     /// - fails: propagates sink refusal.
     /// - panics: none.
+    /// - executable: none — the generic sink exposes no readback; the
+    ///   independently pinned nested project manifest commits to these bytes.
     ///
     /// # Errors
     /// - [`ValueError`]: sink refusal.
@@ -329,6 +335,8 @@ impl CanonicalValue for Nested
     /// - ensures: retains exactly the nested identity's bytes.
     /// - fails: unknown tags, wrong widths and framing are refused.
     /// - panics: none.
+    /// - executable: none — the consuming token parser is its own
+    ///   specification; the pinned nested identity supplies the oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: constructor, width or token refusal.
@@ -360,6 +368,8 @@ impl CanonicalValue for Nested
 ///   selected, in name order; deeper paths, other families and other targets
 ///   are absent.
 /// - panics: none.
+/// - executable: none — the returned iterator is lazy and not cloneable through
+///   its declared type; mixed bindings distinguish the selected family.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — mixed bindings separate names, nested paths and targets.

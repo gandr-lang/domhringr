@@ -51,7 +51,7 @@ Specification attributes use `use anodized::spec;` through the pinned [quenchant
 
 The dylint lane denies `spec_attribute_present`, `adequacy_present`, `maybe_shape`, `erased_error_signature` and `spec_attribute_unqualified`. Nontrivial specification clauses carry an independent executable predicate or an item-local `executable: none` reason. Adequacy witnesses resolve against the test inventory. Predicates check stated bounds, implications or membership; they do not prove the entire prose contract. Effectful obligations retain process or storage witnesses rather than repeating the effect in an assertion.
 
-`arena-session`, `record-evidence`, `judge-oracle`, `strategy-document` and `surface-driver` satisfy these checks. `record-tree`, `seat-slot`, `surface-peer` and `record-index` carry temporary crate-root allowances for the `executable-specs-record` backfill.
+Every workspace crate and integration-test target satisfies these checks without crate-root allowances. Fixed-width and wire boundaries, canonical round trips, fold membership, proof authentication and transport bounds have executable predicates; opaque I/O, sinks and self-specifying classifiers retain explicit exemptions with independent witnesses.
 
 The facade keeps extraction and mode selection in one dependency. Direct anodized dependencies would bypass its stripping policy; hand-written assertions would lose specification extraction. Reconsider this choice if the facade cannot express the required predicates or maintain consistent stripped and enforcing builds.
 

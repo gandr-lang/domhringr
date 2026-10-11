@@ -158,6 +158,9 @@ pub enum CheckError
 ///   missing local frontier is unchecked, never treated as agreement.
 /// - fails: wrong project identity, missing project past or malformed values.
 /// - panics: none.
+/// - executable: none — historical folds require storage I/O; the checker is
+///   its own specification, with forged and older authentic claims as
+///   independent oracles.
 ///
 /// # Errors
 /// - [`CheckError`]: a required input cannot be interpreted.

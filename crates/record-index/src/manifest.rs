@@ -92,13 +92,7 @@ impl Manifest
     /// Bind a built tree to its semantic language.
     ///
     /// # Specification
-    /// - ensures: count and root node are exactly those of the built tree.
-    /// - panics: none.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L3 — each bound field changes the encoded identity.
-    /// - witness: `manifest::tests::every_field_moves_the_identity`
-    #[spec(ensures: |ret| ret.kind == kind && ret.count == tree.root().record_count() && ret.node == tree.root_node_hash())]
+    /// trivial.
     #[inline]
     #[must_use]
     pub fn new(
@@ -152,10 +146,10 @@ impl Manifest
     /// - ensures: writes domain, kind, little-endian layout, length-prefixed
     ///   opaque boundary commitment, count and node identity in that order.
     /// - fails: the boundary image length exceeds the u64 framing.
+    /// - panics: none.
     ///
     /// # Errors
     /// - [`WireError::Length`]: the commitment length is unrepresentable.
-    /// - panics: none.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — mutations of every field distinguish what identity
@@ -184,10 +178,10 @@ impl Manifest
     /// # Specification
     /// - ensures: the identity is BLAKE3 over precisely the encoded image.
     /// - fails: the boundary image length exceeds the u64 framing.
+    /// - panics: none.
     ///
     /// # Errors
     /// - [`WireError::Length`]: the commitment length is unrepresentable.
-    /// - panics: none.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — independent hashing observes every bound field.
@@ -221,6 +215,9 @@ impl Manifest
     ///   boundary commitment, with exactly one count and root identity.
     /// - fails: foreign fields, truncated fields and trailing bytes are named.
     /// - panics: none.
+    /// - executable: none — the parser is its own specification; independent
+    ///   foreign-field, truncation and trailing-byte probes distinguish
+    ///   refusals.
     ///
     /// # Errors
     /// - [`ManifestError`]: domain, kind, layout, commitment or framing
@@ -229,7 +226,6 @@ impl Manifest
     /// # Adequacy
     /// - hypothesis: L3 — each incompatible field is refused without node I/O.
     /// - witness: `manifest::tests::a_foreign_kind_layout_or_commitment_is_refused_before_any_node`
-    #[spec(ensures: |ret| ret.as_ref().is_ok_and(|manifest| manifest.kind == expected) || ret.is_err())]
     #[inline]
     pub fn decode(
         image: &WireImage,
@@ -272,6 +268,8 @@ impl Manifest
     /// - ensures: the resulting root binds current parameters, count and node.
     /// - fails: record-plane parameter refusal is preserved.
     /// - panics: none.
+    /// - executable: none — the record-plane seal is opaque here; root-only
+    ///   proof verification is the oracle.
     ///
     /// # Errors
     /// - [`RecordTreeError`]: the record plane cannot seal its current

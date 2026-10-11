@@ -13,6 +13,8 @@ use alloc::string::String;
 use core::fmt;
 use core::str::FromStr;
 
+use anodized::spec;
+
 /// The longest step identifier, in bytes.
 const STEP_ID_BYTES: usize = 64;
 
@@ -57,6 +59,9 @@ impl FromStr for StepId
     /// - witness: `check::tests::a_step_id_is_a_short_lowercase_identifier`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |id|
+        !id.as_ref().is_empty() && id.as_ref().len() <= STEP_ID_BYTES && id.as_ref() == text
+    ))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -280,6 +285,7 @@ pub enum Grade
 /// - hypothesis: L3 — empty, singleton, repeated and mixed grades distinguish
 ///   the identity and each precedence boundary in both input orders.
 /// - witness: `check::tests::grades_compose_as_the_conjunction_of_their_criteria`
+#[spec(ensures: |output| grades.contains(&output) || (grades.is_empty() && output == Grade::Met))]
 #[inline]
 #[must_use]
 pub fn compose(grades: &[Grade]) -> Grade

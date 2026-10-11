@@ -48,6 +48,8 @@ use crate::rulings;
 ///   the field at fault; [`RunError::Output`] when standard output cannot be
 ///   written.
 /// - panics: none.
+/// - executable: none — file reads and standard output are external effects;
+///   the strategy process witness compares validation output and refusals.
 ///
 /// # Errors
 /// - [`RunError::Load`]: the playbook or a rubric it names does not load.
@@ -105,6 +107,8 @@ pub fn validate_playbook(file: &Path) -> Result<(), RunError>
 ///   the field at fault; [`RunError::Output`] when standard output cannot be
 ///   written.
 /// - panics: none.
+/// - executable: none — file reads and standard output are external effects;
+///   the strategy process witness compares validation output and refusals.
 ///
 /// # Errors
 /// - [`RunError::Load`]: the rubric does not load.
@@ -153,6 +157,8 @@ pub fn validate_rubric(file: &Path) -> Result<(), RunError>
 ///   committed, as [`grade`] fails, and [`RunError::Output`] when standard
 ///   output cannot be written.
 /// - panics: none.
+/// - executable: none — verifier processes, receipt commits and evidence writes
+///   are external effects; the strategy process witness replays their results.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -244,6 +250,8 @@ pub async fn run_playbook(
 /// - fails: [`RunError::Load`] as [`Loaded::read`] refuses, as [`current`] and
 ///   [`grade`] fail.
 /// - panics: none.
+/// - executable: none — verifier processes, receipt commits and evidence writes
+///   are external effects; the strategy process witness replays their results.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -308,6 +316,8 @@ struct Grader<'store>
 ///   when a receipt cannot be committed, and [`RunError::Output`] when standard
 ///   output cannot be written.
 /// - panics: none.
+/// - executable: none — verifier processes, receipt commits and evidence writes
+///   are external effects; the strategy process witness replays their results.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.

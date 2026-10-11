@@ -5,18 +5,6 @@
 //! are the same on every run. `drift` names each finding by its anchor, in
 //! anchor order, and says nothing once the pair agrees.
 
-// Temporary until the executable-specs-record backfill covers this crate.
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    allow(
-        spec_attribute_present,
-        adequacy_present,
-        maybe_shape,
-        erased_error_signature,
-        spec_attribute_unqualified
-    )
-)]
-
 #[cfg(test)]
 mod tests
 {
@@ -97,6 +85,14 @@ mod tests
     /// - ensures: the command exited within [`DEADLINE`].
     /// - panics: when it cannot start or outlives the deadline (it is killed
     ///   first).
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
     fn output(command: &mut Command) -> Output
     {
         let mut child = command
@@ -122,6 +118,14 @@ mod tests
     /// - ensures: the command exited 0 within [`DEADLINE`].
     /// - panics: as [`output`], or when it exits non-zero (its standard error
     ///   is shown) or prints anything but UTF-8.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
     fn finish(command: &mut Command) -> String
     {
         let output = output(command);
@@ -139,6 +143,14 @@ mod tests
     ///
     /// # Specification
     /// - panics: as [`finish`].
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
     fn commit(directory: &Path) -> String
     {
         finish(git(directory).args(["add", "--all"]));
@@ -153,6 +165,14 @@ mod tests
     ///
     /// # Specification
     /// - panics: when the file cannot be written.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
     fn write(
         directory: &Path,
         file: &OsStr,

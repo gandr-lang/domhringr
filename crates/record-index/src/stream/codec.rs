@@ -1,5 +1,6 @@
 //! The index protocol's byte language, without transport or trusted roots.
 
+use anodized::spec;
 use gandr_storage_records::EncodedNode;
 use gandr_storage_records::KeyBound;
 use gandr_storage_records::KeyRange;
@@ -72,6 +73,10 @@ impl Encoder
     /// # Adequacy
     /// - hypothesis: L3 — the holder reports the exact over-cap framing extent.
     /// - witness: `stream::tests::a_proof_past_the_cap_is_answered_with_its_size`
+    #[spec(captures: before = self.size.0, ensures: |ret| match ret {
+        Ok(()) => arith::checked_sub(Int::from(self.size.0), Int::from(before)).map(u64::from).ok() == u64::try_from(body.0.len()).ok(),
+        Err(_) => self.size.0 == before,
+    })]
     fn bytes(
         &mut self,
         body: Body<'_>,
@@ -112,6 +117,7 @@ impl Encoder
     /// # Adequacy
     /// - hypothesis: L3 — framing size includes each length word.
     /// - witness: `stream::tests::a_proof_past_the_cap_is_answered_with_its_size`
+    #[spec(captures: before = self.size.0, ensures: |ret| ret.is_err() || arith::checked_sub(Int::from(self.size.0), Int::from(before)).map(u64::from) == Ok(4))]
     fn count(
         &mut self,
         count: Length,
@@ -192,6 +198,8 @@ impl Encoder
 /// - ensures: no root is carried; the image carries manifest and proof parts.
 /// - fails: a field or accumulated extent exceeds its wire width.
 /// - panics: none.
+/// - executable: none — the wire encoder is its own specification; exact
+///   over-cap framing and bounded answer decoding provide the oracle.
 ///
 /// # Errors
 /// - [`StreamError`]: manifest encoding or framing failed.
@@ -244,6 +252,8 @@ fn held(
 /// - ensures: the extent includes status, manifest, proof and every frame word.
 /// - fails: an unrepresentable field or extent is refused.
 /// - panics: none.
+/// - executable: none — the counting encoder is its own specification;
+///   independently pinned answer sizes provide the oracle.
 ///
 /// # Errors
 /// - [`StreamError`]: manifest or framing failure.
@@ -277,6 +287,7 @@ pub(super) fn size(answer: &Answer) -> Result<ByteSize, StreamError>
 /// - hypothesis: L3 — over-cap answers are exactly nine bytes and carry the
 ///   size.
 /// - witness: `stream::tests::a_proof_past_the_cap_is_answered_with_its_size`
+#[spec(ensures: |ret| ret.as_ref().map_or(true, |image| u64::try_from(image.as_ref().len()).is_ok_and(|length| length <= ANSWER_CAP.0)))]
 pub(super) fn encode(answer: &Answer) -> Result<WireImage, StreamError>
 {
     let size = size(answer)?;
@@ -362,6 +373,7 @@ fn bound(cursor: &mut Cursor<'_>) -> Result<OwnedKeyBound, WireError>
 /// # Adequacy
 /// - hypothesis: L3 — holder responses name the requested unknown digest.
 /// - witness: `stream::tests::an_unheld_digest_is_answered_unheld`
+#[spec(ensures: |ret| ret.as_ref().map_or(true, |parsed| request(parsed).is_ok_and(|encoded| encoded == *image)))]
 pub(super) fn read_request(image: &WireImage) -> Result<Request, StreamError>
 {
     let mut cursor = Cursor::new(Body(image.as_ref()));
@@ -431,13 +443,16 @@ fn neighbour(cursor: &mut Cursor<'_>) -> Result<Neighbour, WireError>
 /// - ensures: no identity is trusted from the wire; each node hash is computed.
 /// - fails: truncated fields or an unknown node encoding during verification.
 /// - panics: none.
+/// - executable: none — the consuming cursor exposes no replay; the decoded
+///   proof must independently authenticate against its selected root.
 ///
 /// # Errors
 /// - [`WireError`]: a declared field is truncated.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — forged node material fails against the selected root.
-/// - witness: `prove::tests::a_forged_later_attempt_is_refused`
+/// - hypothesis: L3 — decoded wire nodes authenticate the requested value
+///   against the held manifest.
+/// - witness: `stream::tests::an_unheld_digest_is_answered_unheld`
 fn nodes(cursor: &mut Cursor<'_>) -> Result<Box<[ProofNode]>, WireError>
 {
     let Fixed(count) = cursor.fixed::<4>()?;
@@ -467,6 +482,7 @@ fn nodes(cursor: &mut Cursor<'_>) -> Result<Box<[ProofNode]>, WireError>
 /// - hypothesis: L3 — unheld names the digest, and one byte past the cap fails.
 /// - witness: `stream::tests::an_unheld_digest_is_answered_unheld`
 /// - witness: `stream::tests::an_answer_at_the_cap_is_read_and_one_byte_past_is_refused`
+#[spec(ensures: |ret| ret.as_ref().map_or(true, |answer| encode(answer).is_ok_and(|encoded| encoded == *image)))]
 pub(super) fn decode(
     request: &Request,
     kind: IndexKind,

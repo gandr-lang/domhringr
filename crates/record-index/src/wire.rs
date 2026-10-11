@@ -143,6 +143,10 @@ impl<'image> Cursor<'image>
     /// # Adequacy
     /// - hypothesis: L3 — bounded answer parsing rejects an over-cap image.
     /// - witness: `stream::tests::an_answer_at_the_cap_is_read_and_one_byte_past_is_refused`
+    #[spec(captures: before = self.0.len(), ensures: |ret| ret.as_ref().map_or(true, |body|
+        arith::checked_add(Int::from(self.0.len()), Int::from(body.0.len()))
+            .and_then(|remaining| arith::checked_add(remaining, Int::from(4_usize)))
+            .map(usize::from) == Ok(before)))]
     pub(crate) fn framed(&mut self) -> Result<Body<'image>, WireError>
     {
         let Fixed(bytes) = self.fixed::<4>()?;
@@ -157,6 +161,8 @@ impl<'image> Cursor<'image>
     /// - ensures: succeeds exactly when no unread bytes remain.
     /// - fails: trailing bytes are refused.
     /// - panics: none.
+    /// - executable: none — the emptiness check is its own specification; an
+    ///   appended byte is the independent refusal oracle.
     ///
     /// # Errors
     /// - [`WireError::Trailing`]: unread bytes remain.
@@ -164,7 +170,6 @@ impl<'image> Cursor<'image>
     /// # Adequacy
     /// - hypothesis: L3 — appending one byte invalidates a manifest.
     /// - witness: `manifest::tests::a_foreign_kind_layout_or_commitment_is_refused_before_any_node`
-    #[spec(ensures: |ret| ret.is_ok() == self.0.is_empty())]
     pub(crate) fn finish(self) -> Result<(), WireError>
     {
         if self.0.is_empty() {

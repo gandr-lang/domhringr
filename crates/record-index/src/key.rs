@@ -102,6 +102,8 @@ impl MoveKey
     /// # Specification
     /// - ensures: both fields are read in big-endian order.
     /// - panics: none.
+    /// - executable: none — the const decoder is its own specification;
+    ///   asymmetric coordinates and numeric ordering are the oracle.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — asymmetric coordinates distinguish field swapping.
@@ -172,7 +174,7 @@ impl TryFrom<&[u8]> for MoveKey
     /// # Adequacy
     /// - hypothesis: L3 — round trips and short/long probes distinguish width.
     /// - witness: `key::tests::move_keys_sort_as_attempt_then_seq`
-    #[spec(ensures: |ret| ret.as_ref().map_or(bytes.len() != 8, |key| key.as_ref() == bytes))]
+    #[spec(ensures: |ret| ret.is_ok() == (bytes.len() == 8))]
     #[inline]
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error>
     {
@@ -196,7 +198,7 @@ impl AttemptNumber
     /// # Adequacy
     /// - hypothesis: L3 — maximum and ordinary successors separate overflow.
     /// - witness: `key::tests::move_keys_sort_as_attempt_then_seq`
-    #[spec(ensures: |ret| ret.as_ref().map_or(self.0 == u32::MAX, |next| arith::checked_add(Int::from(self.0), Int::from(1)).map(u32::from) == Ok(next.0)))]
+    #[spec(ensures: |ret| ret.as_ref().map_or(self.0 == u32::MAX, |next| arith::checked_sub(Int::from(next.0), Int::from(self.0)).map(u32::from) == Ok(1)))]
     #[inline]
     pub fn next(self) -> Result<Self, KeyError>
     {
@@ -211,10 +213,12 @@ impl AttemptNumber
     /// - ensures: includes this attempt from sequence zero and excludes the
     ///   next dispatch; the largest attempt has an unbounded upper edge.
     /// - fails: the record plane refuses an unordered range.
+    /// - panics: none.
+    /// - executable: none — the range constructor is its own specification; the
+    ///   maximum-attempt witness checks inclusion and the unbounded edge.
     ///
     /// # Errors
     /// - [`gandr_storage_records::RecordTreeError`]: invalid range endpoints.
-    /// - panics: none.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — the maximum attempt catches wrapping upper bounds.

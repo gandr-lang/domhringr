@@ -225,17 +225,6 @@
 // fields outside wire form, arithmetic on nominal types. Selected here because
 // Dylint's `-D` cannot reach rustc through `cargo dylint`; see
 // `.config/mise/tasks/mise-tasks-check.toml`.
-// Temporary until the executable-specs-record backfill covers this crate.
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    allow(
-        spec_attribute_present,
-        adequacy_present,
-        maybe_shape,
-        erased_error_signature,
-        spec_attribute_unqualified
-    )
-)]
 #![cfg_attr(
     dylint_lib = "quenchant_dylints",
     deny(option_signature, option_field, primitive_arithmetic)
@@ -259,6 +248,7 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use anodized::spec;
 use domhringr_judge_oracle::Backend;
 use domhringr_judge_oracle::ChatCompletions;
 use domhringr_judge_oracle::Config;
@@ -1332,6 +1322,8 @@ enum RunError
 ///   [`dispatch_command`], [`replay_command`], [`drift_command`],
 ///   [`judge_command`] and [`strategy_command`] for their verbs.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Arguments`]: an unknown option, or `--state` lacks a value.
@@ -1538,6 +1530,8 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
 ///   checked before the operand is read, and as [`read_tree`] for an operand
 ///   that is no key-form tree anchor.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Arguments`]: an unknown option, or an option lacks a value.
@@ -1599,6 +1593,8 @@ fn sync_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 ///   checked before the operand is read, and as [`read_tree`] for an operand
 ///   that is no key-form tree anchor.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Arguments`]: an unknown option, or `--port` lacks a value.
@@ -1665,6 +1661,8 @@ fn present_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError
 ///   operand is read, and [`UsageError::Anchor`] for an operand that is not a
 ///   reference.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Arguments`]: an unknown option, or an option lacks a value.
@@ -1760,6 +1758,8 @@ fn whence_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 ///   `--vault` when it is absent, and as [`read_tree`] for an operand that is
 ///   no key-form tree anchor.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Arguments`]: an unknown option, or an option lacks a value.
@@ -1822,6 +1822,8 @@ fn drift_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 ///   DNS name that does not parse, and [`UsageError::Operand`] naming the
 ///   witness's tree id for a tree id that does not parse.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Text`]: the value is not UTF-8.
@@ -1856,6 +1858,8 @@ fn read_witness(value: OsString) -> Result<(Domain, TreeId), UsageError>
 ///   without a value, [`UsageError::Operands`] for an operand, and
 ///   [`UsageError::Port`] for a value that is not a port from 1 through 65535.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Arguments`]: an unknown option, or an option lacks a value.
@@ -1908,6 +1912,8 @@ fn serve_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 ///   for a seat's peer id that does not parse, and as [`read_brief`] for the
 ///   brief.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Arguments`]: an unknown option, or `--at` or `--edition`
@@ -2014,6 +2020,7 @@ fn dispatch_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageErro
 ///   refusal.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
+#[spec(requires: matches!(verb, Verb::Replay | Verb::Evidence))]
 fn replay_command(
     arguments: &mut lexopt::Parser,
     verb: Verb,
@@ -2095,6 +2102,8 @@ fn replay_command(
 ///   rubric, as [`read_tree`] for the tree, and [`UsageError::Question`] for a
 ///   question [`Question::new`] refuses.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError`]: as listed above.
@@ -2215,6 +2224,8 @@ fn judge_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 ///   [`UsageError::Operands`] for operands other than the command takes, and as
 ///   [`read_tree`] for the tree.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError`]: as listed above.
@@ -2293,6 +2304,8 @@ fn strategy_command(
 ///   `judge`, `playbook` and `rubric` name their verbs.
 /// - fails: [`UsageError::Command`] for any other word, carrying it.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Command`]: the word is not a verb.
@@ -2345,6 +2358,8 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
 /// - fails: [`UsageError::Operand`] naming `operand` and carrying the parser's
 ///   reason.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Operand`]: the text is not an id.
@@ -2382,6 +2397,7 @@ where
 /// - hypothesis: L3 — a short transcript digest and an evidence digest that is
 ///   no hex are refused under their own operand names.
 /// - witness: `tests::a_malformed_command_line_is_refused`
+#[spec(ensures: |ref output| output.as_ref().map_or(true, |digest| digest.to_string().eq_ignore_ascii_case(&text.to_string_lossy())))]
 fn read_digest(
     text: &OsStr,
     operand: Operand,
@@ -2404,6 +2420,8 @@ fn read_digest(
 /// - fails: [`UsageError::Anchor`] naming `operand` and carrying the parser's
 ///   reason.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Anchor`]: the text is not what `T` reads.
@@ -2446,6 +2464,7 @@ where
 ///   DNS or label anchor as no key.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
+#[spec(ensures: |ref output| output.as_ref().map_or(true, |tree| Anchor::key(*tree).to_string().eq_ignore_ascii_case(&text.to_string_lossy())))]
 fn read_tree(text: &OsStr) -> Result<TreeId, UsageError>
 {
     let anchor = read_anchor::<Anchor>(text, Operand::Tree)?;
@@ -2463,6 +2482,8 @@ fn read_tree(text: &OsStr) -> Result<TreeId, UsageError>
 /// - fails: [`UsageError::Text`] for text that is not UTF-8, carrying it, and
 ///   `refused` of the parser's reason for text `T` does not read.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Text`]: the text is not UTF-8.
@@ -2497,6 +2518,8 @@ where
 ///   endpoint id that does not parse, and [`UsageError::Text`] for a datum that
 ///   is not UTF-8.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Target`]: the kind is unknown.
@@ -2538,6 +2561,8 @@ fn read_target(
 ///   parse, and [`UsageError::Operand`] naming the content hash for one that
 ///   does not parse.
 /// - panics: none.
+/// - executable: none — the function is its own specification; command-line
+///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
 /// - [`UsageError::Brief`]: the kind is unknown.
@@ -2570,6 +2595,8 @@ fn read_brief(
 /// - fails: [`RunError::Runtime`] when the runtime cannot start, otherwise as
 ///   [`execute`].
 /// - panics: none.
+/// - executable: none — runtime creation and teardown are external effects;
+///   process witnesses observe completed commands.
 ///
 /// # Errors
 /// - [`RunError::Runtime`]: the runtime cannot start.
@@ -2723,6 +2750,7 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
 /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
 /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
+#[spec(requires: tokio::runtime::Handle::try_current().is_ok())]
 #[expect(
     clippy::significant_drop_tightening,
     reason = "the index peer moves into run; dropping it again after that consuming call would be invalid"
@@ -3015,6 +3043,9 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
 ///   holds no presence of the peer aimed at, [`RunError::Bind`] when the
 ///   endpoint cannot bind, and [`RunError::Sync`] when a sync fails.
 /// - panics: none.
+/// - executable: none — routing and synchronization are asynchronous effects;
+///   the presence and anchor process witnesses observe their source lines and
+///   resolutions.
 ///
 /// # Errors
 /// - [`RunError::Whence`]: the trees read cannot be named, or the reference
@@ -3070,10 +3101,18 @@ where
 ///   endpoint is left open for the caller to close.
 /// - fails: as [`resolve`], but for [`RunError::Bind`].
 /// - panics: none.
+/// - executable: none — routing and synchronization are asynchronous effects;
+///   the presence and anchor process witnesses observe their source lines and
+///   resolutions.
 ///
 /// # Errors
 /// - [`RunError::Whence`], [`RunError::Route`], [`RunError::Sync`]: as
 ///   [`resolve`].
+///
+/// # Adequacy
+/// - hypothesis: L3 — an anchor resolves after synchronizing through the book,
+///   then becomes unreachable when that presence is withdrawn.
+/// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
 async fn reach_and_resolve<W>(
     node: &Node,
     reference: &Reference,
@@ -3110,9 +3149,17 @@ where
 ///   in order.
 /// - fails: [`RunError::Sync`] at the first sync that fails.
 /// - panics: none.
+/// - executable: none — routing and synchronization are asynchronous effects;
+///   the presence and anchor process witnesses observe their source lines and
+///   resolutions.
 ///
 /// # Errors
 /// - [`RunError::Sync`]: a sync fails.
+///
+/// # Adequacy
+/// - hypothesis: L3 — book routing supplies the source line and ceases to reach
+///   a peer after withdrawal.
+/// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
 async fn sync_routes(
     node: &Node,
     routes: Vec<Reached>,
@@ -3138,6 +3185,8 @@ async fn sync_routes(
 /// - fails: [`RunError::Commit`] when the commit cannot be appended,
 ///   [`RunError::Output`] when standard output cannot be written.
 /// - panics: none.
+/// - executable: none — commit durability and standard output are external
+///   effects; the synchronization witness reads the printed commits back.
 ///
 /// # Errors
 /// - [`RunError::Commit`]: the commit cannot be appended.
@@ -3164,6 +3213,9 @@ async fn record(
 /// - fails: [`RunError::View`] when the tree cannot be folded,
 ///   [`RunError::Undispatched`] when no dispatch is admitted.
 /// - panics: none.
+/// - executable: none — the asynchronous store read cannot be replayed without
+///   a second observation; the judge witness compares the dispatch and refuses
+///   an undispatched task.
 ///
 /// # Errors
 /// - [`RunError::View`]: the tree cannot be folded.
@@ -3192,11 +3244,19 @@ async fn current(
 ///   is committed as [`record`] commits it.
 /// - fails: as [`current`], `answer` and [`record`] fail.
 /// - panics: none.
+/// - executable: none — the one-shot callback and durable commit cannot be
+///   replayed in a predicate; the index witness replays reports and retirement
+///   on their dispatches.
 ///
 /// # Errors
 /// - [`RunError::View`], [`RunError::Undispatched`]: as [`current`].
 /// - [`RunError::Random`]: no operation fence can be drawn.
 /// - [`RunError::Commit`], [`RunError::Output`]: as [`record`].
+///
+/// # Adequacy
+/// - hypothesis: L3 — command-line reports and retirement replay under their
+///   respective dispatches across two attempts.
+/// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
 async fn on_current(
     peer: Peer,
     tree: TreeId,
@@ -3222,6 +3282,9 @@ async fn on_current(
 ///   [`RunError::Evidence`] when the transcript cannot be kept, and
 ///   [`RunError::Random`] when no operation fence can be drawn.
 /// - panics: none.
+/// - executable: none — judging, evidence storage and receipt publication are
+///   external effects; the judge witness replays the verdict and retained
+///   transcript.
 ///
 /// # Errors
 /// - [`RunError::View`], [`RunError::Undispatched`]: as [`current`].
@@ -3268,6 +3331,8 @@ async fn verdict(
 ///   [`RunError::Evidence`] when the store does not hold the digest whole or
 ///   the content cannot be staged.
 /// - panics: none.
+/// - executable: none — file and evidence reads are external effects; the judge
+///   witness compares the transcript digest across both input forms.
 ///
 /// # Errors
 /// - [`RunError::Transcript`]: the file cannot be read.
@@ -3318,6 +3383,7 @@ fn transcript_of(
 /// - hypothesis: L3 — the process test answers from a table file, and refuses a
 ///   judge with no endpoint configured and a table file that holds no table.
 /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
+#[spec(ensures: |ref output| output.as_ref().map_or(true, |answers| answers.len() == questions.len()))]
 async fn rulings(
     judging: Judging,
     questions: &[Question],
@@ -3363,6 +3429,7 @@ async fn rulings(
 ///   and on one it does not, reading `read` and `unread malformed` lines and
 ///   the cause on standard error.
 /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
+#[spec(ensures: |ref output| output.as_ref().map_or(true, |answers| answers.len() == questions.len()))]
 async fn rule<Answering>(
     backend: &Answering,
     questions: &[Question],
@@ -3405,6 +3472,8 @@ where
 ///   stays committed, to be re-sent — and [`RunError::Output`] when standard
 ///   output cannot be written.
 /// - panics: none.
+/// - executable: none — dispatch publication and the wake exchange are external
+///   effects; the seat witness observes retry identity and the held slot.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -3482,6 +3551,8 @@ async fn dispatch(
 ///   written and [`RunError::Diagnostics`] when standard error cannot be. An
 ///   evidence that is not held whole is a line, never a failure.
 /// - panics: none.
+/// - executable: none — synchronization, fetches and output are external
+///   effects; process witnesses compare the replay and evidence availability.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -3555,6 +3626,8 @@ async fn replay(
 /// - ensures: each refused commit is printed with its refusal, never omitted.
 /// - fails: standard-output errors remain [`RunError::Output`].
 /// - panics: none.
+/// - executable: none — standard output is write-only; the protocol witness
+///   compares named refusals from both compiled catalogues.
 ///
 /// # Errors
 /// [`RunError::Output`] if stdout cannot be written or flushed.
@@ -3606,6 +3679,7 @@ enum Source<'reach>
 ///   local store.
 /// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
 /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
+#[spec(ensures: |ref output| output.iter().all(|entry| task.evidence().any(|(_author, named)| named == entry.0)))]
 async fn gather(
     evidence: &Evidence,
     task: &Task,
@@ -3642,9 +3716,16 @@ async fn gather(
 /// - fails: [`RunError::Output`] when standard output cannot be written, and
 ///   [`RunError::Diagnostics`] when standard error cannot be.
 /// - panics: none.
+/// - executable: none — standard output and diagnostics are write-only; replay
+///   witnesses observe held and unheld evidence.
 ///
 /// # Errors
 /// - [`RunError::Output`], [`RunError::Diagnostics`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — replay names the fetched report held and retains its
+///   digest.
+/// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
 fn attest(gathered: Vec<(ManifestDigest, Result<(), RunError>)>) -> Result<(), RunError>
 {
     for (digest, outcome) in gathered {
@@ -3680,6 +3761,9 @@ fn attest(gathered: Vec<(ManifestDigest, Result<(), RunError>)>) -> Result<(), R
 ///   among them the value plane's refusal naming the first chunk neither side
 ///   holds — and [`RunError::Output`] when standard output cannot be written.
 /// - panics: none.
+/// - executable: none — fetching, storage and standard output are external
+///   effects; the evidence witness compares content and refuses a missing chunk
+///   before output.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -3756,6 +3840,9 @@ async fn evidence(
 ///   [`RunError::Diagnostics`] when standard output or standard error cannot be
 ///   written. It does not return otherwise.
 /// - panics: none.
+/// - executable: none — the serving loop is open-ended and its channels are
+///   external; process witnesses observe admitted peers, seat reports and
+///   served evidence.
 ///
 /// # Errors
 /// - [`RunError::Bind`]: the endpoint cannot bind, as when `port` is taken.
@@ -3860,9 +3947,16 @@ async fn serve(
 ///   sees it at once.
 /// - fails: [`RunError::Output`] when standard output cannot be written.
 /// - panics: none.
+/// - executable: none — standard output is write-only; process witnesses read
+///   flushed command and event lines.
 ///
 /// # Errors
 /// - [`RunError::Output`]: the write or the flush fails.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the seat process exposes wake and report lines while
+///   still serving.
+/// - witness: `seat::tests::a_dispatched_seat_reports_across_restarts_of_either_side`
 fn emit(lines: &dyn fmt::Display) -> Result<(), RunError>
 {
     let mut stdout = std::io::stdout().lock();
@@ -3877,9 +3971,16 @@ fn emit(lines: &dyn fmt::Display) -> Result<(), RunError>
 ///   order each preceded by `: `, and a newline.
 /// - fails: the write's own error when standard error cannot be written.
 /// - panics: none.
+/// - executable: none — standard error is write-only; the judge process witness
+///   compares refusal diagnostics.
 ///
 /// # Errors
 /// - [`std::io::Error`]: standard error cannot be written.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a refused question reports its cause while a malformed
+///   table fails the command.
+/// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
 fn report(error: &dyn Error) -> std::io::Result<()>
 {
     let mut stderr = std::io::stderr().lock();
@@ -3893,14 +3994,20 @@ fn report(error: &dyn Error) -> std::io::Result<()>
 /// Entry point.
 ///
 /// # Specification
-/// - ensures: runs the command line as [`run`] specifies and exits 0, or
-///   [`DRIFT_STATUS`] when it ends in [`Completion::Drifted`], having written
-///   nothing to standard error.
+/// - ensures: runs the command line as [`run`] specifies and exits 0,
+///   [`DRIFT_STATUS`] for [`Completion::Drifted`], or [`INDEX_STATUS`] for
+///   [`Completion::IndexFinding`].
 /// - fails: exits 2 after writing the reason and the synopsis to standard error
 ///   when the command line cannot be run ([`parse`]), and exits 1 after writing
 ///   the reason when the command fails. When standard error cannot be written
 ///   the exit status is the only report.
 /// - panics: none.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the process witnesses observe successful commands and
+///   drift findings through the real entry point.
+/// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
+#[spec(ensures: |ref output| [ExitCode::SUCCESS, ExitCode::FAILURE, ExitCode::from(USAGE_STATUS), ExitCode::from(DRIFT_STATUS), ExitCode::from(INDEX_STATUS)].contains(output))]
 fn main() -> ExitCode
 {
     let invocation = match parse(lexopt::Parser::from_env()) {

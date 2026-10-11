@@ -132,6 +132,7 @@ use core::net::Ipv4Addr;
 use core::net::Ipv6Addr;
 use core::net::SocketAddr;
 
+use anodized::spec;
 use domhringr_arena_session::Edition;
 use gandr_storage_values::CanonicalValue;
 use gandr_storage_values::CanonicalWord;
@@ -359,6 +360,8 @@ impl Operation
     ///   probability.
     /// - fails: [`RandomError`] when the source cannot be read.
     /// - panics: none.
+    /// - executable: none — random-source quality and freshness are external
+    ///   effects; the fence witness checks distinct draws.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
@@ -391,6 +394,12 @@ impl OpenProof
     ///   bytes, so a proof names one owner and is no signature over any other
     ///   message this crate signs.
     /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a proof authorizes its tree and owner, but neither
+    ///   another key nor another owner.
+    /// - witness: `fold::tests::an_open_proved_by_another_key_is_refused`
+    #[spec(ensures: |output| output.verify(TreeId::new(key.public()), owner).is_ok())]
     pub(crate) fn sign(
         key: &iroh::SecretKey,
         owner: PeerKey,
@@ -408,6 +417,8 @@ impl OpenProof
     ///   `owner`.
     /// - fails: iroh's [`SignatureError`] otherwise.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; strict
+    ///   signature verification is witnessed by accepted and forged Opens.
     ///
     /// # Errors
     /// - [`SignatureError`]: the proof was made by another key, for another
@@ -447,6 +458,12 @@ impl EndpointProof
     ///   `holder`'s 32 bytes, so a proof names one holder and is no signature
     ///   over any other message this crate signs.
     /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a presence proof binds the endpoint and its holder,
+    ///   refusing either substitution.
+    /// - witness: `fold::tests::a_presence_naming_another_members_endpoint_is_refused`
+    #[spec(ensures: |output| output.verify(EndpointKey::new(key.public()), holder).is_ok())]
     pub(crate) fn sign(
         key: &iroh::SecretKey,
         holder: PeerKey,
@@ -464,6 +481,8 @@ impl EndpointProof
     ///   signs for `holder`.
     /// - fails: iroh's [`SignatureError`] otherwise.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; accepted and
+    ///   substituted endpoint proofs are the independent oracle.
     ///
     /// # Errors
     /// - [`SignatureError`]: the proof was made by another key, for another
@@ -691,6 +710,8 @@ impl Receipt
     /// - ensures: creates an Indexed receipt with a fresh operation fence.
     /// - fails: the operating system's random source cannot be read.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: fence generation failed.
@@ -736,9 +757,17 @@ impl Receipt
     ///   author of the commit carrying it.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn open(
         key: &TreeKey,
@@ -757,9 +786,17 @@ impl Receipt
     ///   carries a fresh fence ([`Operation::random`]).
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn grant(
         tree: TreeId,
@@ -777,9 +814,17 @@ impl Receipt
     ///   carries a fresh fence ([`Operation::random`]).
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn note(
         tree: TreeId,
@@ -797,9 +842,17 @@ impl Receipt
     ///   `target`, and carries a fresh fence ([`Operation::random`]).
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn bind(
         tree: TreeId,
@@ -819,9 +872,17 @@ impl Receipt
     ///   when the tree's owner is the author of the commit carrying it.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn claim(
         tree: TreeId,
@@ -840,9 +901,17 @@ impl Receipt
     ///   ([`Operation::random`]).
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn introduce(
         tree: TreeId,
@@ -866,9 +935,17 @@ impl Receipt
     ///   `proof` names under the endpoint's key.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     pub(crate) fn present(
         tree: TreeId,
         endpoint: Endpoint,
@@ -892,9 +969,17 @@ impl Receipt
     ///   replays the dispatch under its named edition.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn dispatch(
         tree: TreeId,
@@ -921,9 +1006,17 @@ impl Receipt
     ///   report's causal past.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn report(
         tree: TreeId,
@@ -948,9 +1041,17 @@ impl Receipt
     ///   holder of the slot.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn handoff(
         tree: TreeId,
@@ -970,9 +1071,17 @@ impl Receipt
     ///   the holder of the slot.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn retire(
         tree: TreeId,
@@ -989,6 +1098,8 @@ impl Receipt
     /// - ensures: names the supplied dispatch with a fresh operation fence.
     /// - fails: the operating system random source error is preserved.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// [`RandomError`] when the random source fails.
@@ -1017,9 +1128,17 @@ impl Receipt
     ///   `judge`, and only while `dispatch` is current in its causal past.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn verdict(
         tree: TreeId,
@@ -1051,9 +1170,17 @@ impl Receipt
     ///   past.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn verified(
         tree: TreeId,
@@ -1087,9 +1214,17 @@ impl Receipt
     ///   while the verdict's dispatch is current.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn graded(
         tree: TreeId,
@@ -1117,9 +1252,17 @@ impl Receipt
     ///   past.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn decide(
         tree: TreeId,
@@ -1146,9 +1289,17 @@ impl Receipt
     ///   past whose dispatch is still current.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn landed(
         tree: TreeId,
@@ -1169,9 +1320,17 @@ impl Receipt
     ///   presence.
     /// - fails: [`RandomError`] when no fence can be drawn.
     /// - panics: none.
+    /// - executable: none — freshness depends on the operating system random
+    ///   source; checking copied fields would mirror this constructor.
     ///
     /// # Errors
     /// - [`RandomError`]: the random source failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the constructed kind and payload survive the receipt
+    ///   codec; freshness is witnessed separately.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::fences_are_drawn_fresh`
     #[inline]
     pub fn withdraw(
         tree: TreeId,
@@ -1244,6 +1403,7 @@ impl Receipt
     ///   which pins the grammar.
     /// - witness: `receipt::tests::every_kind_round_trips`
     /// - witness: `receipt::tests::a_note_encodes_to_its_fixed_layout`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |blob| Self::decode(blob).is_ok_and(|decoded| decoded == *self)))]
     pub(crate) fn encode(&self) -> Result<Blob, ValueError>
     {
         let flat = encode_flat(self)?;
@@ -1262,6 +1422,8 @@ impl Receipt
     ///   [`ValueError::UnexpectedConstructor`] for a constructor the receipt
     ///   grammar does not admit.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses test the delegated flat decoder.
     ///
     /// # Errors
     /// - [`ValueError`]: the blob is not a receipt's flat form.
@@ -1301,6 +1463,8 @@ impl CanonicalValue for Receipt
     ///   bytes, and the kind constructor with its payload.
     /// - fails: propagates the sink's refusal unchanged.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; independent
+    ///   fixed-layout receipt witnesses observe the emitted grammar.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -1519,6 +1683,8 @@ impl CanonicalValue for Receipt
     ///   kind, fewer answers than a verdict's count or more, fewer grades than
     ///   a grading's count or more, a truncated stream or an exhausted budget.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses supply the independent grammar oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -1728,6 +1894,8 @@ impl CanonicalValue for Target
     ///   the datum's one bytes record.
     /// - fails: propagates the sink's refusal unchanged.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; independent
+    ///   fixed-layout receipt witnesses observe the emitted grammar.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -1776,6 +1944,8 @@ impl CanonicalValue for Target
     ///   decoder refuses for an anchor; and the reader's own refusals
     ///   otherwise.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses supply the independent grammar oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -1821,6 +1991,8 @@ impl CanonicalValue for Brief
     ///   one bytes record.
     /// - fails: propagates the sink's refusal unchanged.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; independent
+    ///   fixed-layout receipt witnesses observe the emitted grammar.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -1861,6 +2033,8 @@ impl CanonicalValue for Brief
     ///   [`Anchor`]'s decoder refuses for an anchor; and the reader's own
     ///   refusals otherwise.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses supply the independent grammar oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -1901,6 +2075,8 @@ impl CanonicalValue for Anchor
     ///   a commit, the path's text or the commit id's 32 bytes.
     /// - fails: propagates the sink's refusal unchanged.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; independent
+    ///   fixed-layout receipt witnesses observe the emitted grammar.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -1956,6 +2132,8 @@ impl CanonicalValue for Anchor
     ///   abbreviated one among them; as [`Authority`]'s decoder refuses for the
     ///   authority; and the reader's own refusals otherwise.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses supply the independent grammar oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -2004,6 +2182,8 @@ impl CanonicalValue for Authority
     ///   32 bytes or the DNS name's or the label's text.
     /// - fails: propagates the sink's refusal unchanged.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; independent
+    ///   fixed-layout receipt witnesses observe the emitted grammar.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -2051,6 +2231,8 @@ impl CanonicalValue for Authority
     ///   not a verifying key, a DNS name [`Domain`] does not admit, or a label
     ///   [`Label`] does not admit; and the reader's own refusals otherwise.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses supply the independent grammar oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -2097,6 +2279,8 @@ impl CanonicalValue for Endpoint
     /// - fails: propagates the sink's refusal unchanged, and the value plane's
     ///   overflow refusal for more addresses than a word counts.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; independent
+    ///   fixed-layout receipt witnesses observe the emitted grammar.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -2144,6 +2328,8 @@ impl CanonicalValue for Endpoint
     ///   address; and the reader's own refusals for fewer addresses than the
     ///   count, more, or any other record.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses supply the independent grammar oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -2188,6 +2374,8 @@ impl CanonicalValue for Address
     ///   and the port's word, or a relay's holding the URL's text.
     /// - fails: propagates the sink's refusal unchanged.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; independent
+    ///   fixed-layout receipt witnesses observe the emitted grammar.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -2232,6 +2420,8 @@ impl CanonicalValue for Address
     ///   written as it parses back, or one [`Address::relay`] refuses; and the
     ///   reader's own refusals otherwise.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses supply the independent grammar oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -2291,6 +2481,8 @@ impl CanonicalValue for Ruling
     ///   empty constructor.
     /// - fails: propagates the sink's refusal unchanged.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; independent
+    ///   fixed-layout receipt witnesses observe the emitted grammar.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -2352,6 +2544,8 @@ impl CanonicalValue for Ruling
     ///   refusals for fewer probabilities than the count, more, or any other
     ///   record.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses supply the independent grammar oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -2409,6 +2603,8 @@ impl CanonicalValue for Status
     ///   or the signal's two's-complement value.
     /// - fails: propagates the sink's refusal unchanged.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; independent
+    ///   fixed-layout receipt witnesses observe the emitted grammar.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -2446,6 +2642,8 @@ impl CanonicalValue for Status
     ///   record for an unknown status or a word beyond 32 bits; and the
     ///   reader's own refusals for any other record or none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses supply the independent grammar oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -2481,6 +2679,8 @@ impl CanonicalValue for Grade
     ///   grade's empty constructor.
     /// - fails: propagates the sink's refusal unchanged.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; independent
+    ///   fixed-layout receipt witnesses observe the emitted grammar.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -2516,6 +2716,8 @@ impl CanonicalValue for Grade
     ///   record for an unknown grade; and the reader's own refusals for any
     ///   other record or none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses supply the independent grammar oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -2550,6 +2752,8 @@ impl CanonicalValue for Decision
     ///   decision's constructor, holding a rework's reason as one bytes record.
     /// - fails: propagates the sink's refusal unchanged.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; independent
+    ///   fixed-layout receipt witnesses observe the emitted grammar.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a record.
@@ -2589,6 +2793,8 @@ impl CanonicalValue for Decision
     ///   not one [`Summary`] admits; and the reader's own refusals for any
     ///   other record or none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; fixed-layout
+    ///   and malformed receipt witnesses supply the independent grammar oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
@@ -2638,6 +2844,12 @@ impl Opened
     ///
     /// # Errors
     /// - [`ValueError`]: the next record is not an open record.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — malformed receipt fixtures fix the refused
+    ///   constructor and its token position.
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |opened| opened.at < reader.position()))]
     pub(crate) fn read(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
     {
         let at = reader.position();
@@ -2654,9 +2866,17 @@ impl Opened
     ///   another length or that are not a verifying key, and the reader's
     ///   refusals for any other record or none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     fn key(
         self,
         reader: &mut TokenReader<'_>,
@@ -2676,9 +2896,17 @@ impl Opened
     ///   another length, an abbreviated id among them, and the reader's
     ///   refusals for any other record or none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     pub(crate) fn commit(
         self,
         reader: &mut TokenReader<'_>,
@@ -2698,9 +2926,17 @@ impl Opened
     ///   reserved segment — and the reader's refusals for any other record or
     ///   none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     fn path(
         self,
         reader: &mut TokenReader<'_>,
@@ -2719,9 +2955,17 @@ impl Opened
     ///   are not UTF-8 or not a DNS name [`Domain`] admits, and the reader's
     ///   refusals for any other record or none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     fn domain(
         self,
         reader: &mut TokenReader<'_>,
@@ -2742,9 +2986,17 @@ impl Opened
     ///   are not UTF-8 or not a label [`Label`] admits, and the reader's
     ///   refusals for any other record or none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     fn label(
         self,
         reader: &mut TokenReader<'_>,
@@ -2765,9 +3017,17 @@ impl Opened
     ///   another length, and the reader's refusals for any other record or
     ///   none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     pub(crate) fn peer(
         self,
         reader: &mut TokenReader<'_>,
@@ -2786,9 +3046,17 @@ impl Opened
     ///   another length, and the reader's refusals for any other record or
     ///   none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     fn content(
         self,
         reader: &mut TokenReader<'_>,
@@ -2808,9 +3076,17 @@ impl Opened
     ///   another length, and the reader's refusals for any other record or
     ///   none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     fn manifest(
         self,
         reader: &mut TokenReader<'_>,
@@ -2831,9 +3107,17 @@ impl Opened
     ///   256 bytes, or holding a control character — and the reader's refusals
     ///   for any other record or none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     fn summary(
         self,
         reader: &mut TokenReader<'_>,
@@ -2856,9 +3140,17 @@ impl Opened
     ///   one above one — or encodes negative zero, which a probability writes
     ///   as zero; and the reader's refusals for any other record or none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     fn probability(
         self,
         reader: &mut TokenReader<'_>,
@@ -2883,9 +3175,17 @@ impl Opened
     ///   character beside lowercase letters, digits and hyphens — and the
     ///   reader's refusals for any other record or none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     fn step(
         self,
         reader: &mut TokenReader<'_>,
@@ -2905,9 +3205,17 @@ impl Opened
     ///   any other length, and the reader's refusals for any other record or
     ///   none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; receipt
+    ///   fixtures fix the parsed payload and refusal position.
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — receipt round-trips retain this payload, and
+    ///   malformed fixtures fix its refusal.
+    /// - witness: `receipt::tests::every_kind_round_trips`
+    /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     pub(crate) fn revision(
         self,
         reader: &mut TokenReader<'_>,

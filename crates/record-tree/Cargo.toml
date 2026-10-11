@@ -12,6 +12,7 @@ categories = ["network-programming"]
 publish.workspace = true
 
 [dependencies]
+anodized = { workspace = true }
 blake3 = { workspace = true }
 data-encoding = { workspace = true }
 domhringr-arena-session = { workspace = true }

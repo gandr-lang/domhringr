@@ -119,6 +119,13 @@ impl core::fmt::Display for Heads
     ///   a tree without heads. Lowercase hex of equal length sorts as the bytes
     ///   it spells, so the lines are sorted as text too.
     /// - panics: none.
+    /// - executable: none — the formatter is write-only; stored-frontier
+    ///   witnesses observe the ordered lines.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the frontier witness compares the complete textual
+    ///   head set.
+    /// - witness: `store::tests::commits_chain_on_the_heads_and_survive_a_reopen`
     #[inline]
     fn fmt(
         &self,
@@ -168,6 +175,9 @@ impl Peer
     ///   [`OpenError::Storage`] when the store cannot be created or opened,
     ///   including when another process holds it.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`OpenError::Runtime`]: there is no current Tokio runtime.
@@ -250,6 +260,9 @@ impl Peer
     ///   [`CommitError::Read`] when the tree cannot be read from storage,
     ///   [`CommitError::Write`] when the commit cannot be stored.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     /// - intension: a commit at a fragment boundary is stored as a loose
     ///   commit; no fragment is built for it.
     ///
@@ -303,6 +316,9 @@ impl Peer
     ///   [`ViewError::Unopened`] when none of them is the tree's Open,
     ///   including for a tree the store has never seen.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`ViewError::Load`]: the storage read fails.
@@ -334,6 +350,9 @@ impl Peer
     /// - fails: missing commits are named; storage and unopened-tree failures
     ///   retain their original causes.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`ViewAtError::Missing`]: a head or ancestor is not held.
@@ -417,6 +436,9 @@ impl Peer
     ///   one commit of the tree has an id beginning with an abbreviated
     ///   commit's prefix.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`WhenceError::Witness`]: the witness cannot be read.
@@ -514,6 +536,9 @@ impl Peer
     ///   [`WhenceError::Unscoped`] for a label read in no tree, and
     ///   [`WhenceError::View`] when the scope's tree's commits cannot be read.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`WhenceError::Witness`]: the witness cannot be read.
@@ -605,6 +630,9 @@ impl Peer
     ///   read and holds no presence of the peer — withdrawn, never presented,
     ///   or the tree not held.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`RouteError::View`]: the tree's commits cannot be read.
@@ -664,9 +692,17 @@ impl Peer
     /// - fails: [`WhenceError::View`] naming `tree`, carrying why it has no
     ///   view.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`WhenceError::View`]: the tree has no view.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — anchor resolution distinguishes a held tree from an
+    ///   unopened tree.
+    /// - witness: `store::tests::whence_resolves_an_anchor_by_fold`
     async fn folded(
         &self,
         tree: TreeId,
@@ -688,6 +724,9 @@ impl Peer
     ///   claiming tree, and [`WhenceError::View`] for a witnessed tree whose
     ///   commits cannot be read, as [`Peer::whence`] states them.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`WhenceError::Witness`]: the witness cannot be read.
@@ -695,6 +734,11 @@ impl Peer
     /// - [`WhenceError::Unclaimed`]: no witnessed tree claims the domain.
     /// - [`WhenceError::Ambiguous`]: several witnessed trees claim it.
     /// - [`WhenceError::View`]: a witnessed tree's commits cannot be read.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a witnessed claim resolves, while multiple claimants
+    ///   are refused.
+    /// - witness: `store::tests::two_witnessed_trees_claiming_one_domain_are_ambiguous`
     async fn claimant<W>(
         &self,
         domain: &Domain,
@@ -758,12 +802,20 @@ impl Peer
     ///   [`WhenceError::View`] when its tree has no view, and
     ///   [`WhenceError::Unintroduced`] when that view introduces no `label`.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`WhenceError::Unscoped`]: no tree is named to read the label in.
     /// - [`WhenceError::View`]: the scope's tree has no view.
     /// - [`WhenceError::Unintroduced`]: the scope's tree does not introduce the
     ///   label.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a label resolves only in its introducing scope and
+    ///   fails outside it.
+    /// - witness: `store::tests::a_label_resolves_in_the_tree_that_introduced_it_alone`
     async fn introduced(
         &self,
         label: &Label,
@@ -793,6 +845,9 @@ impl Peer
     ///   seen has none, as subduction's sync treats it.
     /// - fails: [`HeadsError`] when the tree cannot be loaded from storage.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`HeadsError`]: the storage read fails.
@@ -824,6 +879,9 @@ impl Peer
     ///   names, and is left out.
     /// - fails: [`TreesError`] when the store cannot be read.
     /// - panics: none.
+    /// - executable: none — storage, runtime or witness I/O cannot be replayed
+    ///   in a predicate; the store witnesses observe the resulting state and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`TreesError`]: the storage read fails.
@@ -856,6 +914,9 @@ impl Peer
 /// - fails: [`WhenceError::AmbiguousCommit`], carrying the prefix and every
 ///   commit beginning with it, when it finds more than one.
 /// - panics: none.
+/// - executable: none — the function is its own specification; resolution
+///   witnesses distinguish paths, whole commits and absent, unique or ambiguous
+///   prefixes.
 ///
 /// # Errors
 /// - [`WhenceError::AmbiguousCommit`]: several commits begin with the prefix.

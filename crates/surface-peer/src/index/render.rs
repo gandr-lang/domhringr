@@ -31,6 +31,9 @@ use super::Reader;
 ///   when absence has no successor; all receipts name the selected task.
 /// - fails: a false proof, foreign task or unresolved move reference fails.
 /// - panics: none.
+/// - executable: none — proof queries and their network resources are
+///   asynchronous effects; the project-only witness compares authenticated
+///   output without acquiring task trees.
 ///
 /// # Errors
 /// - [`IndexError`]: proof, move language, transport or formatting refusal.
@@ -170,6 +173,8 @@ fn moves(
 ///   verdict or decision it references; a non-move never prints as a move.
 /// - fails: an absent, wrong-kind or wrong-arity reference is refused.
 /// - panics: none.
+/// - executable: none — the function is its own specification; the project-only
+///   witness compares proved original identities with receipt replay.
 ///
 /// # Errors
 /// - [`IndexError::Shape`]: an unresolved or non-move receipt.

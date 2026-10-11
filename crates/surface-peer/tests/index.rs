@@ -1,17 +1,5 @@
 //! Keyed questions proved by the peer binary without importing task trees.
 
-// Temporary until the executable-specs-record backfill covers this crate.
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    allow(
-        spec_attribute_present,
-        adequacy_present,
-        maybe_shape,
-        erased_error_signature,
-        spec_attribute_unqualified
-    )
-)]
-
 extern crate alloc;
 
 #[cfg(test)]
@@ -35,6 +23,14 @@ mod tests
     ///   root supplied outside that manifest.
     /// - panics: unless the answer is membership or its fields fit the wire
     ///   width.
+    /// - executable: none — the function is its own specification; the process
+    ///   witness supplies the output or proof image and checks its
+    ///   interpretation.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
     fn member_image(
         answer: &domhringr_record_index::prove::Answer
     ) -> domhringr_record_index::WireImage
@@ -61,6 +57,14 @@ mod tests
     ///
     /// # Specification
     /// - panics: when a field exceeds the wire width.
+    /// - executable: none — the function is its own specification; the process
+    ///   witness supplies the output or proof image and checks its
+    ///   interpretation.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
     fn frame(
         image: &mut domhringr_record_index::WireImage,
         field: impl AsRef<[u8]>,
@@ -78,6 +82,14 @@ mod tests
     /// # Specification
     /// - ensures: every image answers a separate request on one connection.
     /// - panics: on transport failure or reader timeout.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
     async fn hostile(
         holder: &domhringr_record_tree::Node,
         images: Vec<domhringr_record_index::WireImage>,
@@ -113,6 +125,14 @@ mod tests
     ///   exactly one MiB reaches framing, while an extra byte fails at the read
     ///   boundary.
     /// - panics: on any accepted forgery or incorrect boundary classification.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
     fn hostile_answers_are_refused(fixture: &Fixture)
     {
         use domhringr_record_index::AttemptNumber;
@@ -249,6 +269,14 @@ mod tests
     /// - ensures: the child exits within the deadline.
     /// - panics: on process I/O failure or deadline expiry, killing the child
     ///   first.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
     fn run(command: &mut Command) -> Output
     {
         let mut child = command
@@ -273,6 +301,14 @@ mod tests
     ///
     /// # Specification
     /// - panics: on failure, timeout or non-UTF-8 output.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
     fn finish(command: &mut Command) -> Vec<String>
     {
         let output = run(command);
@@ -288,6 +324,14 @@ mod tests
     ///
     /// # Specification
     /// - panics: as `finish`, or unless exactly one line is printed.
+    /// - executable: none — the function is its own specification; the process
+    ///   witness supplies the output or proof image and checks its
+    ///   interpretation.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
     fn only(command: &mut Command) -> String
     {
         let mut lines = finish(command);
@@ -299,6 +343,14 @@ mod tests
     ///
     /// # Specification
     /// - panics: if the socket cannot be bound or inspected.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
     fn free_port() -> String
     {
         let socket = std::net::UdpSocket::bind(("127.0.0.1", 0)).unwrap();
@@ -322,6 +374,14 @@ mod tests
         /// - ensures: the server has announced both identities and its
         ///   listener.
         /// - panics: on process failure or a missing announcement.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
         fn serve(
             state: &Path,
             port: &OsStr,
@@ -359,6 +419,14 @@ mod tests
         /// # Specification
         /// - ensures: the server no longer holds its state directory.
         /// - panics: on process I/O failure.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
         fn drop(&mut self)
         {
             self.child.kill().unwrap();
@@ -401,6 +469,14 @@ mod tests
         ///   first attempt reports then retires, the second reports and stays
         ///   live.
         /// - panics: on any process or semantic contract failure.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
         fn new() -> Self
         {
             let root = tempfile::tempdir().unwrap();

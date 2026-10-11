@@ -171,6 +171,8 @@ struct Seat
 ///   its store holds is acted on as [`act`] states. Once the endpoint closes
 ///   the last event is [`Event::Closed`].
 /// - panics: none.
+/// - executable: none — spawned work, streams and durable writes are external
+///   effects; seat witnesses observe events, reports and retained evidence.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — an operator wakes a seat serving in-process: the seat
@@ -213,6 +215,13 @@ pub fn serve(
 ///   connection under another protocol the node accepts is closed and told as
 ///   [`AcceptError::Protocol`]. Ends after telling [`Event::Closed`].
 /// - panics: none.
+/// - executable: none — spawned work, streams and durable writes are external
+///   effects; seat witnesses observe events, reports and retained evidence.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a real wake reaches the surface, reports its output and
+///   serves the retained evidence.
+/// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
 async fn accept(seat: Arc<Seat>)
 {
     loop {
@@ -275,6 +284,13 @@ async fn prove(
 ///   awaited; tells [`Event::Declined`] for a decline, its reason the one the
 ///   reply names; tells [`Event::Unanswered`] when the stream fails.
 /// - panics: none.
+/// - executable: none — spawned work, streams and durable writes are external
+///   effects; seat witnesses observe events, reports and retained evidence.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a real wake reaches the surface, reports its output and
+///   serves the retained evidence.
+/// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
 async fn answer(
     seat: Arc<Seat>,
     connection: iroh::endpoint::Connection,
@@ -304,6 +320,13 @@ async fn answer(
 ///   tells [`Event::Served`] with what was sent, or [`Event::Unserved`] when
 ///   the stream failed.
 /// - panics: none.
+/// - executable: none — spawned work, streams and durable writes are external
+///   effects; seat witnesses observe events, reports and retained evidence.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a real wake reaches the surface, reports its output and
+///   serves the retained evidence.
+/// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
 async fn give(
     seat: Arc<Seat>,
     connection: iroh::endpoint::Connection,
@@ -324,8 +347,15 @@ async fn give(
 ///   ([`act`]) on a task of its own. A tree that cannot be folded is told as
 ///   [`Event::Unresumed`] and the rest are resumed.
 /// - panics: none.
+/// - executable: none — spawned work, streams and durable writes are external
+///   effects; seat witnesses observe events, reports and retained evidence.
 ///
 /// [`Peer::trees`]: domhringr_record_tree::Peer::trees
+///
+/// # Adequacy
+/// - hypothesis: L3 — a stored, held dispatch runs and reports on startup
+///   without an operator wake.
+/// - witness: `seat::tests::a_seat_resumes_on_start_what_it_holds`
 async fn resume(seat: Arc<Seat>)
 {
     let trees = match seat.node.peer().trees().await {
@@ -365,6 +395,13 @@ async fn resume(seat: Arc<Seat>)
 ///   [`Event::Unreported`] with why none was committed; the slot stays held
 ///   either way.
 /// - panics: none.
+/// - executable: none — spawned work, streams and durable writes are external
+///   effects; seat witnesses observe events, reports and retained evidence.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a real wake reaches the surface, reports its output and
+///   serves the retained evidence.
+/// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
 async fn act(
     seat: Arc<Seat>,
     tree: TreeId,
@@ -400,6 +437,14 @@ impl Seat
     ///   that receiver is dropped no one listens, and the event is dropped with
     ///   it.
     /// - panics: none.
+    /// - executable: none — channel delivery, synchronization and durable
+    ///   effects cannot be replayed in a predicate; seat witnesses observe
+    ///   their results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a held wake presents the seat, acts and reports,
+    ///   while a wake to an unheld dispatch is declined.
+    /// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
     fn tell(
         &self,
         event: Event,
@@ -420,9 +465,17 @@ impl Seat
     /// - fails: [`AnswerError`] when the stream cannot be accepted, read,
     ///   written or finished.
     /// - panics: none.
+    /// - executable: none — channel delivery, synchronization and durable
+    ///   effects cannot be replayed in a predicate; seat witnesses observe
+    ///   their results.
     ///
     /// # Errors
     /// - [`AnswerError`]: the stream failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a held wake presents the seat, acts and reports,
+    ///   while a wake to an unheld dispatch is declined.
+    /// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
     async fn converse(
         &self,
         connection: &iroh::endpoint::Connection,
@@ -465,11 +518,19 @@ impl Seat
     ///   [`Declined::NotHeld`] when the slot is with another seat or retired,
     ///   and [`Declined::Unpresented`] when the presence cannot be committed.
     /// - panics: none.
+    /// - executable: none — channel delivery, synchronization and durable
+    ///   effects cannot be replayed in a predicate; seat witnesses observe
+    ///   their results.
     ///
     /// # Errors
     /// - [`Declined`]: as listed above.
     ///
     /// [`wake`]: crate::wake::wake
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a held wake presents the seat, acts and reports,
+    ///   while a wake to an unheld dispatch is declined.
+    /// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
     async fn consider(
         &self,
         wake: &Wake,
@@ -519,9 +580,17 @@ impl Seat
     ///   [`ActError::Random`] when no fence can be drawn, and
     ///   [`ActError::Commit`] when the report cannot be committed.
     /// - panics: none.
+    /// - executable: none — channel delivery, synchronization and durable
+    ///   effects cannot be replayed in a predicate; seat witnesses observe
+    ///   their results.
     ///
     /// # Errors
     /// - [`ActError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a held wake presents the seat, acts and reports,
+    ///   while a wake to an unheld dispatch is declined.
+    /// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`
     async fn report(
         &self,
         tree: TreeId,

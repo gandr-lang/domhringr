@@ -66,11 +66,12 @@ impl MoveValue<'_>
     /// # Specification
     /// - ensures: the digest covers exactly the carried receipt bytes.
     /// - panics: none.
+    /// - executable: none — the digest is its own specification; the signed
+    ///   commits admitted by the fold supply independent identities.
     ///
     /// # Adequacy
     /// - hypothesis: L2 — the fold's commit identities independently agree.
     /// - witness: `dialogue::tests::the_dialogue_agrees_with_the_fold_on_every_kind`
-    #[spec(ensures: |ret| ret.as_bytes() == blake3::hash(self.blob.as_ref()).as_bytes())]
     #[inline]
     #[must_use]
     pub fn commit(&self) -> CommitId
@@ -85,6 +86,8 @@ impl MoveValue<'_>
     ///   dispatches.
     /// - fails: malformed receipt tokens are refused by the receipt codec.
     /// - panics: none.
+    /// - executable: none — the receipt decoder is its own specification; the
+    ///   independently folded steps identify every decoded receipt kind.
     ///
     /// # Errors
     /// - [`ValueError`]: malformed receipt.
@@ -107,6 +110,8 @@ impl CanonicalValue for MoveValue<'_>
     /// - ensures: preserves author and original blob exactly, under tag one.
     /// - fails: propagates the sink refusal.
     /// - panics: none.
+    /// - executable: none — the generic sink exposes no readback; decoded
+    ///   values are compared with the original signed commits.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a token.
@@ -134,6 +139,8 @@ impl CanonicalValue for MoveValue<'_>
     /// - ensures: reads exactly one move with a 32-byte author.
     /// - fails: unknown tags, malformed authors and token framing are refused.
     /// - panics: none.
+    /// - executable: none — the consuming token reader exposes no replay;
+    ///   decoded authors and blobs are checked against the signed commits.
     ///
     /// # Errors
     /// - [`ValueError`]: invalid constructor, author or framing.

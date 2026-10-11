@@ -25,6 +25,7 @@ use std::process::ExitStatus;
 use std::process::Output;
 use std::process::Stdio;
 
+use anodized::spec;
 use domhringr_record_tree::Anchor;
 use domhringr_record_tree::Authority;
 use domhringr_record_tree::Path;
@@ -209,6 +210,8 @@ impl fmt::Display for Escaped<'_>
     ///   begins with the backslash a literal backslash is escaped to.
     /// - fails: the formatter's own error.
     /// - panics: none.
+    /// - executable: none — the formatter is write-only; the report fixture
+    ///   observes escaping and field boundaries.
     ///
     /// # Errors
     /// - [`fmt::Error`]: the formatter refused a write.
@@ -300,6 +303,7 @@ impl FromStr for Page
     ///   a doubled `/`, and a `.` and a `..` segment.
     /// - witness: `drift::tests::a_page_datum_reads_its_path_and_commit`
     /// - witness: `drift::tests::a_malformed_page_datum_is_refused_by_name`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |page| format!("vault:{}@{}", page.path.0, page.revision.0) == text))]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
         let rest = text.strip_prefix(VAULT).ok_or(ParseDatumError::Scheme)?;
@@ -456,6 +460,9 @@ impl Citations
     /// - fails: [`CheckError::Unreadable`] naming the public checkout when a
     ///   line lacks either NUL or its number is not a positive decimal.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the scan
+    ///   fixture compares citations, deduplication and malformed framing
+    ///   independently.
     ///
     /// # Errors
     /// - [`CheckError::Unreadable`]: the listing is not in the form asked for.
@@ -597,6 +604,7 @@ impl Held
     ///   answer short, one answer over, an unknown object type and a missing
     ///   answer echoing another query are each refused.
     /// - witness: `drift::tests::the_vault_answers_each_query_with_a_blob_or_an_absence`
+    #[spec(requires: queries.iter().all(|query| !query.0.contains('\n')), ensures: |ref output| output.as_ref().map_or(true, |held| held.len() == queries.len()))]
     fn answers(
         answers: &GitOutput,
         queries: &[Query],
@@ -650,6 +658,8 @@ impl Standing
     ///   [`Standing::Drifted`] when `head` is a blob and `bound` another or
     ///   absent.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the standing
+    ///   fixture supplies the complete blob and absence truth table.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — the same blob at both, two blobs, a blob at `HEAD`
@@ -695,6 +705,8 @@ impl Datum
     ///   [`Datum::Unreadable`] with the target as `view` writes it for any
     ///   other datum, an anchor and an endpoint.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the target
+    ///   fixture distinguishes page data from every other target kind.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a page datum reads to its page, and a datum the
@@ -857,6 +869,7 @@ impl Report
     ///   file and line 1 of another, and anchors whose order is neither their
     ///   states' nor their places', print in the specified order.
     /// - witness: `drift::tests::findings_are_reported_in_anchor_order`
+    #[spec(ensures: |ref output| output.0.is_sorted())]
     fn new(mut findings: Vec<Finding>) -> Self
     {
         findings.sort();
@@ -917,6 +930,9 @@ impl fmt::Display for Report
 ///   there, as in a directory that is no checkout, and
 ///   [`CheckError::Unreadable`] when its output is not in the form asked for.
 /// - panics: none.
+/// - executable: none — repository contents and subprocess effects cannot be
+///   replayed in a predicate; the checkout fixture observes the resulting
+///   report.
 ///
 /// # Errors
 /// - [`CheckError::Run`]: git cannot run in a checkout.
@@ -954,6 +970,8 @@ pub fn check(
 /// - fails: as [`run`]; [`CheckError::Git`] when git exits other than 0, or
 ///   than 1 with nothing written; and as [`Citations::read`].
 /// - panics: none.
+/// - executable: none — git reads external files; the checkout fixture observes
+///   citations and their locations.
 ///
 /// # Errors
 /// - [`CheckError::Run`]: git cannot run in the checkout.
@@ -1022,6 +1040,7 @@ fn scan(
 ///   deleted and an uncited page, rebinds the rewritten one at `HEAD` and
 ///   restores the deleted one; each is printed or cleared by its standing.
 /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
+#[spec(ensures: |ref output| output.as_ref().map_or(true, |readings| readings.keys().copied().eq(bindings.keys())))]
 fn stand<'view>(
     vault: &std::path::Path,
     bindings: &'view BTreeMap<Path, (PeerKey, Target)>,
@@ -1090,6 +1109,7 @@ fn stand<'view>(
 ///   concept on three lines and an unreadable hit yield exactly their findings;
 ///   a consistent cited binding yields none.
 /// - witness: `drift::tests::findings_are_reported_in_anchor_order`
+#[spec(ensures: |ref output| output.findings().is_sorted())]
 fn judge(
     tree: TreeId,
     readings: &BTreeMap<&Path, Reading>,
@@ -1157,6 +1177,9 @@ struct Input(String);
 ///   with every variable of [`REPOSITORY_VARIABLES`] removed from its
 ///   environment.
 /// - panics: none.
+/// - executable: none — the configured environment takes effect in a
+///   subprocess; the checkout fixture runs with conflicting repository
+///   variables.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — the process test runs the check with `GIT_DIR`,
@@ -1185,6 +1208,8 @@ fn git(directory: &std::path::Path) -> Command
 ///   then exits 0; a command that fails before reading its input is reported by
 ///   its exit status.
 /// - panics: none.
+/// - executable: none — subprocess pipes and exit status are external effects;
+///   the checkout fixture observes their output.
 ///
 /// # Errors
 /// - [`CheckError::Run`]: the command cannot start, or its input or output

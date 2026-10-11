@@ -5,18 +5,6 @@
 //! dispatch, and the replay shows them. The rubric set under `rubrics/` is
 //! graded the same way: every rubric validates and grades its fixture pair.
 
-// Temporary until the executable-specs-record backfill covers this crate.
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    allow(
-        spec_attribute_present,
-        adequacy_present,
-        maybe_shape,
-        erased_error_signature,
-        spec_attribute_unqualified
-    )
-)]
-
 #[cfg(test)]
 mod tests
 {
@@ -31,6 +19,7 @@ mod tests
     use std::sync::mpsc;
     use std::time::Instant;
 
+    use anodized::spec;
     use domhringr_strategy_document::Loaded;
     use domhringr_strategy_document::Rubric;
 
@@ -126,6 +115,14 @@ question = { rubric = "rubric.toml", question = "tested" }
     /// - ensures: the command exited within [`DEADLINE`].
     /// - panics: when it cannot start or outlives the deadline (it is killed
     ///   first).
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
     fn run(command: &mut Command) -> Output
     {
         let mut child = command
@@ -149,6 +146,14 @@ question = { rubric = "rubric.toml", question = "tested" }
     ///
     /// # Specification
     /// - panics: unless the standard output is UTF-8.
+    /// - executable: none — the function is its own specification; the process
+    ///   witness supplies the output or proof image and checks its
+    ///   interpretation.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
     fn printed(output: &Output) -> Vec<String>
     {
         String::from_utf8(output.stdout.clone())
@@ -162,6 +167,14 @@ question = { rubric = "rubric.toml", question = "tested" }
     ///
     /// # Specification
     /// - panics: unless the standard error is UTF-8.
+    /// - executable: none — the function is its own specification; the process
+    ///   witness supplies the output or proof image and checks its
+    ///   interpretation.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
     fn diagnosed(output: &Output) -> Vec<String>
     {
         String::from_utf8(output.stderr.clone())
@@ -177,6 +190,14 @@ question = { rubric = "rubric.toml", question = "tested" }
     /// - ensures: the command exited 0 within [`DEADLINE`].
     /// - panics: as [`run`], or when it exits non-zero (its standard error is
     ///   shown) or prints anything but UTF-8.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
     fn finish(command: &mut Command) -> Vec<String>
     {
         let output = run(command);
@@ -196,6 +217,14 @@ question = { rubric = "rubric.toml", question = "tested" }
     /// - ensures: the command exited 1 within [`DEADLINE`] and printed nothing.
     /// - panics: as [`run`], or when it exits otherwise, prints anything, or
     ///   writes other than one line to standard error.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
     fn refused(command: &mut Command) -> String
     {
         let output = run(command);
@@ -226,6 +255,12 @@ question = { rubric = "rubric.toml", question = "tested" }
     /// # Specification
     /// - ensures: at least one file, sorted by path.
     /// - panics: when the set's directory cannot be read or holds no rubric.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — each rubric is validated and its paired fixtures
+    ///   distinguish the claimed grades.
+    /// - witness: `strategy::tests::every_rubric_in_the_set_grades_its_fixture_pair`
+    #[spec(ensures: |ref output| output.is_sorted())]
     fn rubric_files() -> Vec<PathBuf>
     {
         let mut files = std::fs::read_dir(SET)
@@ -271,6 +306,14 @@ question = { rubric = "rubric.toml", question = "tested" }
     ///   printed.
     /// - panics: when the command fails or prints other lines, or the rubric is
     ///   not named for its file.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `strategy::tests::every_rubric_in_the_set_grades_its_fixture_pair`
     fn validate(
         state: &Path,
         file: &Path,
@@ -317,8 +360,16 @@ question = { rubric = "rubric.toml", question = "tested" }
     /// holds.
     ///
     /// # Specification
-    /// - ensures: the file's text without its final line break.
+    /// - ensures: the file's text without trailing whitespace.
     /// - panics: when the file cannot be read.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `strategy::tests::every_rubric_in_the_set_grades_its_fixture_pair`
     fn isolated(pair: &Path) -> String
     {
         std::fs::read_to_string(pair.join("isolates"))
@@ -351,6 +402,14 @@ question = { rubric = "rubric.toml", question = "tested" }
         ///   the brief [`BRIEF`]; the dispatching process is gone once the
         ///   dispatch is committed.
         /// - panics: when a command fails or prints other than its contract.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
         fn open(
             o: &Path,
             s: &Path,
@@ -401,6 +460,14 @@ question = { rubric = "rubric.toml", question = "tested" }
         /// - ensures: the process is running and its standard output is read
         ///   line by line; its standard error passes through to the test's.
         /// - panics: when the process cannot start.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
         fn spawn(command: &mut Command) -> Self
         {
             let mut child = command
@@ -426,6 +493,14 @@ question = { rubric = "rubric.toml", question = "tested" }
         /// # Specification
         /// - panics: when no line arrives within [`DEADLINE`], or the process's
         ///   output ends.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
         fn line(&self) -> String
         {
             self.lines.recv_timeout(DEADLINE).unwrap_or_else(|error| {
@@ -441,6 +516,14 @@ question = { rubric = "rubric.toml", question = "tested" }
         /// # Specification
         /// - ensures: the process has exited and been reaped.
         /// - panics: when the process cannot be killed or reaped.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
         fn drop(&mut self)
         {
             self.child.kill().unwrap();

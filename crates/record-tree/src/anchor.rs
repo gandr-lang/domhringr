@@ -28,6 +28,7 @@ use core::fmt;
 use core::fmt::Write as _;
 use core::str::FromStr;
 
+use anodized::spec;
 use sedimentree_core::loose_commit::id::CommitId;
 
 use crate::fold::Verdict;
@@ -87,6 +88,9 @@ impl FromStr for Path
     /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |path|
+        path.as_ref() == text && !path.as_ref().is_empty()
+    ))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -176,6 +180,7 @@ impl FromStr for Authority
     /// - witness: `anchor::tests::a_malformed_anchor_is_refused_by_name`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |authority| authority.to_string() == text))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -316,6 +321,7 @@ impl FromStr for Anchor
     /// - witness: `anchor::tests::a_commit_reference_may_abbreviate_its_id`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |anchor| anchor.to_string() == text))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -473,6 +479,10 @@ impl FromStr for Reference
     /// - witness: `anchor::tests::a_malformed_anchor_is_refused_by_name`
     /// - witness: `anchor::tests::a_reserved_segment_is_refused_by_name`
     /// - witness: `anchor::tests::a_commit_reference_may_abbreviate_its_id`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |reference| match *reference {
+        Self::Anchor(ref anchor) => anchor.to_string() == text,
+        Self::Abbreviated { ref authority, ref prefix } => format!("{SCHEME}{authority}/{COMMIT}/{prefix}") == text,
+    }))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -594,6 +604,13 @@ impl fmt::Display for Target
     /// - ensures: one line with no newline: an anchor's or a datum's
     ///   backslashes and control characters are escaped as a note's are.
     /// - panics: none.
+    /// - executable: none — the formatter hides the emitted bytes; the view
+    ///   witness observes target fields at the printed boundary.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — rendered bindings retain their target and remain one
+    ///   escaped line alongside the other view facts.
+    /// - witness: `fold::tests::a_view_prints_one_line_per_fact`
     #[inline]
     fn fmt(
         &self,

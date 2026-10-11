@@ -37,8 +37,11 @@ publish = false
 # - judge-oracle
 # - record-evidence
 # - record-index
+# - record-tree
+# - seat-slot
 # - strategy-document
 # - surface-driver
+# - surface-peer
 [workspace.dependencies.anodized]
 package = "quenchant-anodized"
 git = "https://github.com/gandr-lang/quenchant"
