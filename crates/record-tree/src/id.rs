@@ -68,6 +68,41 @@ impl TreeId
     }
 }
 
+impl AsRef<[u8]> for TreeId
+{
+    /// Borrow the tree's verifying-key bytes.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn as_ref(&self) -> &[u8]
+    {
+        self.0.as_bytes()
+    }
+}
+
+impl TryFrom<[u8; 32]> for TreeId
+{
+    type Error = ParseIdError;
+
+    /// Read a tree's binary verifying key.
+    ///
+    /// # Specification
+    /// - ensures: the identity retains exactly the accepted key bytes.
+    /// - fails: an invalid verifying key is refused.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ParseIdError::TreeKey`]: the bytes are not a verifying key.
+    #[inline]
+    fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error>
+    {
+        iroh::PublicKey::from_bytes(&bytes)
+            .map(Self)
+            .map_err(ParseIdError::TreeKey)
+    }
+}
+
 impl FromStr for TreeId
 {
     type Err = ParseIdError;
@@ -158,6 +193,32 @@ impl PeerKey
     pub(crate) const fn peer_id(self) -> PeerId
     {
         self.0
+    }
+}
+
+impl From<[u8; 32]> for PeerKey
+{
+    /// Keep all bytes of the claimed author's subduction identity.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn from(bytes: [u8; 32]) -> Self
+    {
+        Self(PeerId::new(bytes))
+    }
+}
+
+impl AsRef<[u8]> for PeerKey
+{
+    /// Borrow the author's binary identity.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn as_ref(&self) -> &[u8]
+    {
+        self.0.as_bytes()
     }
 }
 
@@ -374,6 +435,79 @@ impl fmt::Display for ContentHash
     ) -> fmt::Result
     {
         fmt::Display::fmt(&self.0, f)
+    }
+}
+
+/// The BLAKE3 identity of a keyed-plane manifest, opaque to the fold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct IndexDigest([u8; 32]);
+
+impl From<[u8; 32]> for IndexDigest
+{
+    /// Wrap a manifest identity.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn from(bytes: [u8; 32]) -> Self
+    {
+        Self(bytes)
+    }
+}
+
+impl AsRef<[u8]> for IndexDigest
+{
+    /// Borrow the identity's bytes.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn as_ref(&self) -> &[u8]
+    {
+        &self.0
+    }
+}
+
+impl FromStr for IndexDigest
+{
+    type Err = ParseIdError;
+
+    /// Read exactly 64 hexadecimal digits.
+    ///
+    /// # Specification
+    /// - ensures: accepts exactly the hexadecimal language of a content hash.
+    /// - fails: a wrong length or non-hexadecimal digit names its refusal.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ParseIdError`]: malformed hexadecimal identity.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the attestation golden distinguishes every identity
+    ///   byte.
+    /// - witness: `receipt::tests::an_attestation_has_one_layout`
+    #[inline]
+    fn from_str(text: &str) -> Result<Self, Self::Err>
+    {
+        let bytes = text.parse::<HexBytes>()?;
+        Ok(Self(bytes.0))
+    }
+}
+
+impl fmt::Display for IndexDigest
+{
+    /// Write 64 lowercase hexadecimal digits.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result
+    {
+        fmt::Display::fmt(&blake3::Hash::from_bytes(self.0), f)
     }
 }
 

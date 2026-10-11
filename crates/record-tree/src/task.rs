@@ -30,6 +30,8 @@
 //!
 //! [`ContentHash`]: crate::id::ContentHash
 
+mod codec;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -604,6 +606,18 @@ impl fmt::Display for Current
     }
 }
 
+/// The original bytes and verified author of an admitted move.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MoveSource
+{
+    /// The original receipt's identity.
+    pub commit: CommitId,
+    /// The verified commit signer.
+    pub author: PeerKey,
+    /// The original flat receipt, including any supported legacy layout.
+    pub blob: sedimentree_core::blob::Blob,
+}
+
 /// A tree read as a task: the seat receipts the fold admitted, and the
 /// current attempt.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -612,6 +626,8 @@ pub struct Task
     /// The admitted dispatches, reports, handoffs and retirements, each with
     /// its commit, in canonical order.
     steps: Vec<(CommitId, Step)>,
+    /// The original author and blob for each folded step, in the same order.
+    sources: Vec<MoveSource>,
     /// The current attempt.
     current: Current,
 }
@@ -626,6 +642,7 @@ impl Task
     {
         Self {
             steps: Vec::new(),
+            sources: Vec::new(),
             current: Current::Undispatched,
         }
     }
@@ -640,6 +657,28 @@ impl Task
     pub fn steps(&self) -> &[(CommitId, Step)]
     {
         &self.steps
+    }
+    /// The original source of each admitted move in canonical order.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub fn sources(&self) -> &[MoveSource]
+    {
+        &self.sources
+    }
+
+    /// Retain the source of the step the fold just admitted.
+    ///
+    /// # Specification
+    /// trivial.
+    pub(crate) fn record_source(
+        &mut self,
+        source: MoveSource,
+    )
+    {
+        self.sources.push(source);
     }
 
     /// The evidence the admitted steps name, each with the peer whose receipt
@@ -835,95 +874,124 @@ impl fmt::Display for Task
     ) -> fmt::Result
     {
         for &(commit, ref step) in &self.steps {
-            match *step {
-                | Step::Dispatch {
-                    seat,
-                    edition,
-                    ref brief,
-                } => {
-                    writeln!(f, "dispatch {commit} {seat} edition {edition} {brief}")?;
-                },
-                | Step::Report {
-                    dispatch,
-                    author,
-                    content,
-                    ref summary,
-                } => {
-                    write!(f, "report {commit} {dispatch} {author} {content} ")?;
-                    OneLine::new(f, Field::Last).write_str(summary.as_ref())?;
-                    writeln!(f)?;
-                },
-                | Step::Handoff { dispatch, from, to } => {
-                    writeln!(f, "handoff {commit} {dispatch} {from} {to}")?;
-                },
-                | Step::Retire { dispatch, author } => {
-                    writeln!(f, "retire {commit} {dispatch} {author}")?;
-                },
-                | Step::Pause { dispatch, author } => {
-                    writeln!(f, "pause {commit} {dispatch} {author}")?;
-                },
-                | Step::Verdict {
-                    dispatch,
-                    judge,
-                    rubric,
-                    transcript,
-                    ref answers,
-                } => {
-                    writeln!(
-                        f,
-                        "verdict {commit} {dispatch} {judge} {rubric} {transcript}"
-                    )?;
-                    for &(question, ref ruling) in answers {
-                        writeln!(f, "ruling {commit} {question} {ruling}")?;
-                    }
-                },
-                | Step::Verified {
-                    dispatch,
-                    runner,
-                    playbook,
-                    ref step,
-                    output,
-                    status,
-                } => {
-                    writeln!(
-                        f,
-                        "verified {commit} {dispatch} {runner} {playbook} {step} {output} \
-                         {status}"
-                    )?;
-                },
-                | Step::Graded {
-                    dispatch,
-                    verdict,
-                    rubric,
-                    ref grades,
-                    composed,
-                } => {
-                    writeln!(
-                        f,
-                        "graded {commit} {dispatch} {verdict} {rubric} {composed}"
-                    )?;
-                    for &(question, grade) in grades {
-                        writeln!(f, "grade {commit} {question} {grade}")?;
-                    }
-                },
-                | Step::Decide {
-                    dispatch,
-                    operator,
-                    ref decision,
-                } => {
-                    writeln!(f, "decide {commit} {dispatch} {operator} {decision}")?;
-                },
-                | Step::Landed {
-                    dispatch,
-                    decided,
-                    operator,
-                    merge,
-                } => {
-                    writeln!(f, "landed {commit} {dispatch} {decided} {operator} {merge}")?;
-                },
-            }
+            StepLine { commit, step }.fmt(f)?;
         }
         writeln!(f, "{}", self.current)
+    }
+}
+
+/// One admitted or authenticated move in the replay line language.
+#[derive(Debug)]
+pub struct StepLine<'step>
+{
+    /// The original receipt's commit identity.
+    pub commit: CommitId,
+    /// The resolved move, with its referenced receipt fields.
+    pub step: &'step Step,
+}
+
+impl fmt::Display for StepLine<'_>
+{
+    /// Render the same line language used by a task replay.
+    ///
+    /// # Specification
+    /// - ensures: one move and its detail rows are rendered, without a
+    ///   standing.
+    /// - fails: only when the formatter refuses output.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`fmt::Error`]: the output sink refused a write.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — the replay fixture pins each move line and its
+    ///   fields.
+    /// - witness: `fold::tests::a_task_prints_one_line_per_step_and_its_standing`
+    #[inline]
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result
+    {
+        let commit = self.commit;
+        match *self.step {
+            | Step::Dispatch {
+                seat,
+                edition,
+                ref brief,
+            } => writeln!(f, "dispatch {commit} {seat} edition {edition} {brief}"),
+            | Step::Report {
+                dispatch,
+                author,
+                content,
+                ref summary,
+            } => {
+                write!(f, "report {commit} {dispatch} {author} {content} ")?;
+                OneLine::new(f, Field::Last).write_str(summary.as_ref())?;
+                writeln!(f)
+            },
+            | Step::Handoff { dispatch, from, to } => {
+                writeln!(f, "handoff {commit} {dispatch} {from} {to}")
+            },
+            | Step::Retire { dispatch, author } => {
+                writeln!(f, "retire {commit} {dispatch} {author}")
+            },
+            | Step::Pause { dispatch, author } => writeln!(f, "pause {commit} {dispatch} {author}"),
+            | Step::Verdict {
+                dispatch,
+                judge,
+                rubric,
+                transcript,
+                ref answers,
+            } => {
+                writeln!(
+                    f,
+                    "verdict {commit} {dispatch} {judge} {rubric} {transcript}"
+                )?;
+                for &(question, ref ruling) in answers {
+                    writeln!(f, "ruling {commit} {question} {ruling}")?;
+                }
+                Ok(())
+            },
+            | Step::Verified {
+                dispatch,
+                runner,
+                playbook,
+                ref step,
+                output,
+                status,
+            } => writeln!(
+                f,
+                "verified {commit} {dispatch} {runner} {playbook} {step} {output} {status}"
+            ),
+            | Step::Graded {
+                dispatch,
+                verdict,
+                rubric,
+                ref grades,
+                composed,
+            } => {
+                writeln!(
+                    f,
+                    "graded {commit} {dispatch} {verdict} {rubric} {composed}"
+                )?;
+                for &(question, grade) in grades {
+                    writeln!(f, "grade {commit} {question} {grade}")?;
+                }
+                Ok(())
+            },
+            | Step::Decide {
+                dispatch,
+                operator,
+                ref decision,
+            } => writeln!(f, "decide {commit} {dispatch} {operator} {decision}"),
+            | Step::Landed {
+                dispatch,
+                decided,
+                operator,
+                merge,
+            } => writeln!(f, "landed {commit} {dispatch} {decided} {operator} {merge}"),
+        }
     }
 }
 

@@ -58,6 +58,18 @@ use crate::ruling::Ruling;
 use crate::task::Step;
 use crate::task::Task;
 
+/// An author's claim about an index, at the project heads it read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexAttestation
+{
+    /// The attested project manifest.
+    pub index: crate::IndexDigest,
+    /// The receipt carrying the claim.
+    pub commit: CommitId,
+    /// The project frontier from which the index was derived.
+    pub parents: crate::Heads,
+}
+
 /// What a peer makes of a tree.
 ///
 /// Its owner, the peers granted write authority, the admitted notes, the paths
@@ -84,6 +96,11 @@ pub struct View
     /// Each present author's presence: the admitted presence last in
     /// canonical order, unless an admitted withdrawal follows it.
     book: BTreeMap<PeerKey, Presence>,
+    /// Every admitted attestation, retained for pinning and canonical
+    /// selection.
+    attestations: Vec<(PeerKey, IndexAttestation)>,
+    /// Each author's last attestation in canonical order.
+    indexes: BTreeMap<PeerKey, IndexAttestation>,
     /// The admitted seat receipts and the current attempt.
     task: Task,
     /// Each dispatch's named protocol and admitted endpoint skeleton.
@@ -109,6 +126,28 @@ pub enum PlayTransportError
 
 impl View
 {
+    /// Each author's last admitted index, with its exact project frontier.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub const fn indexes(&self) -> &BTreeMap<PeerKey, IndexAttestation>
+    {
+        &self.indexes
+    }
+
+    /// Every admitted index in canonical order, including superseded claims.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub fn attestations(&self) -> &[(PeerKey, IndexAttestation)]
+    {
+        &self.attestations
+    }
+
     /// The author of the tree's Open.
     ///
     /// # Specification
@@ -445,6 +484,13 @@ impl fmt::Display for View
         }
         for (author, presence) in &self.book {
             writeln!(f, "present {author} {presence}")?;
+        }
+        for (author, attestation) in &self.indexes {
+            writeln!(
+                f,
+                "indexed {author} {} {}",
+                attestation.commit, attestation.index
+            )?;
         }
         for &(commit, ref refusal) in &self.refused {
             writeln!(f, "refused {commit} {refusal}")?;
@@ -920,6 +966,10 @@ struct Node
     author: PeerKey,
     /// The receipt the commit's blob carries, or why it carries none.
     receipt: Result<Receipt, ValueError>,
+    /// The receipt's original bytes, transferred to the admitted move.
+    blob: sedimentree_core::blob::Blob,
+    /// Original parent ids for an attestation; empty for other receipts.
+    attested_parents: crate::Heads,
     /// The commits held in the tree that this one names as parents.
     parents: Vec<Position>,
     /// Those parents not placed yet.
@@ -1125,11 +1175,20 @@ pub fn fold(
         let position = Position(index);
         let author = PeerKey::new(PeerId::from(commit.issuer()));
         let receipt = Receipt::decode(commit.blob());
+        let attested_parents = if matches!(receipt, Ok(ref receipt) if matches!(receipt.kind(), Kind::Indexed { .. }))
+        {
+            commit.payload().parents().iter().copied().collect()
+        }
+        else {
+            crate::Heads::default()
+        };
+        let (commit, blob) = commit.into_parts();
         let proof = match receipt {
             | Ok(ref receipt) if receipt.tree() == tree => match *receipt.kind() {
                 | Kind::Open { proof } => Some(proof.verify(tree, author)),
                 | Kind::Grant { .. }
                 | Kind::Note { .. }
+                | Kind::Indexed { .. }
                 | Kind::Bind { .. }
                 | Kind::Claim { .. }
                 | Kind::Introduce { .. }
@@ -1161,6 +1220,8 @@ pub fn fold(
             commit: commit.payload().head(),
             author,
             receipt,
+            blob,
+            attested_parents,
             waiting: parents.iter().copied().collect(),
             parents,
             children: children.remove(&position).unwrap_or_default(),
@@ -1180,6 +1241,8 @@ pub fn fold(
         claims: BTreeSet::new(),
         introductions: BTreeMap::new(),
         book: BTreeMap::new(),
+        attestations: Vec::new(),
+        indexes: BTreeMap::new(),
         task: Task::new(),
         plays: BTreeMap::new(),
         admitted: BTreeSet::new(),
@@ -1281,6 +1344,17 @@ pub fn fold(
                             },
                             | Kind::Note { text } if authorized => {
                                 view.notes.push((node.author, text));
+                                None
+                            },
+                            | Kind::Indexed { index } if authorized => {
+                                let attestation = IndexAttestation {
+                                    index,
+                                    commit: node.commit,
+                                    parents: node.attested_parents,
+                                };
+                                // Both the retention set and the latest claim own their frontier.
+                                view.attestations.push((node.author, attestation.clone()));
+                                drop(view.indexes.insert(node.author, attestation));
                                 None
                             },
                             | Kind::Bind { path, target } if authorized => {
@@ -1583,6 +1657,7 @@ pub fn fold(
                             },
                             | Kind::Grant { .. }
                             | Kind::Note { .. }
+                            | Kind::Indexed { .. }
                             | Kind::Bind { .. }
                             | Kind::Introduce { .. }
                             | Kind::Present { .. }
@@ -1602,6 +1677,18 @@ pub fn fold(
             | Some(refusal) => view.refused.push((node.commit, refusal)),
             | None => {
                 let _first_admission = view.admitted.insert(node.commit);
+                if view
+                    .task
+                    .steps()
+                    .last()
+                    .is_some_and(|&(commit, _)| commit == node.commit)
+                {
+                    view.task.record_source(crate::task::MoveSource {
+                        commit: node.commit,
+                        author: node.author,
+                        blob: node.blob,
+                    });
+                }
             },
         }
         let readers: BTreeSet<Position> = node
@@ -2224,6 +2311,56 @@ mod tests
                     view.refused()
                         .contains(&(id(refused), Refusal::NoAuthority)),
                     "a note with no grant in its past is refused, granted later or beside"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn an_attestation_is_admitted_from_the_owner_or_a_member()
+    {
+        let (owner, member) = (owner(), other());
+        let seat = MemorySigner::from_bytes(&[8; 32]);
+        let stranger = MemorySigner::from_bytes(&[9; 32]);
+        let receipt =
+            |byte: u8| Receipt::indexed(tree(), crate::IndexDigest::from([byte; 32])).unwrap();
+        runtime().block_on(async {
+            let opened = commit(&owner, tree(), &[], &open(&owner)).await;
+            let granted = commit(&owner, tree(), &[&opened], &grant(&member)).await;
+            let dispatched = commit(&owner, tree(), &[&granted], &dispatch(key(&seat))).await;
+            let first = commit(&owner, tree(), &[&dispatched], &receipt(1)).await;
+            let second = commit(&owner, tree(), &[&first], &receipt(2)).await;
+            let theirs = commit(&member, tree(), &[&second], &receipt(3)).await;
+            let seated = commit(&seat, tree(), &[&theirs], &receipt(4)).await;
+            let alien = commit(&stranger, tree(), &[&theirs], &receipt(5)).await;
+            let view = fold(tree(), vec![
+                opened,
+                granted,
+                dispatched,
+                first,
+                second.clone(),
+                theirs.clone(),
+                seated.clone(),
+                alien.clone(),
+            ])
+            .unwrap();
+            assert_eq!(view.indexes().len(), 2);
+            let own = view.indexes().get(&key(&owner)).unwrap();
+            assert_eq!(own.index, crate::IndexDigest::from([2; 32]));
+            assert_eq!(own.commit, id(&second));
+            assert_eq!(
+                own.parents.iter().copied().collect::<BTreeSet<_>>(),
+                *second.payload().parents()
+            );
+            assert_eq!(
+                view.indexes().get(&key(&member)).unwrap().commit,
+                id(&theirs)
+            );
+            assert_eq!(view.attestations().len(), 3);
+            for refused in [seated, alien] {
+                assert!(
+                    view.refused()
+                        .contains(&(id(&refused), Refusal::NoAuthority))
                 );
             }
         });
@@ -2931,6 +3068,8 @@ mod tests
                 ("b".parse::<Label>().unwrap(), (author, tree())),
             ]),
             book: BTreeMap::from([(author, Presence::new(reached.clone(), presented))]),
+            attestations: Vec::new(),
+            indexes: BTreeMap::new(),
             task: Task::new(),
             plays: BTreeMap::new(),
             admitted: BTreeSet::new(),

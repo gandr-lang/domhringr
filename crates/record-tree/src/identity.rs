@@ -105,6 +105,16 @@ impl StateDir
     {
         self.0.join(EVIDENCE_DIR)
     }
+    /// The derived index store: content-addressed nodes and manifests.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub fn index_dir(&self) -> PathBuf
+    {
+        self.0.join("index")
+    }
 }
 
 /// The two ed25519 keys a peer is known by.

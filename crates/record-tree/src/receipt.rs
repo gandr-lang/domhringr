@@ -38,6 +38,7 @@
 //!            | open 0x11 · bytes decided (32) · bytes merge (20 or 32)
 //!                        · close                                          Landed
 //!            | open 0x12 · bytes dispatch (32) · close                    Pause
+//!            | open 0x13 · bytes index (32) · close                       Indexed
 //! target    := open 0x01 · anchor · close                                 Anchor
 //!            | open 0x02 · bytes endpoint (32) · close                    Endpoint
 //!            | open 0x03 · bytes datum (UTF-8) · close                    Datum
@@ -165,6 +166,7 @@ use crate::id::Address;
 use crate::id::ContentHash;
 use crate::id::Endpoint;
 use crate::id::EndpointKey;
+use crate::id::IndexDigest;
 use crate::id::PeerKey;
 use crate::id::TreeId;
 use crate::identity::TreeKey;
@@ -184,6 +186,9 @@ const VERSION: u64 = 3;
 
 /// The receipt's constructor tag.
 const RECEIPT: u8 = 0x01;
+
+/// The constructor tag of [`Kind::Indexed`].
+const INDEXED: u8 = 0x13;
 
 /// The constructor tag of [`Kind::Open`].
 const OPEN: u8 = 0x01;
@@ -489,6 +494,12 @@ impl EndpointProof
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind
 {
+    /// The author attests a project index derived at this receipt's parents.
+    Indexed
+    {
+        /// The project index's manifest identity.
+        index: IndexDigest,
+    },
     /// The tree's root; its author is the tree's owner, whom the proof names.
     Open
     {
@@ -674,6 +685,29 @@ pub struct Receipt
 
 impl Receipt
 {
+    /// Attest an index under the same authority as a note.
+    ///
+    /// # Specification
+    /// - ensures: creates an Indexed receipt with a fresh operation fence.
+    /// - fails: the operating system's random source cannot be read.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`RandomError`]: fence generation failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — owner, member, seat and stranger separate authority.
+    /// - witness: `fold::tests::an_attestation_is_admitted_from_the_owner_or_a_member`
+    #[inline]
+    pub fn indexed(
+        tree: TreeId,
+        index: IndexDigest,
+    ) -> Result<Self, RandomError>
+    {
+        let operation = Operation::random()?;
+        Ok(Self::new(tree, operation, Kind::Indexed { index }))
+    }
+
     /// A receipt for `tree` carrying `operation` and recording `kind`.
     ///
     /// # Specification
@@ -1299,6 +1333,10 @@ impl CanonicalValue for Receipt
         sink.bytes(TokenBytes::from(self.tree.key().as_bytes().as_slice()))?;
         sink.bytes(TokenBytes::from(self.operation.0.as_slice()))?;
         match self.kind {
+            | Kind::Indexed { index } => {
+                sink.open(ConstructorTag::from(INDEXED))?;
+                sink.bytes(TokenBytes::from(index.as_ref()))?;
+            },
             | Kind::Open { proof } => {
                 sink.open(ConstructorTag::from(OPEN))?;
                 sink.bytes(TokenBytes::from(proof.0.to_bytes().as_slice()))?;
@@ -1503,6 +1541,14 @@ impl CanonicalValue for Receipt
             <[u8; 16]>::try_from(operation).map_err(|_wrong_length| receipt.refused())?;
         let opened = Opened::read(reader)?;
         let kind = match u8::from(opened.tag) {
+            | INDEXED => {
+                let bytes = reader.read_bytes()?;
+                let bytes = <[u8; 32]>::try_from(<&[u8]>::from(bytes))
+                    .map_err(|_wrong_length| opened.refused())?;
+                Kind::Indexed {
+                    index: IndexDigest::from(bytes),
+                }
+            },
             | OPEN => {
                 let proof = <&[u8]>::from(reader.read_bytes()?);
                 let proof =
@@ -2573,10 +2619,10 @@ impl CanonicalValue for Decision
 
 /// A constructor's open record, as the receipt decoder read it.
 #[derive(Clone, Copy, Debug)]
-struct Opened
+pub struct Opened
 {
     /// The constructor's tag.
-    tag: ConstructorTag,
+    pub tag: ConstructorTag,
     /// The open record's position.
     at: TokenOffset,
 }
@@ -2592,7 +2638,7 @@ impl Opened
     ///
     /// # Errors
     /// - [`ValueError`]: the next record is not an open record.
-    fn read(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
+    pub(crate) fn read(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
     {
         let at = reader.position();
         let tag = reader.read_tag()?;
@@ -2633,7 +2679,7 @@ impl Opened
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
-    fn commit(
+    pub(crate) fn commit(
         self,
         reader: &mut TokenReader<'_>,
     ) -> Result<CommitId, ValueError>
@@ -2722,7 +2768,7 @@ impl Opened
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
-    fn peer(
+    pub(crate) fn peer(
         self,
         reader: &mut TokenReader<'_>,
     ) -> Result<PeerKey, ValueError>
@@ -2862,7 +2908,7 @@ impl Opened
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
-    fn revision(
+    pub(crate) fn revision(
         self,
         reader: &mut TokenReader<'_>,
     ) -> Result<Revision, ValueError>
@@ -2876,7 +2922,7 @@ impl Opened
     ///
     /// # Specification
     /// trivial.
-    const fn refused(self) -> ValueError
+    pub(crate) const fn refused(self) -> ValueError
     {
         ValueError::UnexpectedConstructor {
             found: self.tag,
@@ -2935,6 +2981,39 @@ mod tests
     use crate::testing::elsewhere_key;
     use crate::testing::tree_key;
 
+    #[test]
+    fn an_attestation_has_one_layout()
+    {
+        let index = crate::IndexDigest::from([0xab; 32]);
+        let receipt = Receipt::new(tree(), Operation([0x0f; 16]), Kind::Indexed { index });
+        let bytes = |payload: &[u8]| {
+            let length = u64::try_from(payload.len()).unwrap().to_le_bytes();
+            [&[0x03_u8][..], &length, payload].concat()
+        };
+        let expected = [
+            vec![0x01, 0x01, 0x02],
+            3_u64.to_le_bytes().to_vec(),
+            bytes(tree().key().as_bytes()),
+            bytes(&[0x0f; 16]),
+            vec![0x01, 0x13],
+            bytes(&[0xab; 32]),
+            vec![0x05, 0x05],
+        ]
+        .concat();
+        assert_eq!(receipt.encode().unwrap().as_slice(), expected);
+        assert_eq!(Receipt::decode(&Blob::new(expected)).unwrap(), receipt);
+        assert_eq!(index.to_string(), "ab".repeat(32));
+        assert_eq!(
+            index.to_string().parse::<crate::IndexDigest>().unwrap(),
+            index
+        );
+        assert!(matches!(
+            "ab".repeat(31).parse::<crate::IndexDigest>(),
+            Err(crate::ParseIdError::Length)
+        ));
+        assert!("zz".repeat(32).parse::<crate::IndexDigest>().is_err());
+    }
+
     /// A peer key a grant names.
     const PEER: &str = "7065657270656572706565727065657270656572706565727065657270656572";
 
@@ -2991,6 +3070,7 @@ mod tests
             }));
         }
         let mut receipts = vec![
+            Receipt::indexed(tree(), crate::IndexDigest::from([0x0e; 32])).unwrap(),
             Receipt::open(&tree_key(), peer).unwrap(),
             Receipt::grant(tree(), peer).unwrap(),
             Receipt::note(tree(), String::from("a note, with ünïcode")).unwrap(),

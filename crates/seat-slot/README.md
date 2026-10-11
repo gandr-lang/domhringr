@@ -30,30 +30,32 @@ The seat answers an operator's wake for a dispatch it holds, acts on the brief t
 | `iroh`, [crate documentation](https://docs.rs/iroh) | QUIC connections and their bidirectional streams. |
 | `tokio`, [crate documentation](https://docs.rs/tokio) | Tasks, the event channel, blocking threads for the program, and the reply deadline. |
 | `domhringr-record-evidence`, [crate documentation](../record-evidence/README.md) | The evidence store a report's output is kept in, and the fetch a seat answers. |
+| `domhringr-record-index`, [crate documentation](../record-index/README.md) | Derived-index nodes and authenticated key and range answers. |
 
 ## Provided features
 
 - `PROTOCOL`, the ALPN a seat answers wakes under, for `Peer::bind`.
 - `Wake`, the line naming a dispatch and its operator, and `Reply`, the line answering it, each with its text form and its named refusals.
 - `wake`, the operator's side of one wake. It links, asks, pulls the task back on `woken`, and drops the link, and it reports a decline by its reason.
-- `serve`, the seat's side. It handles accepted links, wakes answered or declined, acts reported or not, fetches of its evidence served or not, and resumption on start, and it reports each as an `Event` on an unbounded channel.
+- `serve`, the seat's side. It reports accepted links, wakes, acts, evidence fetches, index proof connections and resumption as `Event` values. Index connections end as `Proved` with their answer count or `Unproved` with the stream failure.
 - `Surface`, what a seat acts through: `Hold`, which keeps the slot and never reports, or a `Program`.
 
 ## Expected features
 
 - A Tokio runtime with the multi-threaded scheduler, timers and the blocking pool.
-- A node bound with `PROTOCOL` and the evidence protocol among its protocols (`Peer::bind`), so that wakes and fetches reach `serve`; the evidence store beneath the seat's state directory (`Evidence::open`).
+- A node bound with `PROTOCOL`, the evidence protocol and `domhringr_record_index::stream::PROTOCOL`, so wakes, fetches and proofs reach `serve`; evidence and index stores opened beneath the seat's state directory.
 - For `wake`, the dispatch already committed in the operator's store and a route to the seat: its endpoint named by hand, or its presence in the book.
 - For `Surface::Program`, an executable that takes `anchor <anchor>` or `content <hash>` as its two arguments. It reads the task's and the dispatch's anchors from `DOMHRINGR_TASK` and `DOMHRINGR_DISPATCH`, exits 0 when it has a report, and writes the report to standard output with a first line of at most 256 bytes and no control character.
 
 ## Examples
 
-With `domhringr-record-evidence`, `domhringr-record-tree`, `domhringr-seat-slot` and Tokio's `rt-multi-thread`, `sync` and `time` features as dependencies, this program opens a task in a fresh state directory supplied as its first argument and dispatches its own peer to a brief. It then serves as that seat through `echo`, which resumes the dispatch on start and reports on it, and prints the report's commit id:
+With `domhringr-record-evidence`, `domhringr-record-index`, `domhringr-record-tree`, `domhringr-seat-slot` and Tokio's `rt-multi-thread`, `sync` and `time` features as dependencies, this program opens a task, dispatches its own peer, serves through `echo` and prints the report's commit id:
 
 ```rust
 use std::sync::Arc;
 
 use domhringr_record_evidence::{Evidence, PROTOCOL as EVIDENCE};
+use domhringr_record_index::{store::Store, stream::PROTOCOL as INDEX};
 use domhringr_record_tree::{BindPort, Brief, Content, ContentHash, Identity, Peer, Receipt, StateDir, TreeKey};
 use domhringr_seat_slot::{Event, PROTOCOL, Surface, serve};
 
@@ -64,13 +66,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runtime.block_on(async {
         let identity = Identity::load_or_create(&state)?;
         let me = identity.peer_key();
-        let node = Arc::new(Peer::open(&state, identity)?.bind(BindPort::Ephemeral, &[PROTOCOL, EVIDENCE]).await?);
+        let node = Arc::new(Peer::open(&state, identity)?.bind(BindPort::Ephemeral, &[PROTOCOL, EVIDENCE, INDEX]).await?);
         let key = TreeKey::mint(&state)?;
         let tree = key.tree();
         node.peer().commit(tree, Receipt::open(&key, me)?).await?;
         let brief = Brief::Content(ContentHash::of(&Content::from(b"the brief".to_vec())));
         node.peer().commit(tree, Receipt::dispatch(tree, me, domhringr_record_tree::Edition::ONE, brief)?).await?;
-        let mut events = serve(Arc::clone(&node), Surface::Program("echo".into()), Evidence::open(&state));
+        let mut events = serve(Arc::clone(&node), Surface::Program("echo".into()), Evidence::open(&state), Store::open(&state));
         while let Some(event) = events.recv().await {
             if let Event::Reported { report, .. } = event {
                 println!("{report}");

@@ -12,6 +12,7 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 - [Networking](#networking)
 - [Tasks](#tasks)
 - [Evidence](#evidence)
+- [Keyed indexes](#keyed-indexes)
 - [Judging](#judging)
 - [Playbooks and rubrics](#playbooks-and-rubrics)
 - [Drift](#drift)
@@ -43,6 +44,7 @@ The `domhringr-peer` binary manages and synchronizes a record-plane peer over a 
 - Serving on an ephemeral or fixed UDP port, as a seat that holds its slots or acts through a program.
 - Dispatching a seat and waking it at its presence in the task's book or at an endpoint named by hand, and replaying a task through its seat, each value its receipts name fetched from the seat when the local store lacks it.
 - A value of the evidence plane by its digest, read from the local store or fetched from the peer that holds it, written byte for byte or refused by name.
+- Attested project and dialogue indexes, root-verified task and move questions, historical agreement checks and exact proof-size measurements.
 - A tree's book: each present peer, the endpoint it is reached at, and the commit that presented it.
 - Single-tree synchronization with the tree's owner or a named peer, at its presence in the book or at an endpoint named by hand, reporting where the endpoint came from and the selected path; `whence` reaches each tree it reads the same way, or resolves from the local store alone.
 - A drift check of a concepts tree against a public and a vault checkout: unbound citations, drifted, missing and orphaned bindings, and malformed data and citations, one line each in anchor order, with an exit status a gate can read.
@@ -230,6 +232,32 @@ Reversal: a replay that must prove every value whole, as an audit does, which ne
 - a header line before the bytes: the output would no longer be the value, and a reader comparing it would strip it first.
 
 Reversal: a value too large to hold in memory, which needs the read streamed to standard output as the walk checks each chunk.
+
+## Keyed indexes
+
+The [index plane](../record-index/README.md) derives task dialogues and project entries without changing receipt admission. A project includes direct `tasks/<name>` bindings; each held entry names its task frontier, full standing, attempt count and dialogue manifest.
+
+Run these commands after `domhringr-peer --state <dir>`:
+
+| Command | Result |
+| ------- | ------ |
+| `index derive <project>` | `indexed <commit-id> <digest>`, or `unchanged <digest>` for the same own claim |
+| `index task <project> <name>` | `task <anchor> <standing>`, or an explicit unheld entry |
+| `index move <project> <name> <attempt>.<seq>` | One authenticated move in the replay language |
+| `index play <project> <name> <attempt>` | Every move in that attempt, in canonical order |
+| `index after <project> <name> <attempt>` | `after <n> none` or `after <n> <dispatch-id>` |
+| `index check <project> [--by <peer-id>]` | `agrees`, or findings with exit status 3 |
+| `index measure <project>` | One line per distinct project or dialogue index |
+
+The four proving verbs accept `--by <peer-id>` and `--at <endpoint>`. They select the owner's latest attestation unless `--by` names another author, use local nodes first, and otherwise reach that attester through the project's book or `--at`. They print `proved <digest> <peer-id>` for each authenticated index before the answer. Project and dialogue questions share one connection; no task tree is synced. A grading or landing also proves its referenced verdict or decision within the attempt before rendering those receipt fields.
+
+A proof authenticates the attester's claim, not its agreement with the fold. `index check` re-derives at the attestation's project parents and each entry's task heads: `disagrees <task> <field>` identifies a false field, and `unchecked <task>` identifies an unavailable task frontier. Later receipts do not make a true historical claim disagree. Check and measure can fetch missing index nodes through authenticated full-range answers; they do not sync receipts.
+
+`index measure` prints `index <kind> <digest> records <n> children <n> root <bytes>
+leaf <bytes> proof <bytes> levels closed|open` on one line. Proof bytes include
+complete membership and absence framing; `levels open` means an internal root is at least as large as its largest leaf.
+
+Run derive before serve: both hold the receipt store exclusively. `serve` binds `domhringr/index/0` beside sync, wakes and evidence, printing `proved <count>` when an index connection closes and reporting failed streams on standard error.
 
 ## Judging
 

@@ -94,6 +94,21 @@ impl Heads
     }
 }
 
+impl FromIterator<CommitId> for Heads
+{
+    /// Collect a frontier in commit-id order without duplicates.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = CommitId>,
+    {
+        Self(iter.into_iter().collect())
+    }
+}
+
 impl core::fmt::Display for Heads
 {
     /// Write each head as 64 lowercase hex digits on its own line, in
@@ -308,6 +323,57 @@ impl Peer
             .await
             .map_err(ViewError::Load)?;
         let view = fold(tree, commits)?;
+        Ok(view)
+    }
+
+    /// Fold only the causal past of the named frontier.
+    ///
+    /// # Specification
+    /// - ensures: no commit outside the heads' transitive parent closure enters
+    ///   the fold; every stored signature of a reachable receipt participates.
+    /// - fails: missing commits are named; storage and unopened-tree failures
+    ///   retain their original causes.
+    /// - panics: none.
+    ///
+    /// # Errors
+    /// - [`ViewAtError::Missing`]: a head or ancestor is not held.
+    /// - [`ViewAtError::View`]: loading or folding failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a concurrent note stays outside a selected frontier,
+    ///   and a missing head fails with that exact identity.
+    /// - witness: `store::tests::a_view_at_heads_folds_their_past_alone`
+    #[inline]
+    pub async fn view_at(
+        &self,
+        tree: TreeId,
+        heads: &Heads,
+    ) -> Result<View, ViewAtError>
+    {
+        let commits = Storage::<Sendable>::load_loose_commits(&self.storage, tree.sedimentree())
+            .await
+            .map_err(ViewError::Load)?;
+        let mut by_id = BTreeMap::<_, Vec<_>>::new();
+        for commit in commits {
+            by_id
+                .entry(commit.payload().head())
+                .or_default()
+                .push(commit);
+        }
+        let mut pending: Vec<_> = heads.iter().copied().collect();
+        let mut visited = BTreeSet::new();
+        let mut past = Vec::new();
+        while let Some(head) = pending.pop() {
+            if !visited.insert(head) {
+                continue;
+            }
+            let commits = by_id.remove(&head).ok_or(ViewAtError::Missing(head))?;
+            for commit in commits {
+                pending.extend(commit.payload().parents().iter().copied());
+                past.push(commit);
+            }
+        }
+        let view = fold(tree, past).map_err(ViewError::Unopened)?;
         Ok(view)
     }
 
@@ -868,6 +934,18 @@ pub enum ViewError
     Unopened(#[from] Unopened),
 }
 
+/// Why a named historical frontier cannot be folded.
+#[derive(Debug, thiserror::Error)]
+pub enum ViewAtError
+{
+    /// A required head or ancestor is not held.
+    #[error("missing commit {0}")]
+    Missing(CommitId),
+    /// Loading or folding failed.
+    #[error(transparent)]
+    View(#[from] ViewError),
+}
+
 /// Why a reference does not resolve.
 #[derive(Debug, thiserror::Error)]
 pub enum WhenceError
@@ -1282,6 +1360,30 @@ mod tests
                 ),
                 "a label read in no tree is refused"
             );
+            drop(peer);
+        });
+    }
+
+    #[test]
+    fn a_view_at_heads_folds_their_past_alone()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let signer = owner();
+        runtime().block_on(async {
+            let opened = Receipt::open(&tree_key(), key(&signer)).unwrap();
+            let opened = commit(&signer, tree(), &[], &opened).await;
+            let left = commit(&signer, tree(), &[&opened], &note("selected".into())).await;
+            let right = commit(&signer, tree(), &[&opened], &note("outside".into())).await;
+            let peer = open(&StateDir::from(root.path().to_path_buf()));
+            for commit in [opened, left.clone(), right] {
+                Storage::<Sendable>::save_loose_commit(&peer.storage, tree().sedimentree(), commit).await.unwrap();
+            }
+            let heads = core::iter::once(id(&left)).collect();
+            let view = peer.view_at(tree(), &heads).await.unwrap();
+            assert_eq!(view.notes(), [(key(&signer), String::from("selected"))]);
+            let missing = CommitId::new([0xfe; 32]);
+            let heads = core::iter::once(missing).collect();
+            assert!(matches!(peer.view_at(tree(), &heads).await, Err(super::ViewAtError::Missing(actual)) if actual == missing));
             drop(peer);
         });
     }

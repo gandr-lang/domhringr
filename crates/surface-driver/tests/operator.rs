@@ -450,6 +450,7 @@ rm -rf "$work"
                         .bind(BindPort::Fixed(port), &[
                             PROTOCOL,
                             domhringr_record_evidence::PROTOCOL,
+                            domhringr_record_index::stream::PROTOCOL,
                         ])
                         .await
                         .unwrap(),
@@ -458,6 +459,7 @@ rm -rf "$work"
                     Arc::clone(&node),
                     Surface::Program(script),
                     Evidence::open(&state),
+                    domhringr_record_index::store::Store::open(&state),
                 );
                 let _held = node.sync(&reached, project).await.unwrap();
                 let presence = node.present(project).await.unwrap();
