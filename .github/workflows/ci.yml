@@ -392,6 +392,8 @@ jobs:
     runs-on: *linux
     permissions: *image-read-permissions
     container: *ci-image # zizmor: ignore[unpinned-images]
+    env:
+      CI_BUILD_STATE: cargo-test
     steps:
       - *git-checkout
       # Shared crate downloads are restore-only in this lane.
@@ -399,8 +401,14 @@ jobs:
       - *read-sibling-pins
       - *checkout-gandr
       - *setup-rust
+      # The test archive contains plain and enforcing build state.
+      # Test jobs and main retain cache ownership; this lane restores only.
+      - *restore-test-state
+      - *unpack-build-state
       - name: lint every target
-        run: cargo clippy --locked --workspace --all-targets -- --deny warnings
+        run: mise run check:clippy
+      - name: lint every target with specification enforcement
+        run: mise run check:clippy-enforcing
   # The external plugin checks all local targets once per landing, beside the
   # build it would otherwise repeat on every pull request. The image carries
   # its driver; the bare-runner fallback installs the same pinned tools and
@@ -421,6 +429,8 @@ jobs:
       - *restore-dylint-drivers
       - *restore-dylint-library
       - name: lint every workspace target
+        # The separately built plugin stays plain; source lints and
+        # DYLINT_RUSTFLAGS retain the workspace's policy selections.
         run: mise run check:dylint
       # This lane hands over its policy caches, not the dependency cache.
       - name: archive Dylint library

@@ -15,7 +15,15 @@ run = "cargo fmt --all --check"
 
 ["check:clippy"]
 description = "The clippy half of the lint wall"
-run = "cargo clippy --workspace --all-targets --locked"
+run = "cargo clippy --workspace --all-targets --locked -- --deny warnings"
+
+# Runtime sentinels exist only with enforcement enabled. Match the enforcing
+# test build's profile, flags and artifact directory so CI can reuse it.
+["check:clippy-enforcing"]
+description = "The clippy wall with specification enforcement"
+env.RUSTFLAGS = "--cfg anodized_panic"
+env.CARGO_TARGET_DIR = "{{ config_root }}/target/enforcing"
+run = "cargo clippy --workspace --all-targets --locked --profile test -- --deny warnings"
 
 # The compiler-plugin half of the lint wall, from the pinned Git policy
 # source: specification presence, adequacy grammar, nominal signature
@@ -39,7 +47,12 @@ env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "dylint-link"
 env.CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "dylint-link"
 env.CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER = "dylint-link"
 env.CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER = "dylint-link"
-env.CARGO_ENCODED_RUSTFLAGS = "{% if env.CARGO_ENCODED_RUSTFLAGS is defined %}{% set flags = env.CARGO_ENCODED_RUSTFLAGS %}{% else %}{% set flags = env.RUSTFLAGS | default(value='') | trim | regex_replace(pattern='\\\\s+', rep='\u001f') %}{% endif %}{{ flags }}{% if flags %}\u001f{% endif %}--cfg=quenchant_compiler_policy"
+# The plugin builds separately, without this workspace's facade feature.
+# Dylint reads source, so enforcement mode is irrelevant to its lints; the
+# plugin's own specifications are checked by quenchant's gates. Keep this
+# task plain, including when Cargo's encoded flags take precedence.
+env.RUSTFLAGS = "{{ env.RUSTFLAGS | default(value='') | regex_replace(pattern='(^|\\\\s)--cfg(?:=|\\\\s+)anodized_(panic|print)\\\\b', rep='') | trim }}"
+env.CARGO_ENCODED_RUSTFLAGS = "{% if env.CARGO_ENCODED_RUSTFLAGS is defined %}{% set flags = env.CARGO_ENCODED_RUSTFLAGS %}{% else %}{% set flags = env.RUSTFLAGS | default(value='') | trim | regex_replace(pattern='\\\\s+', rep='\u001f') %}{% endif %}{% set flags = flags | regex_replace(pattern='(^|\u001f)--cfg(?:=|\u001f)anodized_(panic|print)\\\\b', rep='') | trim_start(pat='\u001f') %}{{ flags }}{% if flags %}\u001f{% endif %}--cfg=quenchant_compiler_policy"
 run = "cargo dylint --lib quenchant_dylints --no-deps -- --workspace --all-targets"
 
 # External workflow consumers use one full revision in Dylint metadata for
