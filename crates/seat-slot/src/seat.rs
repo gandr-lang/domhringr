@@ -115,6 +115,10 @@ pub enum Event
     Served(Served),
     /// A fetch's stream failed before its answer was written.
     Unserved(ServeError),
+    /// The seat answered keyed-index questions on one connection.
+    Proved(domhringr_record_index::stream::Served),
+    /// A keyed-index proof stream failed.
+    Unproved(domhringr_record_index::stream::StreamError),
     /// The seat acted on `dispatch` in `tree` and committed no report.
     Unreported
     {
@@ -141,6 +145,10 @@ struct Seat
     surface: Surface,
     /// Where the seat's reports are kept and fetches answered from.
     evidence: Evidence,
+    /// The immutable derived-index store.
+    indexes: domhringr_record_index::store::Store,
+    /// Bounded hydrated trees shared by proof connections.
+    proofs: Mutex<domhringr_record_index::stream::Cache>,
     /// The dispatches being acted on now, so a wake during an act starts no
     /// second one.
     acting: Mutex<BTreeSet<CommitId>>,
@@ -148,13 +156,13 @@ struct Seat
     events: mpsc::UnboundedSender<Event>,
 }
 
-/// Serve wakes and fetches on `node` as a seat acting through `surface` and
-/// keeping its reports in `evidence`, and resume the dispatches it holds.
+/// Serve wakes, evidence fetches and index questions on `node`, and resume
+/// dispatches through `surface`.
 ///
 /// # Specification
 /// - requires: called within a Tokio runtime; `node` was bound with
-///   [`PROTOCOL`] and [`domhringr_record_evidence::PROTOCOL`] among its
-///   protocols.
+///   [`PROTOCOL`], [`domhringr_record_evidence::PROTOCOL`] and
+///   [`domhringr_record_index::stream::PROTOCOL`].
 /// - ensures: returns at once with the receiver of the seat's events, the
 ///   serving running on tasks of its own. Each accepted link is an
 ///   [`Event::Accepted`] and each refused connection an [`Event::Unaccepted`];
@@ -179,6 +187,7 @@ pub fn serve(
     node: Arc<Node>,
     surface: Surface,
     evidence: Evidence,
+    indexes: domhringr_record_index::store::Store,
 ) -> mpsc::UnboundedReceiver<Event>
 {
     let (events, heard) = mpsc::unbounded_channel();
@@ -186,6 +195,8 @@ pub fn serve(
         node,
         surface,
         evidence,
+        indexes,
+        proofs: Mutex::new(domhringr_record_index::stream::Cache::default()),
         acting: Mutex::new(BTreeSet::new()),
         events,
     });
@@ -219,6 +230,12 @@ async fn accept(seat: Arc<Seat>)
             }) if protocol == domhringr_record_evidence::PROTOCOL => {
                 drop(tokio::spawn(give(Arc::clone(&seat), connection)));
             },
+            | Ok(Incoming::Protocol {
+                protocol,
+                connection,
+            }) if protocol == domhringr_record_index::stream::PROTOCOL => {
+                drop(tokio::spawn(prove(Arc::clone(&seat), connection)));
+            },
             | Ok(Incoming::Protocol { connection, .. }) => {
                 connection.close(iroh::endpoint::VarInt::from_u32(0), b"unknown protocol");
                 seat.tell(Event::Unaccepted(AcceptError::Protocol));
@@ -229,6 +246,21 @@ async fn accept(seat: Arc<Seat>)
             },
             | Err(failure) => seat.tell(Event::Unaccepted(failure)),
         }
+    }
+}
+
+/// Report the typed outcome of one index connection.
+///
+/// # Specification
+/// trivial.
+async fn prove(
+    seat: Arc<Seat>,
+    connection: iroh::endpoint::Connection,
+)
+{
+    match domhringr_record_index::stream::answer(&seat.indexes, &seat.proofs, connection).await {
+        | Ok(served) => seat.tell(Event::Proved(served)),
+        | Err(failure) => seat.tell(Event::Unproved(failure)),
     }
 }
 
@@ -751,6 +783,7 @@ mod tests
                     .bind(BindPort::Fixed(port), &[
                         PROTOCOL,
                         domhringr_record_evidence::PROTOCOL,
+                        domhringr_record_index::stream::PROTOCOL,
                     ])
                     .await
                     .unwrap(),
@@ -759,6 +792,7 @@ mod tests
                 Arc::clone(&seat),
                 Surface::Program(PathBuf::from("echo")),
                 Evidence::open(&seat_state),
+                domhringr_record_index::store::Store::open(&seat_state),
             );
             let reached = format!("{}@127.0.0.1:{port}", seat.endpoint_key())
                 .parse::<Endpoint>()
@@ -879,7 +913,11 @@ mod tests
             let seat = Arc::new(
                 Peer::open(&state, identity)
                     .unwrap()
-                    .bind(BindPort::Ephemeral, &[PROTOCOL])
+                    .bind(BindPort::Ephemeral, &[
+                        PROTOCOL,
+                        domhringr_record_evidence::PROTOCOL,
+                        domhringr_record_index::stream::PROTOCOL,
+                    ])
                     .await
                     .unwrap(),
             );
@@ -899,6 +937,7 @@ mod tests
                 Arc::clone(&seat),
                 Surface::Program(PathBuf::from("echo")),
                 Evidence::open(&state),
+                domhringr_record_index::store::Store::open(&state),
             );
             let Event::Reported {
                 tree: reported_in,

@@ -1,0 +1,35 @@
+[package]
+name = "domhringr-record-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Attested dialogue and project indexes with root-checkable proofs"
+readme = "README.md"
+repository.workspace = true
+license.workspace = true
+keywords = ["domhringr", "index", "merkle", "proofs"]
+categories = ["data-structures", "network-programming"]
+publish.workspace = true
+
+[dependencies]
+anodized.workspace = true
+blake3.workspace = true
+data-encoding.workspace = true
+domhringr-record-tree.workspace = true
+gandr-storage-records.workspace = true
+gandr-storage-values.workspace = true
+iroh.workspace = true
+quenchant-arith.workspace = true
+sedimentree_core.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+future_form.workspace = true
+subduction_core.workspace = true
+subduction_crypto.workspace = true
+subduction_redb_storage.workspace = true
+
+[lints]
+workspace = true

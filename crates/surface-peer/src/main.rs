@@ -10,7 +10,9 @@
 //! replays the task, fetches the evidence its receipts name, judges a
 //! transcript of the task into a verdict on its dispatch, reads playbooks and
 //! rubrics and runs them on the task, and checks a concepts tree's bindings
-//! against a public and a vault checkout.
+//! against a public and a vault checkout. It derives and attests keyed project
+//! and dialogue indexes, proves their contents without syncing task trees, and
+//! checks and measures the attested indexes.
 //!
 //! ```text
 //! domhringr-peer --state <dir> id
@@ -47,6 +49,13 @@
 //! domhringr-peer --state <dir> playbook run <file> <tree> [--task-state <dir>] [--static <file>]
 //! domhringr-peer --state <dir> rubric validate <file>
 //! domhringr-peer --state <dir> rubric grade <file> <tree> [--task-state <dir>] [--static <file>]
+//! domhringr-peer --state <dir> index derive <project>
+//! domhringr-peer --state <dir> index task <project> <name> [--by <peer-id>] [--at <endpoint>]
+//! domhringr-peer --state <dir> index move <project> <name> <attempt>.<seq> [--by <peer-id>] [--at <endpoint>]
+//! domhringr-peer --state <dir> index play <project> <name> <attempt> [--by <peer-id>] [--at <endpoint>]
+//! domhringr-peer --state <dir> index after <project> <name> <attempt> [--by <peer-id>] [--at <endpoint>]
+//! domhringr-peer --state <dir> index check <project> [--by <peer-id>]
+//! domhringr-peer --state <dir> index measure <project>
 //! ```
 //!
 //! A tree is named by its anchor, `domhringr://<tree-id>/`, whose tree id is
@@ -224,6 +233,7 @@
 extern crate alloc;
 
 mod drift;
+mod index;
 mod strategy;
 
 use alloc::collections::BTreeSet;
@@ -348,6 +358,13 @@ usage: domhringr-peer --state <dir> id
        domhringr-peer --state <dir> rubric validate <file>
        domhringr-peer --state <dir> rubric grade <file> <tree> [--task-state <dir>]
                       [--static <file>]
+       domhringr-peer --state <dir> index derive <project>
+       domhringr-peer --state <dir> index task <project> <task> [--by <peer-id>] [--at <endpoint>]
+       domhringr-peer --state <dir> index move <project> <task> <attempt>.<seq> [--by <peer-id>] [--at <endpoint>]
+       domhringr-peer --state <dir> index play <project> <task> <attempt> [--by <peer-id>] [--at <endpoint>]
+       domhringr-peer --state <dir> index after <project> <task> <attempt> [--by <peer-id>] [--at <endpoint>]
+       domhringr-peer --state <dir> index check <project> [--by <peer-id>]
+       domhringr-peer --state <dir> index measure <project>
 where  <tree>   is domhringr://<tree-id>/
        <anchor> is domhringr://<tree-id>/<segment>/.../<segment>
        <commit> is domhringr://<tree-id>/.commit/<commit-id>, the id whole, or for whence
@@ -385,12 +402,17 @@ const USAGE_STATUS: u8 = 2;
 /// The exit status of a `drift` that reported a finding.
 const DRIFT_STATUS: u8 = 3;
 
+/// The exit status of an index check that reports a finding.
+const INDEX_STATUS: u8 = 3;
+
 /// The command a command line names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Verb
 {
     /// Print the peer's ids.
     Id,
+    /// Derive, attest, prove, check or measure a keyed index.
+    Index,
     /// Accept peers and answer wakes until killed.
     Serve,
     /// Open a tree.
@@ -476,6 +498,7 @@ impl fmt::Display for Verb
     {
         f.write_str(match *self {
             | Self::Id => "id",
+            | Self::Index => "index derive|task|move|play|after|check|measure <project> [<task>] [<coordinate>] [--by <peer-id>] [--at <endpoint>]",
             | Self::Serve => "serve [--port <port>] [--surface <program>]",
             | Self::Open => "open",
             | Self::Grant => "grant <tree> <peer-id>",
@@ -599,6 +622,8 @@ enum Command
 {
     /// Print the endpoint id, then the peer id.
     Id,
+    /// Operate on the keyed plane of a project.
+    Index(index::Command),
     /// Bind on `port`, print the ids and `listening`, then accept peers and
     /// answer wakes as a seat acting through `surface` until killed.
     Serve
@@ -1032,12 +1057,17 @@ enum Completion
     Success,
     /// With [`DRIFT_STATUS`]: `drift` reported a finding.
     Drifted,
+    /// With status three: a historical index check reported a finding.
+    IndexFinding,
 }
 
 /// Why a command line cannot be run.
 #[derive(Debug, thiserror::Error)]
 enum UsageError
 {
+    /// A keyed index operand does not parse.
+    #[error(transparent)]
+    Index(#[from] index::ParseError),
     /// The protocol edition is not an unsigned number.
     #[error("invalid edition: {0}")]
     Edition(core::num::ParseIntError),
@@ -1148,6 +1178,9 @@ enum UsageError
 #[derive(Debug, thiserror::Error)]
 enum RunError
 {
+    /// A keyed-plane operation failed.
+    #[error(transparent)]
+    Index(#[from] index::IndexError),
     /// The named complete play cannot be transported.
     #[error(transparent)]
     Transport(#[from] domhringr_record_tree::PlayTransportError),
@@ -1348,6 +1381,10 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     };
     let verb = verb(word)?;
     let state = StateDir::from(PathBuf::from(state.ok_or(UsageError::State)?));
+    if verb == Verb::Index {
+        let command = Command::Index(index::parse(&mut arguments)?);
+        return Ok(Invocation { state, command });
+    }
     if verb == Verb::Serve {
         let command = serve_command(&mut arguments)?;
         return Ok(Invocation { state, command });
@@ -2258,6 +2295,7 @@ fn verb(word: OsString) -> Result<Verb, UsageError>
 {
     match word.to_str() {
         | Some("id") => Ok(Verb::Id),
+        | Some("index") => Ok(Verb::Index),
         | Some("serve") => Ok(Verb::Serve),
         | Some("open") => Ok(Verb::Open),
         | Some("grant") => Ok(Verb::Grant),
@@ -2674,19 +2712,40 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 /// - witness: `drift::tests::drift_names_each_finding_and_is_silent_on_a_consistent_pair`
 /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
 /// - witness: `strategy::tests::a_playbook_runs_its_checks_and_replay_shows_the_receipts`
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the index peer moves into run; dropping it again after that consuming call would be invalid"
+)]
 async fn execute(invocation: Invocation) -> Result<Completion, RunError>
 {
     let Invocation { state, command } = invocation;
     let identity = Identity::load_or_create(&state)?;
     let evidence = Evidence::open(&state);
     let emitted = match command {
+        | Command::Index(command) => {
+            let peer = Peer::open(&state, identity)?;
+            #[expect(
+                clippy::large_futures,
+                reason = "one bounded nonrecursive CLI request stays inline rather than adding a heap allocation"
+            )]
+            let result = index::run(peer, &state, command).await;
+            return result;
+        },
         | Command::Id => emit(&format_args!(
             "{}\n{}\n",
             identity.endpoint_key(),
             identity.peer_key()
         )),
         | Command::Serve { port, surface } => {
-            serve(Peer::open(&state, identity)?, evidence, port, surface).await
+            let indexes = domhringr_record_index::store::Store::open(&state);
+            serve(
+                Peer::open(&state, identity)?,
+                evidence,
+                indexes,
+                port,
+                surface,
+            )
+            .await
         },
         | Command::Open => {
             let owner = identity.peer_key();
@@ -3708,6 +3767,7 @@ async fn evidence(
 async fn serve(
     peer: Peer,
     evidence: Evidence,
+    indexes: domhringr_record_index::store::Store,
     port: BindPort,
     surface: Surface,
 ) -> Result<(), RunError>
@@ -3715,9 +3775,10 @@ async fn serve(
     let protocols = [
         domhringr_seat_slot::PROTOCOL,
         domhringr_record_evidence::PROTOCOL,
+        domhringr_record_index::stream::PROTOCOL,
     ];
     let node = Arc::new(peer.bind(port, &protocols).await?);
-    let mut events = domhringr_seat_slot::serve(Arc::clone(&node), surface, evidence);
+    let mut events = domhringr_seat_slot::serve(Arc::clone(&node), surface, evidence, indexes);
     emit(&format_args!(
         "{}\n{}\nlistening\n",
         node.endpoint_key(),
@@ -3765,6 +3826,11 @@ async fn serve(
                 emit(&format_args!("unserved {digest}\n"))?;
                 report(&reason)
             },
+            | Event::Proved(served) => {
+                emit(&format_args!("proved {}\n", served.0))?;
+                Ok(())
+            },
+            | Event::Unproved(failure) => report(&failure),
             | Event::Unserved(failure) => report(&failure),
             | Event::Unaccepted(failure) => report(&failure),
             | Event::Unanswered(failure) => report(&failure),
@@ -3839,6 +3905,7 @@ fn main() -> ExitCode
     match run(invocation) {
         | Ok(Completion::Success) => ExitCode::SUCCESS,
         | Ok(Completion::Drifted) => ExitCode::from(DRIFT_STATUS),
+        | Ok(Completion::IndexFinding) => ExitCode::from(INDEX_STATUS),
         | Err(error) => match report(&error) {
             | Ok(()) | Err(_) => ExitCode::FAILURE,
         },

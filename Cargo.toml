@@ -4,6 +4,7 @@ members = [
   "crates/arena-session",
   "crates/judge-oracle",
   "crates/record-evidence",
+  "crates/record-index",
   "crates/record-tree",
   "crates/seat-slot",
   "crates/strategy-document",
@@ -28,10 +29,20 @@ publish = false
 # on only because a build or a test failed without it.
 [workspace.dependencies]
 
+# Executable specifications at the storage sibling's revision.
+# features: none; predicates use the core-only facade.
+# consumers:
+# - record-index
+[workspace.dependencies.anodized]
+git = "https://github.com/gandr-lang/anodized"
+rev = "372f70b50ef7af68f4e8a750132d90d54e780426"
+default-features = false
+
 # The reference BLAKE3: a brief's, a playbook's, a rubric's and a question's
 # content hash, and the tests' independent oracle for commit ids. Already in
 # the graph under sedimentree's commit ids, so it adds no build.
 # consumers:
+# - record-index
 # - record-tree
 [workspace.dependencies.blake3]
 version = "1.8"
@@ -41,6 +52,7 @@ default-features = false
 # into fixed buffers.
 # consumers:
 # - record-evidence
+# - record-index
 # - record-tree
 [workspace.dependencies.data-encoding]
 version = "2.11"
@@ -72,10 +84,21 @@ path = "crates/judge-oracle"
 [workspace.dependencies.domhringr-record-evidence]
 path = "crates/record-evidence"
 
+# Derived dialogue and project indexes, their node store and proof stream.
+# features: none; the keyed plane has one implementation.
+# consumers:
+# - seat-slot
+# - surface-driver (dev)
+# - surface-peer
+[workspace.dependencies.domhringr-record-index]
+path = "crates/record-index"
+default-features = false
+
 # The record library: the tree store, the endpoint, sync.
 # consumers:
 # - judge-oracle
 # - record-evidence
+# - record-index
 # - seat-slot
 # - strategy-document
 # - surface-driver
@@ -101,6 +124,7 @@ path = "crates/strategy-document"
 # The `Sendable` future form subduction's runtime glue is generic over.
 # consumers:
 # - record-tree
+# - record-index (dev)
 [workspace.dependencies.future_form]
 version = "0.3"
 default-features = false
@@ -149,6 +173,15 @@ default-features = false
 path = "vendor/gandr/crates/storage-chunker"
 default-features = false
 
+# Authenticated ordered records and root-checkable key and range proofs.
+# features: none; the reference tree and proof verifier need no optional feature.
+# consumers:
+# - record-index
+# - surface-peer
+[workspace.dependencies.gandr-storage-records]
+path = "vendor/gandr/crates/storage-records"
+default-features = false
+
 # The value plane: a receipt's flat bytes, the body a chunk frames, and the
 # chunk DAGs and manifests evidence is committed as and named by. The gandr
 # sibling sits at `vendor/gandr` at the revision
@@ -156,6 +189,7 @@ default-features = false
 # consumers:
 # - judge-oracle
 # - record-evidence
+# - record-index
 # - record-tree
 # - surface-driver
 # - surface-peer
@@ -179,8 +213,10 @@ default-features = false
 # consumers:
 # - judge-oracle
 # - record-evidence
+# - record-index
 # - record-tree
 # - seat-slot
+# - surface-peer
 [workspace.dependencies.iroh]
 version = "1.3"
 default-features = false
@@ -202,6 +238,15 @@ default-features = false
 version = "0.3"
 default-features = false
 
+# Nominal checked and saturating arithmetic, already used by the storage sibling.
+# features: none; neither unchecked fast operations nor instrumentation is needed.
+# consumers:
+# - record-index
+[workspace.dependencies.quenchant-arith]
+git = "https://github.com/gandr-lang/quenchant"
+rev = "111850988c96b7b33ee898f54c017ca645243e7f"
+default-features = false
+
 # The judge's HTTP client for an OpenAI-compatible endpoint. Already in the
 # graph under iroh with this feature among its own, so it adds no build. The
 # TLS configuration is iroh's: its webpki roots and its ring provider.
@@ -217,6 +262,7 @@ features = ["rustls-no-provider"]
 
 # The sedimentree: tree and commit identities, blobs.
 # consumers:
+# - record-index
 # - record-tree
 [workspace.dependencies.sedimentree_core]
 version = "0.15"
@@ -247,6 +293,7 @@ features = ["alloc"]
 # The subduction sync protocol: the peer, its builder, storage policy.
 # consumers:
 # - record-tree
+# - record-index (dev)
 [workspace.dependencies.subduction_core]
 version = "0.19"
 default-features = false
@@ -254,6 +301,7 @@ default-features = false
 # The ed25519 signer subduction authenticates and signs commits with.
 # consumers:
 # - record-tree
+# - record-index (dev)
 [workspace.dependencies.subduction_crypto]
 version = "0.10"
 default-features = false
@@ -270,6 +318,7 @@ default-features = false
 # Durable tree storage: one redb file per peer.
 # consumers:
 # - record-tree
+# - record-index (dev)
 [workspace.dependencies.subduction_redb_storage]
 version = "0.3"
 default-features = false
@@ -281,6 +330,7 @@ default-features = false
 # consumers:
 # - surface-driver
 # - record-evidence
+# - record-index
 # - surface-peer (dev)
 # - seat-slot (dev)
 # - strategy-document (dev)
@@ -299,6 +349,7 @@ default-features = false
 # - seat-slot
 # - strategy-document
 # - record-evidence
+# - record-index
 # - record-tree
 [workspace.dependencies.thiserror]
 version = "2.0"
@@ -316,6 +367,7 @@ default-features = false
 # - surface-peer
 # - seat-slot
 # - record-evidence
+# - record-index
 # - record-tree
 [workspace.dependencies.tokio]
 version = "1"
@@ -485,7 +537,7 @@ rust_2024_compatibility = "deny"
 # The policy library's lint-selection cfg: `cfg_attr(dylint_lib = …)` on each
 # crate root selects the opt-in quenchant lints under Dylint and is inert
 # everywhere else.
-unexpected_cfgs = { level = "deny", check-cfg = ['cfg(dylint_lib, values("quenchant_dylints"))'] }
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(dylint_lib, values("quenchant_dylints"))', "cfg(anodized_panic)"] }
 unknown_or_malformed_diagnostic_attributes = "deny"
 # Nightly-creep guard: consumer crates have no feature exemption. A library
 # producer scopes its rustc_private expectation to the compiler-plugin crate.

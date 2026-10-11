@@ -678,6 +678,7 @@ version = "0.0.0"
 dependencies = [
  "domhringr-judge-oracle",
  "domhringr-record-evidence",
+ "domhringr-record-index",
  "domhringr-record-tree",
  "domhringr-seat-slot",
  "domhringr-strategy-document",
@@ -728,6 +729,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "domhringr-record-index"
+version = "0.0.0"
+dependencies = [
+ "anodized",
+ "blake3",
+ "data-encoding",
+ "domhringr-record-tree",
+ "future_form",
+ "gandr-storage-records",
+ "gandr-storage-values",
+ "iroh",
+ "quenchant-arith",
+ "sedimentree_core",
+ "subduction_core",
+ "subduction_crypto",
+ "subduction_redb_storage",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "domhringr-record-tree"
 version = "0.0.0"
 dependencies = [
@@ -756,6 +779,7 @@ name = "domhringr-seat-slot"
 version = "0.0.0"
 dependencies = [
  "domhringr-record-evidence",
+ "domhringr-record-index",
  "domhringr-record-tree",
  "iroh",
  "tempfile",
@@ -781,10 +805,13 @@ version = "0.0.0"
 dependencies = [
  "domhringr-judge-oracle",
  "domhringr-record-evidence",
+ "domhringr-record-index",
  "domhringr-record-tree",
  "domhringr-seat-slot",
  "domhringr-strategy-document",
+ "gandr-storage-records",
  "gandr-storage-values",
+ "iroh",
  "lexopt",
  "tempfile",
  "thiserror 2.0.21",
@@ -1139,6 +1166,15 @@ name = "gandr-storage-chunker"
 version = "0.0.0"
 dependencies = [
  "anodized",
+]
+
+[[package]]
+name = "gandr-storage-records"
+version = "0.0.0"
+dependencies = [
+ "anodized",
+ "blake3",
+ "gandr-storage-chunker",
 ]
 
 [[package]]

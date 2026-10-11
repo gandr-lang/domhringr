@@ -8,6 +8,7 @@ The record plane stores signed receipts in sedimentrees, folds them into views, 
 - [Expected features](#expected-features)
 - [Examples](#examples)
 - [Receipts and views](#receipts-and-views)
+- [Index attestations](#index-attestations)
 - [Anchors and witnesses](#anchors-and-witnesses)
 - [Presence](#presence)
 - [Tasks](#tasks)
@@ -40,7 +41,7 @@ The record plane stores signed receipts in sedimentrees, folds them into views, 
 ## Provided features
 
 - Persistent endpoint and signing identities in a state directory, and one minted key per tree opened.
-- Durable commits carrying `Open`, `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, `Retire`, `Verdict`, `Verified`, `Graded`, `Decide` or `Landed` receipts; an `Open` carries the tree key's proof, a `Present` the presented endpoint key's; a report's content, a verdict's transcript and a verification's output are named by their value manifest's digest, and `Task::evidence` lists each with the peer that holds it.
+- Durable commits carrying `Open`, `Grant`, `Note`, `Bind`, `Claim`, `Introduce`, `Present`, `Withdraw`, `Dispatch`, `Report`, `Handoff`, `Retire`, `Pause`, `Verdict`, `Verified`, `Graded`, `Decide`, `Landed` or `Indexed` receipts; an `Open` carries the tree key’s proof, a `Present` the presented endpoint key’s; a report’s content, a verdict’s transcript and a verification’s output are named by their value manifest’s digest, and `Task::evidence` lists each with the peer that holds it.
 - Canonical views with causal authority checks, path bindings, owner-only name claims, label introductions, a book of each member's own presented endpoint, a task of seat receipts, verdicts, verifications, gradings, decisions and landings with its current attempt and how far it has progressed, and explicit refusals.
 - A judge's `Ruling` on a lettered question: read, as the answer `Letter` and each option's `Probability` with the mass outside the options (`Readout`), or unread for a named reason (`Unread`).
 - Anchors naming a tree, a path in it, or a commit in it by key, by DNS name, or by label, resolved by fold to a binding, to unbound, to a commit's verdict, to unknown, or to a named refusal; a `Reference` may abbreviate a commit id to a unique prefix of at least eight hex digits.
@@ -109,6 +110,12 @@ mise exec -- cargo nextest run -p domhringr-record-tree
 A peer is a state directory holding two ed25519 keys, one for the iroh endpoint and one for subduction's signer, the key of every tree it opened, and the tree store. Every commit carries a receipt: the format version, the tree it belongs to, a 16-byte operation fence drawn at random, and its kind — `Open { proof }` (the tree's root; its author owns the tree, and the proof is the tree key's signature naming that author), `Grant { to }` (write authority delegated to a peer), `Note { text }`, `Bind { path, target }` (a path in the tree bound to an anchor — a tree, a path, or a commit, in this tree or another — to an endpoint, or to an opaque datum), `Claim { domain }` (a DNS name claimed for the tree), `Introduce { tree, label }` (another tree introduced by a label in this one), `Present { endpoint, proof }` (the author's iroh endpoint and the addresses it is reached at; the proof is the endpoint key's signature naming the author), or `Withdraw { of }` (the withdrawal of a peer's presence). The commit's blob is the encoded receipt, its id the BLAKE3 digest of that blob, its parents the tree's heads when it is made, and its author the commit's verified signer.
 
 A view is the fold of a tree's commits: walked in canonical order (topological, the smallest commit id next among the ready), a receipt is admitted when it is the tree's Open, when its author owns the tree, or when an admitted grant to its author is among its ancestors, except that a claim is admitted from the owner alone, a presence only when its proof holds for its author under the presented endpoint's key, and a member's withdrawal only of its own presence; everything else is refused with its reason — wrong tree, undecodable, duplicate operation, no authority, not owner, second Open, bad proof, foreign endpoint, foreign presence. The tree's Open is the root Open with the smallest commit id among those whose proof holds under the tree id, so a tree id names exactly the tree its key opened. Among the admitted binds of one path, the last in canonical order binds it, among the admitted introductions of one label, the last introduces it, and among an author's admitted presences, the last is its entry in the book unless an admitted withdrawal of it follows; an anchor's path resolves to that binding or to unbound. The view keeps the id of every commit it admitted beside every refusal, so a commit resolves to the fold's verdict on it. Every peer holding the same commits folds them to the same view, whatever order they arrived in. Refused commits stay in the tree and sync like any other.
+
+## Index attestations
+
+`Indexed { index }` attests an `IndexDigest`: a project manifest's 32-byte identity, distinct from an evidence digest. The owner or a causally granted member may attest; a dispatch alone grants no attestation authority. `View::indexes` holds each author's last admitted claim in canonical order, including its commit and parents; `View::attestations` retains every claim. The receipt uses kind `0x13` under version 3, leaving other kinds unchanged.
+
+`Peer::view_at(tree, heads)` folds precisely the heads' causal past and names a missing head or ancestor as a refusal. `Task::sources` retains original receipt bytes and verified authors beside the admitted steps, so the [index plane](../record-index/README.md) derives move identities without re-encoding receipts. `StepLine` shares the task replay's move renderer.
 
 ## Anchors and witnesses
 
