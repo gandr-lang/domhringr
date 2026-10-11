@@ -16,6 +16,8 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::str::FromStr;
 
+use anodized::spec;
+
 /// How far a readout's probabilities may sum from one: far above the rounding
 /// of renormalising twenty-six doubles, far below any difference a reader of
 /// a probability acts on.
@@ -41,6 +43,13 @@ impl Letter
     /// - ensures: yields the 26 uppercase ASCII letters in alphabetical order,
     ///   each once, so the `n`-th option's letter is the `n`-th item.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the letter
+    ///   witness checks cardinality and both endpoints without consuming the
+    ///   returned iterator inside a predicate.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the collected sequence has 26 entries, from A to Z.
+    /// - witness: `ruling::tests::a_letter_is_one_uppercase_ascii_letter`
     #[inline]
     pub fn sequence() -> impl Iterator<Item = Self>
     {
@@ -66,6 +75,7 @@ impl TryFrom<char> for Letter
     /// - hypothesis: L3 — `A` and `Z` are accepted, and `a`, `[` and `@`, the
     ///   characters beside the range, refused.
     /// - witness: `ruling::tests::a_letter_is_one_uppercase_ascii_letter`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |letter| char::from(*letter) == character))]
     #[inline]
     fn try_from(character: char) -> Result<Self, Self::Error>
     {
@@ -98,6 +108,7 @@ impl FromStr for Letter
     /// - witness: `ruling::tests::a_letter_is_one_uppercase_ascii_letter`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |letter| letter.to_string() == text))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -170,6 +181,9 @@ impl TryFrom<f64> for Probability
     ///   themselves and negative zero as zero; the smallest negative number,
     ///   the next number above one, both infinities and a NaN are refused.
     /// - witness: `ruling::tests::a_probability_is_a_number_from_zero_to_one`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |probability|
+        probability.0.is_finite() && probability.0.is_sign_positive()
+    ))]
     #[inline]
     fn try_from(value: f64) -> Result<Self, Self::Error>
     {
@@ -202,6 +216,13 @@ impl PartialEq for Probability
     ///   never NaN or negative zero, so equal numbers have equal encodings and
     ///   the encodings are compared.
     /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — readout equality retains the parsed distribution and
+    ///   numeric comparisons distinguish a tie from a unique greatest value.
+    /// - witness: `ruling::tests::a_ruling_reads_back_from_its_text`
+    /// - witness: `ruling::tests::a_readout_names_the_option_holding_the_most`
+    #[spec(ensures: |output| output == (self.0.partial_cmp(&other.0) == Some(Ordering::Equal)))]
     #[inline]
     fn eq(
         &self,
@@ -241,6 +262,12 @@ impl Ord for Probability
     ///   negative zero excluded, IEEE 754's total order is the numeric one, and
     ///   it agrees with [`PartialEq`].
     /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the greatest probability is selected at every vector
+    ///   position, while repeated greatest values are refused as tied.
+    /// - witness: `ruling::tests::a_readout_names_the_option_holding_the_most`
+    #[spec(ensures: |output| Some(output) == self.0.partial_cmp(&other.0))]
     #[inline]
     fn cmp(
         &self,
@@ -264,6 +291,8 @@ impl FromStr for Probability
     /// - fails: [`ParseProbabilityError::Number`] for text that is no number,
     ///   [`ParseProbabilityError::Range`] for a number that is no probability.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; numeric
+    ///   boundary refusals and decimal round-trips are the independent oracle.
     ///
     /// # Errors
     /// - [`ParseProbabilityError::Number`]: the text is not a number.
@@ -358,6 +387,11 @@ impl Readout
     ///   the middle is the letter; two options sharing the greatest are tied
     ///   wherever they stand, and two sharing a lesser value are not.
     /// - witness: `ruling::tests::a_readout_names_the_option_holding_the_most`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |readout|
+        readout.probabilities().find(|entry| entry.0 == readout.letter)
+            .is_some_and(|(_letter, best)| readout.probabilities()
+                .all(|(letter, probability)| letter == readout.letter || probability < best))
+    ))]
     #[inline]
     pub fn new(
         probabilities: Vec<Probability>,
@@ -459,6 +493,10 @@ impl FromStr for Readout
     /// - witness: `ruling::tests::a_ruling_reads_back_from_its_text`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |readout|
+        text.starts_with(char::from(readout.letter))
+            && (FEWEST ..= MOST).contains(&readout.probabilities.len())
+    ))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -501,6 +539,13 @@ impl fmt::Display for Readout
     /// - ensures: one line with no newline, which [`Readout::from_str`] reads
     ///   back to the same readout.
     /// - panics: none.
+    /// - executable: none — the formatter hides the emitted bytes; the ruling
+    ///   round-trip witness observes the written readout.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a written readout parses with the same distribution,
+    ///   answer letter and outside mass.
+    /// - witness: `ruling::tests::a_ruling_reads_back_from_its_text`
     #[inline]
     fn fmt(
         &self,
@@ -574,6 +619,7 @@ impl FromStr for Unread
     /// - witness: `ruling::tests::a_ruling_reads_back_from_its_text`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |reason| reason.to_string() == text))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -635,6 +681,8 @@ impl FromStr for Ruling
     /// - fails: [`ParseRulingError::Form`] for text that begins with neither,
     ///   and as those readers refuse otherwise.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the readout
+    ///   and refusal round-trips witness the two grammar branches.
     ///
     /// # Errors
     /// - [`ParseRulingError`]: as [`Readout::from_str`] and
@@ -665,6 +713,13 @@ impl fmt::Display for Ruling
     /// - ensures: one line with no newline, which [`Ruling::from_str`] reads
     ///   back to the same ruling.
     /// - panics: none.
+    /// - executable: none — the formatter hides the emitted bytes; the ruling
+    ///   round-trip witness observes both answer forms.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — written readouts and every refusal reason parse back
+    ///   as the same ruling.
+    /// - witness: `ruling::tests::a_ruling_reads_back_from_its_text`
     #[inline]
     fn fmt(
         &self,

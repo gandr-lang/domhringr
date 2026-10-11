@@ -14,6 +14,8 @@ use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use core::fmt;
 
+use anodized::spec;
+
 use crate::id::TREE_CHARACTERS;
 use crate::id::TreeId;
 use crate::name::Domain;
@@ -35,9 +37,19 @@ pub trait Witness
     ///   candidates only.
     /// - fails: [`WitnessError`] when the witness cannot be read.
     /// - panics: none.
+    /// - executable: none — the trait leaves observation to its implementor and
+    ///   returns an unpolled future; static and DNS witnesses supply the
+    ///   oracle.
     ///
     /// # Errors
     /// - [`WitnessError`]: the witness cannot be read.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the static implementation distinguishes named and
+    ///   unnamed domains; the DNS implementation has an opt-in live-record
+    ///   witness.
+    /// - witness: `witness::tests::a_static_witness_names_what_it_was_given`
+    /// - witness: `witness::tests::the_dns_witness_reads_a_real_record`
     fn lookup(
         &self,
         domain: &Domain,
@@ -62,6 +74,7 @@ impl FromIterator<(Domain, TreeId)> for Static
     /// - hypothesis: L3 — a domain named twice with two trees and once more
     ///   with a repeat names both, and a domain no pair names names none.
     /// - witness: `witness::tests::a_static_witness_names_what_it_was_given`
+    #[spec(ensures: |ref output| output.0.values().all(|trees| !trees.is_empty()))]
     #[inline]
     fn from_iter<Pairs>(iter: Pairs) -> Self
     where
@@ -83,6 +96,8 @@ impl Witness for Static
     /// - ensures: the trees the pairs named for `domain`, or none; a map is
     ///   read without failure, so the lookup is never an error.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the static
+    ///   witness polls the returned future and compares its exact tree set.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — the trees given for one domain are returned for it
@@ -112,6 +127,13 @@ impl Dns
     /// # Specification
     /// - ensures: no query is made until a lookup.
     /// - panics: none.
+    /// - executable: none — the foreign resolver keeps its configuration and
+    ///   query activity opaque; the opt-in DNS witness observes actual lookup.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a system resolver reads a published tree record when
+    ///   the live-record test is enabled; CI does not run that witness.
+    /// - witness: `witness::tests::the_dns_witness_reads_a_real_record`
     #[inline]
     #[must_use]
     pub fn system() -> Self
@@ -133,6 +155,8 @@ impl Witness for Dns
     /// - fails: [`WitnessError::Dns`] when the resolver fails otherwise: a
     ///   timeout, no response, a server failure.
     /// - panics: none.
+    /// - executable: none — DNS I/O happens when the returned future is polled;
+    ///   TXT fixtures and the opt-in live-record witness observe that boundary.
     ///
     /// # Errors
     /// - [`WitnessError::Dns`]: the lookup failed for a reason other than the
@@ -199,6 +223,9 @@ enum Record
 ///   record is ignored; several records name several trees, and a tree named
 ///   twice is one.
 /// - panics: none.
+/// - executable: none — the function is its own specification over a consumed
+///   iterator; independent TXT fixtures distinguish filtering and
+///   deduplication.
 ///
 /// # Adequacy
 /// - hypothesis: L3 — a record in one string and one split across strings name
@@ -227,6 +254,14 @@ where
 ///   otherwise. No allocation: the joined text is compared and copied into a
 ///   fixed buffer as it is read.
 /// - panics: none.
+///
+/// # Adequacy
+/// - hypothesis: L3 — whole and split records yield exact tree sets, while
+///   malformed prefixes, key lengths and trailing text are ignored.
+/// - witness: `witness::tests::txt_records_name_the_trees_they_spell`
+#[spec(ensures: |ref output| matches!(output, Record::Other)
+    || record.iter().flatten().skip(TREE_PREFIX.len()).count() == TREE_CHARACTERS
+)]
 fn read(record: &iroh::dns::TxtRecordData) -> Record
 {
     let mut bytes = record.iter().flatten().copied();

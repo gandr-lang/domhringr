@@ -16,6 +16,7 @@ use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 
+use anodized::spec;
 use subduction_core::peer::id::PeerId;
 use subduction_crypto::signer::memory::MemorySigner;
 
@@ -146,6 +147,9 @@ impl Identity
     /// - fails: [`IdentityError::Directory`], [`IdentityError::Read`] and
     ///   [`IdentityError::Write`] carry the path and the I/O error.
     /// - panics: none.
+    /// - executable: none — key creation and persistence are filesystem
+    ///   effects; rereading inside a predicate would add a second fallible I/O
+    ///   operation.
     ///
     /// # Errors
     /// - [`IdentityError::Directory`]: the identity directory cannot be
@@ -238,6 +242,8 @@ impl TreeKey
     ///   created and [`IdentityError::Write`] when the key file cannot be
     ///   created or written, each carrying the path and the I/O error.
     /// - panics: none.
+    /// - executable: none — randomness and durable key creation are external
+    ///   effects; the mint witness independently reads the named seed file.
     ///
     /// # Errors
     /// - [`IdentityError::Directory`]: the key directory cannot be created.
@@ -297,6 +303,7 @@ impl TreeKey
     ///   the Open's author, and refuses one this key made for another author
     ///   and one another key made.
     /// - witness: `fold::tests::an_open_proved_by_another_key_is_refused`
+    #[spec(ensures: |output| output.verify(self.tree(), owner).is_ok())]
     #[inline]
     #[must_use]
     pub fn prove(
@@ -362,10 +369,18 @@ impl Seed
     ///   returned.
     /// - fails: as [`Identity::load_or_create`], per file.
     /// - panics: none.
+    /// - executable: none — the path may change after the read; the persistence
+    ///   and malformed-file witnesses observe the filesystem boundary.
     ///
     /// # Errors
     /// - [`IdentityError::Read`], [`IdentityError::Write`],
     ///   [`IdentityError::Malformed`], each carrying `path`.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — an existing seed preserves the identity, while a
+    ///   truncated file is refused without rewriting it.
+    /// - witness: `identity::tests::an_identity_is_created_once_and_read_back`
+    /// - witness: `identity::tests::a_truncated_key_file_is_refused`
     fn load_or_create(path: &Path) -> Result<Self, IdentityError>
     {
         match std::fs::read(path) {
@@ -391,10 +406,17 @@ impl Seed
     /// - fails: [`IdentityError::Write`] carrying `path` when the file exists
     ///   already or cannot be written.
     /// - panics: none.
+    /// - executable: none — exclusive file creation and syncing are effects;
+    ///   the identity witness reads the resulting seed and access mode.
     ///
     /// # Errors
     /// - [`IdentityError::Write`]: the exclusive create, the write or the sync
     ///   fails.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — fresh identity files contain 32-byte seeds, retain
+    ///   their identities on reopen and have owner-only Unix permissions.
+    /// - witness: `identity::tests::an_identity_is_created_once_and_read_back`
     fn create(path: &Path) -> Result<Self, IdentityError>
     {
         let seed = Self::fresh();
@@ -419,10 +441,17 @@ impl Seed
     /// - fails: [`IdentityError::Write`] carrying `path` when the file exists
     ///   already or cannot be written.
     /// - panics: none.
+    /// - executable: none — writing and syncing are filesystem effects; the
+    ///   mint witness independently checks the stored seed and permissions.
     ///
     /// # Errors
     /// - [`IdentityError::Write`]: the exclusive create, the write or the sync
     ///   fails.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the named file reconstructs the minted tree key and
+    ///   is readable and writable only by its owner on Unix.
+    /// - witness: `identity::tests::a_minted_tree_key_is_kept_under_its_tree_id`
     fn store(
         &self,
         path: &Path,
@@ -441,9 +470,17 @@ impl Seed
     ///   to disk; on Unix its mode is `0600`.
     /// - fails: the underlying I/O error, including `AlreadyExists`.
     /// - panics: none.
+    /// - executable: none — durability and permissions are filesystem effects;
+    ///   the identity and mint witnesses inspect the files outside this call.
     ///
     /// # Errors
     /// - any I/O error from the exclusive create, the write or the sync.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — seed bytes and Unix access modes survive independent
+    ///   reads, and reopening preserves an existing identity.
+    /// - witness: `identity::tests::an_identity_is_created_once_and_read_back`
+    /// - witness: `identity::tests::a_minted_tree_key_is_kept_under_its_tree_id`
     fn write_new(
         path: &Path,
         seed: &Self,

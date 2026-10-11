@@ -49,6 +49,8 @@ impl fmt::Write for OneLine<'_, '_>
     ///   begins with the backslash a literal backslash is escaped to.
     /// - fails: the formatter's own error.
     /// - panics: none.
+    /// - executable: none — the formatter exposes no output buffer to inspect;
+    ///   the view witness observes escaped fields at the printed boundary.
     ///
     /// # Errors
     /// - [`fmt::Error`]: the formatter refused a write.

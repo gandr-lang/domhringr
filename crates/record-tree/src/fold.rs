@@ -17,6 +17,7 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::fmt::Write as _;
 
+use anodized::spec;
 use domhringr_arena_session::Arena;
 use domhringr_arena_session::Channel;
 use domhringr_arena_session::Choice;
@@ -201,6 +202,8 @@ impl View
     ///   [`Resolution::Unbound`] when no admitted bind names `path`; never a
     ///   default.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; competing
+    ///   and refused bind witnesses are the independent resolution oracle.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a path bound twice resolves to the later bind from
@@ -237,6 +240,7 @@ impl View
     ///   another tree are each located to their own answer.
     /// - witness: `store::tests::a_commit_resolves_by_its_anchor_to_its_verdict`
     /// - witness: `store::tests::an_ambiguous_prefix_is_refused_naming_it`
+    #[spec(ensures: |ref output| matches!(output, Resolution::Commit { .. } | Resolution::Unknown))]
     #[inline]
     #[must_use]
     pub fn locate(
@@ -274,6 +278,11 @@ impl View
     ///   no commit begins with expands to none.
     /// - witness: `store::tests::a_commit_resolves_by_its_anchor_to_its_verdict`
     /// - witness: `store::tests::an_ambiguous_prefix_is_refused_naming_it`
+    #[spec(ensures: |ref output| {
+        let digits = prefix.to_string();
+        output.iter().all(|commit| commit.to_string().starts_with(&digits)
+            && matches!(self.locate(*commit), Resolution::Commit { .. }))
+    })]
     #[inline]
     #[must_use]
     pub fn expand(
@@ -325,6 +334,9 @@ impl View
     ///   presence is absent, and an author never presented is absent; no entry
     ///   is a default.
     /// - panics: none.
+    /// - executable: none — this const field projection performs no fold;
+    ///   supersession and withdrawal witnesses establish the stored book
+    ///   invariant.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a presence later superseded by its author, and one
@@ -359,6 +371,8 @@ impl View
     ///   an earlier dispatch is a step and moves no attempt, and a verdict is a
     ///   step and moves none.
     /// - panics: none.
+    /// - executable: none — this const field projection performs no replay;
+    ///   lifecycle and authority witnesses establish the stored task invariant.
     ///
     /// # Adequacy
     /// - hypothesis: L3 a dispatched seat reports; pre-report handoff and
@@ -398,6 +412,7 @@ impl View
     /// - hypothesis: L3 — complete, incomplete, missing and unknown-edition
     ///   attempts distinguish transport from replay under a local default.
     /// - witness: `fold::tests::dispatch_editions_govern_each_attempt`
+    #[spec(ensures: |ref output| output.is_err() || self.plays.contains_key(&dispatch))]
     #[inline]
     pub fn transport(
         &self,
@@ -445,6 +460,8 @@ impl fmt::Display for View
     ///   `\u{7}`), and a space in a path or a label as `\u{20}`, so equal views
     ///   print equal bytes and distinct facts print distinct lines.
     /// - panics: none.
+    /// - executable: none — the formatter is write-only; the view fixture
+    ///   independently observes escaped facts and line boundaries.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a view with a member, notes, a multi-line note, a
@@ -699,6 +716,12 @@ impl Course
     ///
     /// # Errors
     /// - [`Refusal`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — wrong holders and superseded dispatches are refused
+    ///   without changing the current attempt.
+    /// - witness: `fold::tests::a_report_on_a_superseded_dispatch_is_refused`
+    #[spec(ensures: |ref output| output.is_err() || self.current(dispatch).is_ok())]
     fn answerable(
         self,
         dispatch: CommitId,
@@ -726,9 +749,16 @@ impl Course
     ///   [`Refusal::NotCurrent`] when the course is of another dispatch or of
     ///   none.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; current and
+    ///   stale dispatch witnesses provide the independent relation oracle.
     ///
     /// # Errors
     /// - [`Refusal::NotCurrent`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a receipt naming a superseded dispatch cannot answer
+    ///   the current attempt.
+    /// - witness: `fold::tests::a_report_on_a_superseded_dispatch_is_refused`
     fn current(
         self,
         dispatch: CommitId,
@@ -749,6 +779,13 @@ impl Course
     /// - ensures: a dispatched course keeps its dispatch and takes `moved` and
     ///   `holder`; an undispatched one is returned unchanged.
     /// - panics: none.
+    /// - executable: none — the const function is its own specification; slot
+    ///   transition witnesses observe which holder retains authority.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the first handoff changes the holder; a repeated
+    ///   handoff is refused without restoring the earlier holder.
+    /// - witness: `fold::tests::handoff_closes_the_play_instead_of_permitting_a_second_handoff`
     const fn moved(
         self,
         moved: Placed,
@@ -792,6 +829,8 @@ struct Past
 ///   unchanged.
 /// - fails: protocol initialization and monitor refusals remain distinct facts.
 /// - panics: none.
+/// - executable: none — the function is its own specification; edition and
+///   refusal witnesses observe the delegated monitor transitions.
 ///
 /// # Errors
 /// [`Refusal::Arena`] or [`Refusal::Protocol`].
@@ -832,6 +871,7 @@ fn record_move(
 ///   state from authority, and a refused pause leaves the next report
 ///   admissible.
 /// - witness: `fold::tests::dispatch_editions_govern_each_attempt`
+#[spec(ensures: |ref output| output.is_err() || plays.contains_key(&dispatch))]
 fn admit_move(
     plays: &mut BTreeMap<CommitId, (Edition, Play)>,
     dispatch: CommitId,
@@ -871,6 +911,7 @@ fn admit_move(
 /// - hypothesis: L3 current and stale dispatches separate the cross-channel
 ///   relation from duplicate-choice refusals in the monitor.
 /// - witness: `fold::tests::task_channels_refuse_second_choices`
+#[spec(ensures: |ref output| output.is_err() || plays.contains_key(&dispatch))]
 fn advance(
     plays: &BTreeMap<CommitId, (Edition, Play)>,
     course: Course,
@@ -901,6 +942,7 @@ fn advance(
 ///   the candidate's causal prefix and fail at the initial monitor state.
 /// - witness: `fold::tests::a_verdicts_judge_grades_its_answers`
 /// - witness: `fold::tests::a_landing_carries_out_a_decision_to_land`
+#[spec(requires: matches!(movement, Movement::Graded | Movement::Landed), ensures: |ref output| output.is_err())]
 fn unstarted(
     plays: &BTreeMap<CommitId, (Edition, Play)>,
     course: Course,
@@ -1134,6 +1176,10 @@ struct Carry
 ///
 /// [`OpenProof::verify`]: crate::receipt::OpenProof::verify
 /// [`EndpointProof::verify`]: crate::receipt::EndpointProof::verify
+#[spec(ensures: |ref output| output.as_ref().map_or(true, |view|
+    view.task.steps().iter().all(|entry| view.admitted.contains(&entry.0))
+        && view.book.values().all(|presence| view.admitted.contains(&presence.since()))
+        && view.indexes.values().all(|index| view.admitted.contains(&index.commit))))]
 pub fn fold(
     tree: TreeId,
     commits: Vec<VerifiedMeta<LooseCommit>>,
@@ -1711,6 +1757,13 @@ pub fn fold(
 /// - ensures: a total order on stored commits that two peers compute alike; it
 ///   ties only commits with identical signed bytes, which are one commit.
 /// - panics: none.
+///
+/// # Adequacy
+/// - hypothesis: L3 — arrival permutations give the same canonical view, and
+///   competing root Opens select one owner.
+/// - witness: `fold::tests::a_view_is_the_same_whatever_order_commits_arrive_in`
+/// - witness: `fold::tests::the_smallest_root_open_names_the_owner`
+#[spec(ensures: |output| output.is_eq() == (left.signed().as_bytes() == right.signed().as_bytes()))]
 fn canonical(
     left: &VerifiedMeta<LooseCommit>,
     right: &VerifiedMeta<LooseCommit>,
@@ -1733,6 +1786,13 @@ fn canonical(
 ///   reader and dropped after its last reader, moved rather than copied when it
 ///   is.
 /// - panics: none.
+///
+/// # Adequacy
+/// - hypothesis: L3 — causal grants admit descendants but not concurrent
+///   receipts; a cycle still yields a finite view.
+/// - witness: `fold::tests::a_note_by_a_peer_granted_in_its_causal_past_is_admitted`
+/// - witness: `fold::tests::a_parent_cycle_is_placed_in_commit_id_order`
+#[spec(ensures: parents.iter().all(|parent| carries.get(parent).is_none_or(|carry| !carry.readers.contains(&reader))))]
 fn inherit(
     carries: &mut BTreeMap<Position, Carry>,
     parents: &[Position],
@@ -1811,6 +1871,7 @@ fn join<Member>(
 ///   admitted.
 /// - witness: `fold::tests::a_verdicts_judge_grades_its_answers`
 /// - witness: `fold::tests::a_gradings_composition_is_checked_before_it_advances_the_task`
+#[spec(ensures: |ref output| output.is_err() || grades.is_empty() || grades.contains(&composed))]
 fn grading(
     ruling: &Ruled,
     author: PeerKey,
@@ -1844,6 +1905,8 @@ fn grading(
 /// - fails: wrong authorship is not operator; the monitor owns the decision
 ///   branch and landing order.
 /// - panics: none.
+/// - executable: none — the function is its own specification; owner, member
+///   and seat landing witnesses independently distinguish signing authority.
 ///
 /// # Errors
 /// - [`Refusal`]: not operator.
@@ -1869,6 +1932,12 @@ fn landing(
 /// - requires: no admitted commit carries `operation` yet.
 /// - ensures: later receipts carrying `operation` are duplicates of `commit`.
 /// - panics: none.
+///
+/// # Adequacy
+/// - hypothesis: L3 — repeating an operation retains its first admitted commit
+///   and refuses the duplicate.
+/// - witness: `fold::tests::a_duplicate_operation_keeps_the_first`
+#[spec(requires: !admitted.contains_key(&operation), ensures: admitted.values().any(|held| *held == commit))]
 fn admit(
     admitted: &mut BTreeMap<Operation, CommitId>,
     operation: Operation,

@@ -8,18 +8,6 @@
 //! commit resolves through its anchor, by its whole id or a prefix of it, to
 //! the fold's verdict on it.
 
-// Temporary until the executable-specs-record backfill covers this crate.
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    allow(
-        spec_attribute_present,
-        adequacy_present,
-        maybe_shape,
-        erased_error_signature,
-        spec_attribute_unqualified
-    )
-)]
-
 #[cfg(test)]
 mod tests
 {
@@ -84,6 +72,14 @@ mod tests
         ///
         /// # Specification
         /// - panics: unless exactly one line was printed.
+        /// - executable: none — the function is its own specification; the
+        ///   process witness supplies the output or proof image and checks its
+        ///   interpretation.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
         fn only(&self) -> &String
         {
             assert_eq!(self.0.len(), 1, "one line expected: {:?}", self.0);
@@ -94,6 +90,14 @@ mod tests
         ///
         /// # Specification
         /// - panics: on a line that is not 64 lowercase hex digits.
+        /// - executable: none — the function is its own specification; the
+        ///   process witness supplies the output or proof image and checks its
+        ///   interpretation.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
         fn assert_ids(&self)
         {
             for line in &self.0 {
@@ -129,6 +133,14 @@ mod tests
         /// - panics: unless the line is `path`, the peer id, and one of `direct
         ///   <socket address>`, `relay <http or https URL>` or `pending`,
         ///   separated by single spaces.
+        /// - executable: none — the function is its own specification; the
+        ///   process witness supplies the output or proof image and checks its
+        ///   interpretation.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
         fn read(
             line: &OsStr,
             from: &Lines,
@@ -188,6 +200,14 @@ mod tests
     /// - ensures: the command exited within [`DEADLINE`].
     /// - panics: when it cannot start or outlives the deadline (it is killed
     ///   first).
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
     fn output(command: &mut Command) -> std::process::Output
     {
         let mut child = command
@@ -213,6 +233,14 @@ mod tests
     /// - ensures: the command exited 0 within [`DEADLINE`].
     /// - panics: as [`output`], or when it exits non-zero (its standard error
     ///   is shown) or prints anything but UTF-8.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
     fn finish(command: &mut Command) -> Lines
     {
         let output = output(command);
@@ -238,6 +266,14 @@ mod tests
     ///   read but failed, within [`DEADLINE`], printing nothing to standard
     ///   output and one line to standard error.
     /// - panics: as [`output`], or on any other status or output.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — unclaimed and unscoped references fail with their
+    ///   named diagnostic and no standard output.
+    /// - witness: `sync::tests::a_named_anchor_resolves_through_its_claim_or_introduction`
     fn refuse(command: &mut Command) -> String
     {
         let output = output(command);
@@ -261,6 +297,14 @@ mod tests
     /// # Specification
     /// - panics: as [`finish`], or unless `open` printed one line that parses
     ///   as a bare tree anchor in the key form.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
     fn open(state: &Path) -> String
     {
         let anchor = finish(peer(state).arg("open")).only().clone();
@@ -278,6 +322,14 @@ mod tests
     ///
     /// # Specification
     /// - panics: unless `anchor` is a bare anchor in the key form.
+    /// - executable: none — the function is its own specification; the process
+    ///   witness supplies the output or proof image and checks its
+    ///   interpretation.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a DNS witness names the same tree as its key-form
+    ///   anchor, and both resolve to the bound commit.
+    /// - witness: `sync::tests::a_named_anchor_resolves_through_its_claim_or_introduction`
     fn tree_id(anchor: &OsStr) -> String
     {
         let text = anchor.to_str().expect("an anchor is UTF-8");
@@ -297,6 +349,14 @@ mod tests
     ///   path line, read for `remote`'s peer id.
     /// - panics: as [`finish`], when the first line is not the source line
     ///   naming that endpoint, or when no path line ends the output.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
     fn sync(
         state: &Path,
         remote: &Lines,
@@ -344,6 +404,14 @@ mod tests
         /// - ensures: the process is running with its standard output read line
         ///   by line; its standard error passes through to the test's.
         /// - panics: when the process cannot start.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
         fn start(
             state: &Path,
             options: &[&OsStr],
@@ -374,6 +442,14 @@ mod tests
         /// # Specification
         /// - panics: when the three lines do not arrive within [`DEADLINE`]
         ///   each.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
         fn announcement(&self) -> Lines
         {
             Lines(core::iter::repeat_with(|| self.line()).take(3).collect())
@@ -386,6 +462,14 @@ mod tests
         /// - panics: unless the next line is `accepted` with `dialer`'s peer id
         ///   and the one after is a path line for the same peer, each within
         ///   [`DEADLINE`].
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
         fn admitted(
             &self,
             dialer: &Lines,
@@ -404,6 +488,14 @@ mod tests
         /// # Specification
         /// - panics: when no line arrives within [`DEADLINE`], or the server's
         ///   output ends.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
         fn line(&self) -> String
         {
             self.lines.recv_timeout(DEADLINE).unwrap_or_else(|error| {
@@ -419,6 +511,14 @@ mod tests
         /// # Specification
         /// - ensures: the process has exited and been reaped.
         /// - panics: when the process cannot be killed or reaped.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
         fn drop(&mut self)
         {
             self.child.kill().unwrap();
@@ -525,6 +625,13 @@ mod tests
     ///   promise a direct path even on one host; the server is killed on
     ///   return, freeing the store.
     /// - panics: on any contract violation, a pending path among them.
+    /// - executable: none — process lifetime and synchronization are external
+    ///   effects; the peer witness compares the exchanged tree views.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the two peers fold the exchanged receipts to the same
+    ///   view.
+    /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
     fn pull(
         dialer: (&Path, &Lines),
         server: (&Path, &Lines),

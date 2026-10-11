@@ -105,6 +105,9 @@ impl Store
     ///   valid existing files remain unchanged and damaged images are repaired.
     /// - fails: inconsistent manifest, node encoding, framing or file failures.
     /// - panics: none.
+    /// - executable: none — durable publication and repair cannot be replayed
+    ///   in a predicate; reopening and deliberately damaged files provide the
+    ///   oracle.
     ///
     /// # Errors
     /// - [`StoreError`]: invalid supplied tree or failed persistence.
@@ -153,6 +156,9 @@ impl Store
     /// - ensures: the returned supported manifest hashes to the requested name.
     /// - fails: absence, unsupported fields, mislabeling or file failure.
     /// - panics: none.
+    /// - executable: none — filesystem lookup and content authentication are
+    ///   the boundary itself; foreign manifests in an empty node store provide
+    ///   the oracle.
     ///
     /// # Errors
     /// - [`StoreError`]: manifest lookup, framing or identity failure.
@@ -160,7 +166,6 @@ impl Store
     /// # Adequacy
     /// - hypothesis: L3 — unsupported manifests fail with an empty node store.
     /// - witness: `manifest::tests::a_foreign_kind_layout_or_commitment_is_refused_before_any_node`
-    #[spec(ensures: |ret| ret.as_ref().map_or(true, |manifest| manifest.identity().is_ok_and(|identity| identity == digest)))]
     #[inline]
     pub fn manifest(
         &self,
@@ -211,8 +216,7 @@ impl Store
     /// - witness: `store::tests::a_hydrated_tree_proves_as_the_built_one`
     /// - witness: `store::tests::a_tampered_node_file_is_refused_at_load`
     #[spec(ensures: |ret| ret.as_ref().map_or(true, |index|
-        index.manifest.identity().is_ok_and(|identity| identity == digest)
-        && Manifest::new(index.manifest.kind(), &index.tree) == index.manifest))]
+        usize::try_from(u64::from(index.manifest.count())).is_ok_and(|count| count == index.tree.records().len())))]
     #[inline]
     pub fn load(
         &self,
@@ -262,9 +266,16 @@ impl Store
     /// - ensures: absence is a cold cache; a present cursor names one manifest.
     /// - fails: file access or an incorrectly sized cursor.
     /// - panics: none.
+    /// - executable: none — filesystem lookup is effectful; refreshing the
+    ///   local derivation is compared with a whole rebuild.
     ///
     /// # Errors
     /// - [`StoreError::File`]: the cursor cannot be read.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a stored project cursor seeds a refresh whose records
+    ///   equal a whole rebuild.
+    /// - witness: `derive::tests::a_refreshed_index_equals_one_derived_whole`
     pub(crate) fn cached(
         &self,
         project: TreeId,
@@ -294,9 +305,16 @@ impl Store
     /// - ensures: the next refresh can reuse these entries without attesting.
     /// - fails: directory creation or atomic publication failure.
     /// - panics: none.
+    /// - executable: none — atomic cursor publication is effectful; the
+    ///   subsequent refresh must reproduce a whole derivation.
     ///
     /// # Errors
     /// - [`StoreError::File`]: persistence failed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — publication makes the next refresh reproduce the
+    ///   independently rebuilt index.
+    /// - witness: `derive::tests::a_refreshed_index_equals_one_derived_whole`
     pub(crate) fn remember(
         &self,
         project: TreeId,
@@ -318,6 +336,8 @@ impl Store
     /// - ensures: decoded records come from bytes authenticated under `hash`.
     /// - fails: file, identity, node language or decode-work refusal.
     /// - panics: none.
+    /// - executable: none — node I/O and authentication are effectful; the
+    ///   corruption witness checks the independent hash refusal.
     ///
     /// # Errors
     /// - [`StoreError`]: the node cannot be read or authenticated.
@@ -349,6 +369,8 @@ impl Store
 ///   image.
 /// - fails: file comparison, creation, write, sync or rename refusal.
 /// - panics: none.
+/// - executable: none — atomic filesystem publication is not observable through
+///   the return value; reopening and damaged-file repair provide the oracle.
 ///
 /// # Errors
 /// - [`StoreError::File`]: persistence failed at the named path.

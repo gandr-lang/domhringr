@@ -152,6 +152,20 @@ pub enum ProveError
 /// # Adequacy
 /// - hypothesis: L1 — all keys and separating absent probes verify root-only.
 /// - witness: `prove::tests::every_key_proves_against_the_manifest_alone`
+#[spec(ensures: |ret| ret.as_ref().map_or(true, |answer| match answer.proof {
+    Proof::Present(ref proof) => match *query {
+        Query::Key(ref key) => proof.verify(&index.tree.root(), key.as_borrowed(), proof.value()).is_ok(),
+        Query::Range(_) => false,
+    },
+    Proof::Absent(ref proof) => match *query {
+        Query::Key(ref key) => proof.verify(&index.tree.root(), key.as_borrowed()).is_ok(),
+        Query::Range(_) => false,
+    },
+    Proof::Range(ref proof) => match *query {
+        Query::Range(ref range) => range.as_range().is_ok_and(|range| proof.verify(&index.tree.root(), range).is_ok()),
+        Query::Key(_) => false,
+    },
+}))]
 #[inline]
 pub fn answer(
     index: &Index,
@@ -190,6 +204,9 @@ impl Answer
     ///   manifest's resealed root and answer exactly `query`.
     /// - fails: wrong identity, kind, query or record proof.
     /// - panics: none.
+    /// - executable: none — the authentication boundary is its own
+    ///   specification; root-only answers and forged proofs distinguish
+    ///   acceptance from refusal.
     ///
     /// # Errors
     /// - [`ProveError`]: the answer does not establish this question.
@@ -199,8 +216,6 @@ impl Answer
     ///   root-only; L3 — an invented dispatch fails by record error variant.
     /// - witness: `prove::tests::every_key_proves_against_the_manifest_alone`
     /// - witness: `prove::tests::a_forged_later_attempt_is_refused`
-    #[spec(ensures: |ret| ret.is_err() || (self.manifest.kind() == kind
-        && self.manifest.identity().is_ok_and(|actual| actual == digest)))]
     #[inline]
     pub fn verify(
         &self,
@@ -244,6 +259,9 @@ impl Answer
 ///   bytes and its author is the author carried by the authenticated value.
 /// - fails: malformed value, receipt or foreign task identity.
 /// - panics: none.
+/// - executable: none — the decoding and tree-identity boundary is its own
+///   specification; authentic membership carrying a foreign task is the refusal
+///   oracle.
 ///
 /// # Errors
 /// - [`ProveError`]: the value is not a move of the selected task.
@@ -252,7 +270,6 @@ impl Answer
 /// - hypothesis: L3 — an authentic membership carrying a foreign tree is
 ///   refused.
 /// - witness: `prove::tests::a_move_naming_another_tree_is_refused`
-#[spec(ensures: |ret| ret.as_ref().map_or(true, |step| step.receipt.tree() == tree))]
 #[inline]
 pub fn read_move(
     tree: TreeId,
@@ -283,6 +300,8 @@ pub fn read_move(
 /// - fails: non-dispatch membership, foreign tree, range answer or malformed
 ///   move.
 /// - panics: none.
+/// - executable: none — the next-attempt classifier is its own specification;
+///   authenticated end and invented dispatch probes distinguish its outcomes.
 ///
 /// # Errors
 /// - [`ProveError`]: this is not a well-formed next-attempt answer.

@@ -38,6 +38,7 @@ use core::fmt;
 use core::fmt::Write as _;
 use core::str::FromStr;
 
+use anodized::spec;
 use gandr_storage_values::ManifestDigest;
 use sedimentree_core::loose_commit::id::CommitId;
 
@@ -75,6 +76,13 @@ impl fmt::Display for Brief
     /// - ensures: one line with no newline: an anchor's backslashes and control
     ///   characters are escaped as a bind target's are.
     /// - panics: none.
+    /// - executable: none — the formatter is write-only; the replay fixture
+    ///   observes line boundaries and escaped fields.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the task replay fixture compares both brief forms and
+    ///   escaped anchor text.
+    /// - witness: `fold::tests::a_task_prints_one_line_per_step_and_its_standing`
     #[inline]
     fn fmt(
         &self,
@@ -125,6 +133,7 @@ impl FromStr for Summary
     /// - witness: `task::tests::a_summary_is_one_short_line`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |summary| summary.as_ref() == text))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -519,6 +528,14 @@ impl Attempt
     ///   progress held, so a later step of the same rank replaces an earlier
     ///   one and a lower rank never undoes a higher.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the
+    ///   lifecycle witness checks that lower-ranked steps never undo later
+    ///   progress.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the lifecycle advances through every rank and retains
+    ///   later progress when an earlier rank arrives.
+    /// - witness: `fold::tests::an_attempt_advances_through_its_lifecycle`
     fn advance(
         &mut self,
         next: Progress,
@@ -560,6 +577,8 @@ impl fmt::Display for Current
     /// - ensures: the line holds no newline: a rework's reason is escaped as
     ///   [`Decision`]'s `Display` escapes it.
     /// - panics: none.
+    /// - executable: none — the formatter is write-only; the task replay
+    ///   fixture observes each standing.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — each standing is printed as a task's last line by a
@@ -689,6 +708,8 @@ impl Task
     ///   verdict's transcript with its judge, and a verification's output with
     ///   its runner; every other step names none.
     /// - panics: none.
+    /// - executable: none — checking a lazy iterator would consume it; the
+    ///   lifecycle witness observes the evidence sequence and authors.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a task holding a report, two verifications and a
@@ -737,6 +758,12 @@ impl Task
     ///   attempt, its slot held by `seat`, its report awaited and nothing past
     ///   it checked.
     /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a dispatch starts an attempt and later admitted steps
+    ///   advance its lifecycle.
+    /// - witness: `fold::tests::an_attempt_advances_through_its_lifecycle`
+    #[spec(ensures: self.steps.iter().any(|entry| entry.0 == commit))]
     pub(crate) fn dispatch(
         &mut self,
         commit: CommitId,
@@ -772,6 +799,12 @@ impl Task
     ///   progress ([`Attempt::advance`]). A verdict changes no attempt, and a
     ///   step answering an earlier dispatch changes none either: a later
     ///   dispatch superseded it.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the lifecycle records admitted responses and
+    ///   preserves progress when earlier ranks arrive.
+    /// - witness: `fold::tests::an_attempt_advances_through_its_lifecycle`
+    #[spec(ensures: self.steps.iter().any(|entry| entry.0 == commit))]
     pub(crate) fn answer(
         &mut self,
         commit: CommitId,
@@ -858,6 +891,8 @@ impl fmt::Display for Task
     ///   note's are, a summary holds no control character, and a ruling is
     ///   written as one line ([`Ruling`]'s `Display`).
     /// - panics: none.
+    /// - executable: none — the formatter is write-only; the replay fixture
+    ///   compares every step and the final standing.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a task with a dispatch by anchor, a handoff, a report
@@ -899,6 +934,8 @@ impl fmt::Display for StepLine<'_>
     ///   standing.
     /// - fails: only when the formatter refuses output.
     /// - panics: none.
+    /// - executable: none — the formatter is write-only; the replay fixture
+    ///   independently fixes each move and its detail rows.
     ///
     /// # Errors
     /// - [`fmt::Error`]: the output sink refused a write.

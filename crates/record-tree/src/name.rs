@@ -11,6 +11,8 @@ use alloc::string::String;
 use core::fmt;
 use core::str::FromStr;
 
+use anodized::spec;
+
 use crate::id::ParseIdError;
 use crate::id::TreeId;
 
@@ -70,6 +72,9 @@ impl FromStr for Domain
     /// - witness: `name::tests::a_malformed_domain_is_refused_by_name`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |domain|
+        domain.as_ref() == text && domain.as_ref().is_ascii() && domain.as_ref().len() <= DOMAIN_CHARACTERS
+    ))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -197,6 +202,9 @@ impl FromStr for Label
     /// - witness: `name::tests::a_malformed_label_is_refused_by_name`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |label|
+        label.as_ref() == text && text.parse::<Domain>().is_err()
+    ))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {

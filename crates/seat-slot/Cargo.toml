@@ -12,6 +12,7 @@ categories = ["network-programming"]
 publish.workspace = true
 
 [dependencies]
+anodized = { workspace = true }
 domhringr-record-evidence = { workspace = true }
 domhringr-record-index = { workspace = true }
 domhringr-record-tree = { workspace = true }

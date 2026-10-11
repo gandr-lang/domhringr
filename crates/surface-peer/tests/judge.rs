@@ -4,18 +4,6 @@
 //! every refusal is recorded as an unread ruling, never a default letter, and
 //! the replay shows the verdict.
 
-// Temporary until the executable-specs-record backfill covers this crate.
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    allow(
-        spec_attribute_present,
-        adequacy_present,
-        maybe_shape,
-        erased_error_signature,
-        spec_attribute_unqualified
-    )
-)]
-
 #[cfg(test)]
 mod tests
 {
@@ -72,6 +60,14 @@ mod tests
     /// - ensures: the command exited within [`DEADLINE`].
     /// - panics: when it cannot start or outlives the deadline (it is killed
     ///   first).
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
     fn run(command: &mut Command) -> Output
     {
         let mut child = command
@@ -95,6 +91,14 @@ mod tests
     ///
     /// # Specification
     /// - panics: unless the standard output is UTF-8.
+    /// - executable: none — the function is its own specification; the process
+    ///   witness supplies the output or proof image and checks its
+    ///   interpretation.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
     fn printed(output: &Output) -> Vec<String>
     {
         String::from_utf8(output.stdout.clone())
@@ -108,6 +112,14 @@ mod tests
     ///
     /// # Specification
     /// - panics: unless the standard error is UTF-8.
+    /// - executable: none — the function is its own specification; the process
+    ///   witness supplies the output or proof image and checks its
+    ///   interpretation.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
     fn diagnosed(output: &Output) -> Vec<String>
     {
         String::from_utf8(output.stderr.clone())
@@ -123,6 +135,14 @@ mod tests
     /// - ensures: the command exited 0 within [`DEADLINE`].
     /// - panics: as [`run`], or when it exits non-zero (its standard error is
     ///   shown) or prints anything but UTF-8.
+    /// - executable: none — process, channel or filesystem effects cannot be
+    ///   replayed in a predicate; the process witness checks their observable
+    ///   results.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
     fn finish(command: &mut Command) -> Vec<String>
     {
         let output = run(command);
@@ -139,6 +159,14 @@ mod tests
     ///
     /// # Specification
     /// - panics: as [`finish`], or unless exactly one line was printed.
+    /// - executable: none — the function is its own specification; the process
+    ///   witness supplies the output or proof image and checks its
+    ///   interpretation.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
+    ///   findings this helper supplies.
+    /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
     fn only(command: &mut Command) -> String
     {
         let lines = finish(command);
@@ -192,6 +220,14 @@ mod tests
         /// - ensures: the process is running and its standard output is read
         ///   line by line; its standard error passes through to the test's.
         /// - panics: when the process cannot start.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
         fn spawn(command: &mut Command) -> Self
         {
             let mut child = command
@@ -217,6 +253,14 @@ mod tests
         /// # Specification
         /// - panics: when no line arrives within [`DEADLINE`], or the process's
         ///   output ends.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
         fn line(&self) -> String
         {
             self.lines.recv_timeout(DEADLINE).unwrap_or_else(|error| {
@@ -232,6 +276,14 @@ mod tests
         /// # Specification
         /// - ensures: the process has exited and been reaped.
         /// - panics: when the process cannot be killed or reaped.
+        /// - executable: none — process, channel or filesystem effects cannot
+        ///   be replayed in a predicate; the process witness checks their
+        ///   observable results.
+        ///
+        /// # Adequacy
+        /// - hypothesis: L3 — the process fixture checks the commands, receipts
+        ///   or findings this helper supplies.
+        /// - witness: `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
         fn drop(&mut self)
         {
             self.child.kill().unwrap();

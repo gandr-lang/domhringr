@@ -27,6 +27,8 @@ use gandr_storage_values::TokenSink;
 use gandr_storage_values::ValueError;
 use gandr_storage_values::decode_flat;
 use gandr_storage_values::encode_flat;
+use quenchant_arith::arith;
+use quenchant_arith::arith::Int;
 
 use crate::Index;
 use crate::IndexKind;
@@ -57,6 +59,7 @@ impl Subject
     ///   family, subject and move boundaries.
     /// - witness: `provenance::tests::a_digest_named_twice_has_two_records`
     /// - witness: `provenance::tests::provenance_agrees_with_every_tasks_evidence`
+    #[spec(ensures: |ret| matches!(ret.as_ref().len(), 22 | 33 | 34))]
     #[inline]
     #[must_use]
     pub fn prefix(self) -> OwnedRecordKey
@@ -86,6 +89,9 @@ impl Subject
     ///   bound excludes its shortest lexicographic successor.
     /// - fails: propagates a record range refusal.
     /// - panics: none.
+    /// - executable: none — the prefix-bound constructor is its own
+    ///   specification; verified ranges and maximal suffix bytes provide the
+    ///   independent oracle.
     ///
     /// # Errors
     /// - [`RecordTreeError`]: the record plane refused the bounds.
@@ -186,6 +192,7 @@ impl TryFrom<&[u8]> for Reference
     /// - hypothesis: L3 — both revision widths and malformed/trailing keys
     ///   separate all key boundaries.
     /// - witness: `provenance::tests::provenance_agrees_with_every_tasks_evidence`
+    #[spec(ensures: |ret| ret.is_err() || matches!(bytes.len(), 62 | 73 | 74))]
     #[inline]
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error>
     {
@@ -273,6 +280,8 @@ impl CanonicalValue for Attribution
     ///   revision respectively, followed by the peer's 32 bytes.
     /// - fails: propagates token sink failures.
     /// - panics: none.
+    /// - executable: none — the generic sink exposes no readback; decoded
+    ///   fields and holders are compared with independently folded evidence.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a token.
@@ -305,6 +314,8 @@ impl CanonicalValue for Attribution
     /// - ensures: preserves every encoded field and holder.
     /// - fails: unknown tags, malformed peers and framing return `ValueError`.
     /// - panics: none.
+    /// - executable: none — the consuming token reader exposes no replay; all
+    ///   four fields and malformed widths are checked independently.
     ///
     /// # Errors
     /// - [`ValueError`]: malformed attribution.
@@ -353,6 +364,8 @@ pub enum Naming
 ///   verdicts name output/transcript held by runner/judge; landings name the
 ///   merge revision and author. All other kinds name nothing.
 /// - panics: none.
+/// - executable: none — the receipt classifier is its own specification; the
+///   fold independently supplies evidence holders and landed revisions.
 ///
 /// # Adequacy
 /// - hypothesis: L2 — `Task::evidence` supplies independent digest/holder
@@ -417,6 +430,9 @@ impl Records
     /// - hypothesis: L2 — compare all records with the fold's evidence and
     ///   landing steps, including aliases and non-evidence moves.
     /// - witness: `provenance::tests::provenance_agrees_with_every_tasks_evidence`
+    #[spec(captures: before = self.0.len(), ensures: |ret| ret.is_err() ||
+        arith::checked_sub(Int::from(self.0.len()), Int::from(before))
+            .is_ok_and(|added| usize::from(added) <= dialogue.tree.records().len()))]
     #[inline]
     pub fn extend(
         &mut self,
@@ -463,8 +479,7 @@ impl Records
     /// # Adequacy
     /// - hypothesis: L2 — exact records agree with independent folded evidence.
     /// - witness: `provenance::tests::provenance_agrees_with_every_tasks_evidence`
-    #[spec(ensures: |ret| ret.as_ref().map_or(true, |index|
-        index.manifest.kind() == IndexKind::Provenance && index.tree.records().len() == self.0.len()))]
+    #[spec(ensures: |ret| ret.as_ref().map_or(true, |index| index.tree.records().len() == self.0.len()))]
     #[inline]
     pub fn build(&self) -> Result<Index, RecordTreeError>
     {

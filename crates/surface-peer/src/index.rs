@@ -6,6 +6,7 @@ mod render;
 use core::fmt::Write as _;
 use std::ffi::OsStr;
 
+use anodized::spec;
 use domhringr_record_index::AttemptNumber;
 use domhringr_record_index::Index;
 use domhringr_record_index::IndexKind;
@@ -151,6 +152,8 @@ pub enum ParseError
 ///   coordinates.
 /// - fails: malformed names, coordinates, endpoints and extra operands fail.
 /// - panics: none.
+/// - executable: none — the function is its own specification; process
+///   witnesses exercise the accepted commands and their refused operands.
 ///
 /// # Errors
 /// - [`UsageError`]: lexical, operand or keyed-language refusal.
@@ -395,6 +398,8 @@ impl Reader
     ///   connection is reused and no receipt tree is synced.
     /// - fails: local corruption, missing route, transport and framing fail.
     /// - panics: none.
+    /// - executable: none — connection reuse and receipt-store isolation are
+    ///   external effects; the project-only process witness observes them.
     ///
     /// # Errors
     /// - [`IndexError`]: store, route or stream refusal.
@@ -448,6 +453,7 @@ impl Reader
     /// - hypothesis: L2 — the tree-holding reader checks the served
     ///   attestation.
     /// - witness: `index::tests::a_peer_holding_the_trees_checks_the_attestation`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |loaded| loaded.1.manifest.identity().is_ok_and(|identity| identity == digest)))]
     async fn load(
         self,
         digest: IndexDigest,
@@ -498,6 +504,8 @@ impl Reader
 ///   reads no task tree; check returns status three for any finding.
 /// - fails: unavailable authority, inputs, proofs and output fail explicitly.
 /// - panics: none.
+/// - executable: none — receipt publication, network reads and standard output
+///   are external effects; the two-process witnesses observe them.
 ///
 /// # Errors
 /// - [`RunError`]: keyed operation or output refusal.

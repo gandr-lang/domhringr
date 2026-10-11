@@ -14,6 +14,7 @@ use core::net::SocketAddrV6;
 use core::ops::RangeInclusive;
 use core::str::FromStr;
 
+use anodized::spec;
 use sedimentree_core::id::SedimentreeId;
 use sedimentree_core::loose_commit::id::CommitId;
 use subduction_core::peer::id::PeerId;
@@ -94,6 +95,12 @@ impl TryFrom<[u8; 32]> for TreeId
     ///
     /// # Errors
     /// - [`ParseIdError::TreeKey`]: the bytes are not a verifying key.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — importing a binary tree key preserves its Open-proof
+    ///   authority, and another imported tree key cannot validate that proof.
+    /// - witness: `id::tests::a_binary_tree_key_preserves_its_open_proof_authority`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |tree| tree.as_ref() == bytes))]
     #[inline]
     fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error>
     {
@@ -136,6 +143,7 @@ impl FromStr for TreeId
     /// - witness: `id::tests::a_tree_id_is_exactly_fifty_two_z_base_32_characters`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |tree| tree.to_string() == text))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -245,6 +253,7 @@ impl FromStr for PeerKey
     ///   separate acceptance from each refusal and pin the decoded bytes.
     /// - witness: `id::tests::a_peer_key_round_trips_through_its_hex_text`
     /// - witness: `id::tests::a_peer_key_is_exactly_sixty_four_hex_digits`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |peer| peer.to_string().eq_ignore_ascii_case(text)))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -308,6 +317,9 @@ impl FromStr for EndpointKey
     ///   public key.
     /// - fails: [`ParseIdError::Endpoint`] otherwise, carrying iroh's reason.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the
+    ///   endpoint-key round-trip and rejection witness checks the foreign
+    ///   parser.
     ///
     /// # Errors
     /// - [`ParseIdError::Endpoint`]: the text is not an endpoint id.
@@ -356,6 +368,9 @@ impl ContentHash
     ///   contents hash alike and the hash names the bytes wherever they are
     ///   held.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the
+    ///   published BLAKE3 vector and a changed-content witness are the
+    ///   independent oracle.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — a content is hashed and compared with the reference
@@ -414,6 +429,7 @@ impl FromStr for ContentHash
     /// - witness: `id::tests::a_content_hash_is_the_blake3_of_its_bytes`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |hash| hash.to_string().eq_ignore_ascii_case(text)))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -487,6 +503,7 @@ impl FromStr for IndexDigest
     /// - hypothesis: L2 — the attestation golden distinguishes every identity
     ///   byte.
     /// - witness: `receipt::tests::an_attestation_has_one_layout`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |digest| digest.to_string().eq_ignore_ascii_case(text)))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -581,6 +598,9 @@ impl CommitPrefix
     ///   `0`s to the digits padded with `f`s, and lowercase hex of equal length
     ///   sorts as the bytes it spells.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; prefix
+    ///   interval and resolution witnesses check the stored bounds
+    ///   independently.
     ///
     /// # Adequacy
     /// - hypothesis: L3 — an 8-digit prefix's range is compared with the ids
@@ -650,6 +670,13 @@ impl FromStr for CommitDigits
     ///   an uppercase and a non-hex digit each meet their own refusal.
     /// - witness: `anchor::tests::an_anchor_round_trips_through_its_text`
     /// - witness: `anchor::tests::a_commit_reference_may_abbreviate_its_id`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |digits| match *digits {
+        Self::Full(commit) => commit.to_string() == text,
+        Self::Abbreviated(ref prefix) => prefix.digits == text
+            && prefix.first < prefix.last
+            && prefix.first.to_string().starts_with(text)
+            && prefix.last.to_string().starts_with(text),
+    }))]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
         if text.len() < COMMIT_PREFIX_DIGITS {
@@ -709,6 +736,15 @@ impl Address
     /// - ensures: an IPv4 address is kept as given; an IPv6 address keeps its
     ///   address and port, with the flow label and the scope id zero.
     /// - panics: none.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — direct addresses survive endpoint conversion, with
+    ///   IPv6-local scope information removed.
+    /// - witness: `id::tests::an_endpoint_keeps_the_addresses_it_can_hold`
+    #[spec(ensures: |ref output| match *output {
+        Self::Direct(normalized) => normalized.ip() == address.ip() && normalized.port() == address.port(),
+        Self::Relay(_) => false,
+    })]
     pub(crate) fn direct(address: SocketAddr) -> Self
     {
         match address {
@@ -727,9 +763,16 @@ impl Address
     /// - fails: [`ParseIdError::Relay`], carrying the URL's text, for any other
     ///   scheme or for a text holding `@`.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; endpoint
+    ///   conversion witnesses distinguish retained and refused relay URLs.
     ///
     /// # Errors
     /// - [`ParseIdError::Relay`]: the URL is no relay an endpoint holds.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — ordinary HTTP relays survive, while a foreign scheme
+    ///   and a URL carrying the address separator are excluded.
+    /// - witness: `id::tests::an_endpoint_keeps_the_addresses_it_can_hold`
     pub(crate) fn relay(url: iroh::RelayUrl) -> Result<Self, ParseIdError>
     {
         if !matches!(url.scheme(), "http" | "https") || url.as_str().contains('@') {
@@ -764,6 +807,7 @@ impl FromStr for Address
     ///   word and a relay of another scheme each meet their own refusal.
     /// - witness: `id::tests::an_endpoint_round_trips_through_its_text`
     /// - witness: `id::tests::a_malformed_endpoint_text_is_refused`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |address| !address.to_string().contains('@')))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -840,6 +884,7 @@ impl Endpoint
     /// - hypothesis: L3 — an IPv6 address given with a scope id reads back
     ///   without it through the text form.
     /// - witness: `id::tests::an_endpoint_round_trips_through_its_text`
+    #[spec(ensures: |ref output| output.addresses.contains(&Address::direct(direct)))]
     #[inline]
     #[must_use]
     pub fn with_direct(
@@ -877,6 +922,7 @@ impl Endpoint
     ///   relay, a relay holding `@` and one of another scheme is taken to the
     ///   first three alone, the IPv6 without its scope id.
     /// - witness: `id::tests::an_endpoint_keeps_the_addresses_it_can_hold`
+    #[spec(ensures: |ref output| output.key.endpoint_id() == addr.id && output.addresses.len() <= addr.addrs.len())]
     pub(crate) fn of(addr: &iroh::EndpointAddr) -> Self
     {
         let addresses = addr
@@ -961,6 +1007,9 @@ impl FromStr for Endpoint
     /// - witness: `id::tests::a_malformed_endpoint_text_is_refused`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |endpoint|
+        endpoint.addresses.len() <= text.matches('@').count()
+    ))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
@@ -1108,6 +1157,9 @@ impl FromStr for HexBytes
     /// - hypothesis: L3 — witnessed through the peer key, whose parser is this
     ///   one plus a constructor.
     /// - witness: `id::tests::a_peer_key_is_exactly_sixty_four_hex_digits`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |bytes|
+        data_encoding::HEXLOWER.encode(&bytes.0).eq_ignore_ascii_case(text)
+    ))]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
         if text.len() != HEX_DIGITS {
@@ -1182,6 +1234,25 @@ mod tests
                 Err(ParseIdError::Digit(_))
             ),
             "a non-hex digit is refused"
+        );
+    }
+
+    #[test]
+    fn a_binary_tree_key_preserves_its_open_proof_authority()
+    {
+        let owner = ID.parse::<PeerKey>().unwrap();
+        let key = iroh::SecretKey::from_bytes(&[3; 32]);
+        let other_key = iroh::SecretKey::from_bytes(&[4; 32]);
+        let tree = TreeId::try_from(*key.public().as_bytes()).unwrap();
+        let other_tree = TreeId::try_from(*other_key.public().as_bytes()).unwrap();
+        let proof = crate::receipt::OpenProof::sign(&key, owner);
+        assert!(
+            proof.verify(tree, owner).is_ok(),
+            "the imported identity retains the signing key's tree authority"
+        );
+        assert!(
+            proof.verify(other_tree, owner).is_err(),
+            "another imported identity cannot authorize the same Open"
         );
     }
 

@@ -13,6 +13,8 @@ use core::fmt;
 use core::fmt::Write as _;
 use core::str::FromStr;
 
+use anodized::spec;
+
 use crate::line::Field;
 use crate::line::OneLine;
 use crate::task::Summary;
@@ -54,6 +56,8 @@ impl fmt::Display for Decision
     ///   escaped as a summary's are, so the decision stays one line.
     /// - fails: the formatter's own error.
     /// - panics: none.
+    /// - executable: none — the formatter keeps its written bytes opaque; the
+    ///   task-view witness observes decision lines and escaping.
     ///
     /// # Errors
     /// - [`fmt::Error`]: the formatter refused a write.
@@ -128,6 +132,7 @@ impl TryFrom<&[u8]> for Revision
     ///   its record.
     /// - witness: `receipt::tests::every_kind_round_trips`
     /// - witness: `receipt::tests::a_malformed_blob_is_refused_by_name`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |revision| revision.as_ref() == bytes))]
     #[inline]
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error>
     {
@@ -166,6 +171,7 @@ impl FromStr for Revision
     /// - witness: `decision::tests::a_revision_is_forty_or_sixty_four_lowercase_hex_digits`
     ///
     /// [`Display`]: fmt::Display
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |revision| revision.to_string() == text))]
     #[inline]
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {

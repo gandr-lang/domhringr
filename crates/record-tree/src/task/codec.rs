@@ -32,6 +32,8 @@ impl CanonicalValue for Current
     /// - ensures: one balanced constructor preserves every current field.
     /// - fails: propagates a sink refusal.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; complete
+    ///   standing round-trips observe every encoded field.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a token.
@@ -68,6 +70,8 @@ impl CanonicalValue for Current
     /// - ensures: reads precisely the fields emitted by this codec.
     /// - fails: refuses unknown constructors and malformed fields.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the complete
+    ///   standing round-trip and unknown-constructor fixture are the oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: invalid constructor, payload or framing.
@@ -114,6 +118,8 @@ impl CanonicalValue for Slot
     /// - ensures: preserves holder, retirement and constructor.
     /// - fails: propagates the sink refusal.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; complete
+    ///   standing round-trips observe every encoded field.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a token.
@@ -149,6 +155,8 @@ impl CanonicalValue for Slot
     /// - ensures: reads the emitted slot exactly.
     /// - fails: unknown tags and malformed identity fields are refused.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the complete
+    ///   standing round-trip and unknown-constructor fixture are the oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: invalid constructor, payload or framing.
@@ -185,6 +193,8 @@ impl CanonicalValue for Answer
     /// - ensures: distinguishes awaited from every reported identity.
     /// - fails: propagates the sink refusal.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; complete
+    ///   standing round-trips observe every encoded field.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a token.
@@ -216,6 +226,8 @@ impl CanonicalValue for Answer
     /// - ensures: reads the emitted answer exactly.
     /// - fails: unknown tags and malformed identity fields are refused.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the complete
+    ///   standing round-trip and unknown-constructor fixture are the oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: invalid constructor, payload or framing.
@@ -248,6 +260,8 @@ impl CanonicalValue for Progress
     /// - ensures: preserves every progress field under a distinct constructor.
     /// - fails: propagates the sink refusal.
     /// - panics: none.
+    /// - executable: none — the generic token sink is write-only; complete
+    ///   standing round-trips observe every encoded field.
     ///
     /// # Errors
     /// - [`ValueError`]: the sink refused a token.
@@ -297,6 +311,8 @@ impl CanonicalValue for Progress
     /// - ensures: reads the emitted progress exactly.
     /// - fails: unknown tags and malformed fields are refused.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the complete
+    ///   standing round-trip and unknown-constructor fixture are the oracle.
     ///
     /// # Errors
     /// - [`ValueError`]: invalid constructor, payload or framing.

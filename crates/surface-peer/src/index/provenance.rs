@@ -3,6 +3,7 @@
 use alloc::collections::BTreeMap;
 use core::fmt::Write as _;
 
+use anodized::spec;
 use domhringr_record_index::IndexKind;
 use domhringr_record_index::project;
 use domhringr_record_index::project::Nested;
@@ -42,6 +43,8 @@ use crate::Verb;
 ///   evidence and SHA-256 revision families, whose text languages overlap.
 /// - fails: malformed subjects, endpoints, keys and surplus operands fail.
 /// - panics: none.
+/// - executable: none — the consuming operand parser is its own specification;
+///   malformed subjects and project-only proof queries provide the oracle.
 ///
 /// # Errors
 /// - [`UsageError`]: a lexical or subject-language refusal.
@@ -94,6 +97,7 @@ pub fn parse_provenance(arguments: &mut lexopt::Parser) -> Result<Command, Usage
 /// Authenticate every edge before publishing any part of the answer.
 ///
 /// # Specification
+/// - requires: a Tokio runtime with time and I/O is active.
 /// - ensures: subject ranges are proved under the project's nested root; each
 ///   task entry names the proved dialogue; its original move agrees with the
 ///   subject, field and holder. Task aliases do not duplicate the answer.
@@ -109,6 +113,7 @@ pub fn parse_provenance(arguments: &mut lexopt::Parser) -> Result<Command, Usage
 /// - hypothesis: L1 — a separate process holding only the project verifies a
 ///   transcript through every root to the verdict's original receipt.
 /// - witness: `index::tests::a_transcript_resolves_to_its_verdict_by_proof`
+#[spec(requires: tokio::runtime::Handle::try_current().is_ok())]
 pub(super) async fn answer(
     reader: Reader,
     attestation: &IndexAttestation,

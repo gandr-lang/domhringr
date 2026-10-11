@@ -100,8 +100,9 @@ impl Cache
     /// - [`StreamError`]: the named proof cannot be constructed.
     ///
     /// # Adequacy
-    /// - hypothesis: L2 — hydrated nodes reproduce the built proof.
-    /// - witness: `store::tests::a_hydrated_tree_proves_as_the_built_one`
+    /// - hypothesis: L3 — the stream serves a held proof or its exact over-cap
+    ///   extent.
+    /// - witness: `stream::tests::a_proof_past_the_cap_is_answered_with_its_size`
     #[spec(ensures: |ret| self.0.len() <= 4 && ret.as_ref().map_or(true, |answer|
         answer.manifest.identity().is_ok_and(|digest| digest == request.digest)))]
     #[inline]
@@ -187,6 +188,8 @@ pub enum StreamError
 ///   frames.
 /// - fails: an unrepresentable field or extent is refused.
 /// - panics: none.
+/// - executable: none — the counting encoder is its own specification;
+///   independently pinned full answer sizes are the oracle.
 ///
 /// # Errors
 /// - [`StreamError`]: manifest or framing failure.
@@ -216,6 +219,7 @@ pub fn encoded_size(answer: &Answer) -> Result<ByteSize, StreamError>
 /// - hypothesis: L3 — the inclusive boundary and its next byte separate the
 ///   cap.
 /// - witness: `stream::tests::an_answer_at_the_cap_is_read_and_one_byte_past_is_refused`
+#[spec(ensures: |ret| ret.as_ref().map_or(true, |image| u64::try_from(image.as_ref().len()).is_ok_and(|length| length <= ANSWER_CAP.0)))]
 async fn read(recv: &mut iroh::endpoint::RecvStream) -> Result<WireImage, StreamError>
 {
     let cap = usize::try_from(ANSWER_CAP.0).map_err(|_width| WireError::Length)?;
@@ -234,6 +238,7 @@ async fn read(recv: &mut iroh::endpoint::RecvStream) -> Result<WireImage, Stream
 /// Receive untrusted proof material on a fresh stream of a reusable connection.
 ///
 /// # Specification
+/// - requires: a Tokio runtime with time and I/O is active.
 /// - ensures: framing, manifest identity and kind are checked; callers must run
 ///   [`Answer::verify`] before reading proof contents. The connection is
 ///   reusable.
@@ -246,6 +251,7 @@ async fn read(recv: &mut iroh::endpoint::RecvStream) -> Result<WireImage, Stream
 /// # Adequacy
 /// - hypothesis: L3 — unknown digests produce a named unheld refusal.
 /// - witness: `stream::tests::an_unheld_digest_is_answered_unheld`
+#[spec(requires: tokio::runtime::Handle::try_current().is_ok())]
 #[inline]
 pub async fn ask(
     connection: &iroh::endpoint::Connection,
@@ -265,6 +271,7 @@ pub async fn ask(
 /// Answer each stream, waiting at most ten idle seconds after the last answer.
 ///
 /// # Specification
+/// - requires: a Tokio runtime with time and I/O is active.
 /// - ensures: unknown digests receive exactly tag zero; proofs exceeding the
 ///   cap receive tag two and their extent, without nodes; dependent requests
 ///   can use the same connection until it closes or reaches the idle deadline.
@@ -279,6 +286,7 @@ pub async fn ask(
 ///   size.
 /// - witness: `stream::tests::an_unheld_digest_is_answered_unheld`
 /// - witness: `stream::tests::a_proof_past_the_cap_is_answered_with_its_size`
+#[spec(requires: tokio::runtime::Handle::try_current().is_ok())]
 #[inline]
 pub async fn answer(
     store: &Store,

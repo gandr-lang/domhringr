@@ -39,6 +39,13 @@ impl Spawn<Sendable> for TokioSpawner
     ///   does not stop it.
     /// - panics: none; spawning through a held runtime handle needs no ambient
     ///   runtime.
+    /// - executable: none — completion and cancellation happen after this
+    ///   return; the live-sync witness observes the detached protocol tasks.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — background senders and listeners carry both peers to
+    ///   the exact union of their frontiers.
+    /// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
     fn spawn(
         &self,
         fut: BoxFuture<'static, ()>,
@@ -63,6 +70,13 @@ impl Timeout<Sendable> for TokioTimer
     /// - ensures: yields the future's output when it completes within `dur`,
     ///   and [`TimedOut`] otherwise, dropping the future.
     /// - panics: when polled outside such a runtime, as Tokio's timer does.
+    /// - executable: none — the returned future has not been polled; observing
+    ///   its result in a predicate would execute the caller's operation.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a live sync exercises the completed-call path on an
+    ///   enabled Tokio timer; deadline expiry is outside this witness.
+    /// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
     fn timeout<'call, Output>(
         &'call self,
         dur: Duration,

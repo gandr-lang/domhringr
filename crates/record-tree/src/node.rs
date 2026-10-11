@@ -98,6 +98,8 @@ impl Peer
     ///   its address lookups; [`BindError::Address`] when iroh refuses the
     ///   socket addresses.
     /// - panics: none.
+    /// - executable: none — socket binding and address publication are external
+    ///   effects; live peers witness the bound port and accepted ALPNs.
     ///
     /// # Errors
     /// - [`BindError::Address`]: iroh refuses a socket address.
@@ -162,9 +164,15 @@ impl UdpPort
     ///   IPv6 socket is not, so a host without IPv6 still binds.
     /// - fails: iroh's [`InvalidSocketAddr`] when it refuses an address.
     /// - panics: none.
+    /// - executable: none — the builder keeps its requested sockets opaque; the
+    ///   fixed-port witness observes the endpoint after binding.
     ///
     /// # Errors
     /// - [`InvalidSocketAddr`]: iroh refuses a socket address.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a fixed-port bind reports that exact UDP port.
+    /// - witness: `node::tests::a_fixed_port_is_the_bound_port`
     ///
     /// [`InvalidSocketAddr`]: iroh::endpoint::InvalidSocketAddr
     fn sockets(
@@ -195,6 +203,8 @@ impl FromStr for UdpPort
     /// - fails: [`ParsePortError`] for zero, a number out of range, or text
     ///   that is not a decimal number.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the port
+    ///   boundary and text round-trip witness checks the foreign parser.
     ///
     /// # Errors
     /// - [`ParsePortError`]: the text is not a port from 1 through 65535.
@@ -259,6 +269,12 @@ impl SelectedPath
     /// - ensures: as [`SelectedPath::among`] over the connection's open paths
     ///   now.
     /// - panics: none.
+    /// - executable: none — the live connection can change its selected path
+    ///   between observations; the sync witness observes the reported snapshot.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a completed live sync reports a selected path.
+    /// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
     fn of(connection: &iroh::endpoint::Connection) -> Self
     {
         Self::among(&connection.paths())
@@ -270,6 +286,13 @@ impl SelectedPath
     /// - ensures: the remote address of the path iroh marks selected, or
     ///   [`SelectedPath::Pending`] when none is.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the live
+    ///   sync witness checks the reported path rather than repeating the
+    ///   mapper.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a completed live sync reports a selected path.
+    /// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
     fn among(paths: &iroh::endpoint::PathList<'_>) -> Self
     {
         let selected = paths
@@ -292,11 +315,18 @@ impl SelectedPath
     ///   direct path selected, when the snapshots end because the connection
     ///   closed, or once [`SETTLE`] has elapsed.
     /// - panics: none.
+    /// - executable: none — the path stream and deadline are temporal effects;
+    ///   the live-sync witness observes completion and the reported path.
     /// - intension: a connection dialed by endpoint id can open over a relay
     ///   before address lookup finds the peer's direct addresses; iroh then
     ///   holepunches and moves to a direct path. The wait lets a short sync
     ///   report the path the connection settles on rather than the first one it
     ///   opened.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — live synchronization returns with a selected path; it
+    ///   does not require the network to choose a direct one.
+    /// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
     async fn settle(connection: &iroh::endpoint::Connection)
     {
         let direct = async {
@@ -480,6 +510,8 @@ impl Node
     ///   accept, which is closed; after any of these, the next call accepts the
     ///   next connection.
     /// - panics: none.
+    /// - executable: none — authentication and protocol admission mutate the
+    ///   live engine; independent dialers witness acceptance and refusal.
     /// - intension: connections are taken, and subduction handshakes run, one
     ///   at a time in arrival order, so a protocol connection a dialer opens
     ///   once its link ([`Node::connect`]) is up is handed over after the link
@@ -541,10 +573,19 @@ impl Node
     ///   clock drifts past [`MAX_PLAUSIBLE_DRIFT`]; [`AcceptError::Register`]
     ///   when the engine refuses the connection.
     /// - panics: none.
+    /// - executable: none — the handshake consumes the stream and registers
+    ///   detached tasks; the dialer witnesses authentication and receipt
+    ///   exchange.
     ///
     /// # Errors
     /// - [`AcceptError::Handshake`]: the handshake failed.
     /// - [`AcceptError::Register`]: the engine refused the connection.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — peers exchange their distinct frontiers after a valid
+    ///   handshake, while an incorrect audience is refused.
+    /// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
+    /// - witness: `node::tests::a_dialer_naming_another_peer_is_refused`
     async fn admit(
         &self,
         connection: iroh::endpoint::Connection,
@@ -605,6 +646,8 @@ impl Node
     /// - fails: [`PresentError::Random`] when no fence can be drawn and
     ///   [`PresentError::Commit`] when the commit cannot be appended.
     /// - panics: none.
+    /// - executable: none — publication waits on a live endpoint and appends a
+    ///   receipt; the book-and-dial witness observes the committed presence.
     ///
     /// # Errors
     /// - [`PresentError::Random`]: the random source failed.
@@ -663,6 +706,9 @@ impl Node
     ///   [`SyncError::Heads`] when the heads cannot be read back. The
     ///   connection is closed after a failed round as after a good one.
     /// - panics: none.
+    /// - executable: none — authentication, transport and durable writes are
+    ///   external effects; the independent frontier and refusal witnesses are
+    ///   the oracle for this exchange.
     ///
     /// # Errors
     /// - [`SyncError::Connect`]: dialing or the handshake fails.
@@ -716,6 +762,8 @@ impl Node
     ///   fails the handshake, and [`SyncError::Register`] when the engine
     ///   refuses the connection.
     /// - panics: none.
+    /// - executable: none — the engine's live connection state is external to
+    ///   the return value; a remote pull witnesses the registered link.
     ///
     /// # Errors
     /// - [`SyncError::Connect`]: dialing or the handshake fails.
@@ -750,6 +798,8 @@ impl Node
     ///   no link to it is up, and [`SyncError::Heads`] when the heads cannot be
     ///   read back.
     /// - panics: none.
+    /// - executable: none — the remote frontier and store change across the
+    ///   exchange; the linked peer independently witnesses the received heads.
     ///
     /// # Errors
     /// - [`SyncError::Exchange`]: storage or the connection fails mid-sync.
@@ -779,9 +829,16 @@ impl Node
     ///   none succeeds.
     /// - fails: [`SyncError::Disconnect`] when a link cannot be closed.
     /// - panics: none.
+    /// - executable: none — closing engine connections is an asynchronous
+    ///   effect; the live exchange witness exercises the disconnect path.
     ///
     /// # Errors
     /// - [`SyncError::Disconnect`]: a link cannot be closed.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the shared-link exchange disconnects after verifying
+    ///   receipt transfer; concurrent re-linking is outside this witness.
+    /// - witness: `node::tests::a_linked_peer_pulls_beside_another_protocol`
     #[inline]
     pub async fn disconnect(
         &self,
@@ -807,6 +864,8 @@ impl Node
     /// - fails: [`DialError`] when the remote cannot be reached or does not
     ///   accept `protocol`.
     /// - panics: none.
+    /// - executable: none — dialing and authentication are transport effects;
+    ///   the accepting peer witnesses the negotiated application protocol.
     ///
     /// # Errors
     /// - [`DialError`]: the dial fails.
@@ -835,10 +894,19 @@ impl Node
     /// - ensures: as [`Node::connect`]; returns the link's QUIC connection.
     /// - fails: as [`Node::connect`].
     /// - panics: none.
+    /// - executable: none — the handshake registers a live engine connection;
+    ///   the remote pull and wrong-audience witnesses observe its effect.
     ///
     /// # Errors
     /// - [`SyncError::Connect`]: dialing or the handshake fails.
     /// - [`SyncError::Register`]: the engine refuses the connection.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a linked peer pulls over the authenticated
+    ///   connection, and an incorrect audience is refused at connection
+    ///   establishment.
+    /// - witness: `node::tests::a_linked_peer_pulls_beside_another_protocol`
+    /// - witness: `node::tests::a_dialer_naming_another_peer_is_refused`
     async fn link(
         &self,
         remote: &RemotePeer,
@@ -875,10 +943,17 @@ impl Node
     ///   and [`SyncError::Refused`] when no link answered with a diff, none
     ///   failing.
     /// - panics: none.
+    /// - executable: none — the engine consumes remote responses and persists
+    ///   commits; the independent frontier union witnesses the completed round.
     ///
     /// # Errors
     /// - [`SyncError::Exchange`], [`SyncError::Call`], [`SyncError::Refused`]:
     ///   as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a round retains both sides' distinct frontier
+    ///   commits.
+    /// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
     async fn round(
         &self,
         remote: PeerKey,
@@ -909,6 +984,13 @@ impl Node
     ///   [`Node::accept`] fails with [`AcceptError::Closed`], and the engine's
     ///   background tasks have been told to stop.
     /// - panics: none.
+    /// - executable: none — endpoint and background-task shutdown are temporal
+    ///   effects; the live-exchange witness exercises orderly shutdown.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — peers close after a verified receipt exchange;
+    ///   background-task termination is not separately observed.
+    /// - witness: `node::tests::a_linked_peer_pulls_beside_another_protocol`
     #[inline]
     pub async fn close(&self)
     {
@@ -1007,6 +1089,13 @@ pub enum SyncError
 ///   the epoch, which the handshake's drift check then refuses rather than this
 ///   reading panicking.
 /// - panics: none.
+/// - executable: none — the wall clock is an external observation; a second
+///   reading is not an oracle for the first.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a live handshake accepts a contemporaneous timestamp; a
+///   pre-epoch clock is outside this witness.
+/// - witness: `node::tests::a_dialer_takes_the_union_of_both_frontiers`
 fn now() -> TimestampSeconds
 {
     let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
