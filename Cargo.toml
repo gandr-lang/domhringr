@@ -71,7 +71,9 @@ default-features = false
 
 # The pure Seat protocol and its independently checked replay.
 # consumers:
+# - record-index
 # - record-tree
+# - surface-peer
 [workspace.dependencies.domhringr-arena-session]
 path = "crates/arena-session"
 default-features = false
@@ -154,6 +156,7 @@ features = ["alloc"]
 # features: none; the monitor and certificate adapter need no optional features.
 # consumers:
 # - arena-session
+# - record-index
 # - record-tree
 [workspace.dependencies.gandr-core-session]
 path = "vendor/gandr/crates/core-session"

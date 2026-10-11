@@ -15,7 +15,6 @@ use domhringr_record_index::stream::Request;
 use domhringr_record_tree::CommitId;
 use domhringr_record_tree::IndexDigest;
 use domhringr_record_tree::Kind;
-use domhringr_record_tree::Step;
 use domhringr_record_tree::StepLine;
 use domhringr_record_tree::TreeId;
 use gandr_storage_records::Record;
@@ -50,7 +49,7 @@ pub(super) async fn question(
 ) -> Result<(Reader, String), IndexError>
 {
     let query = match question {
-        | Question::Task(ref _name) => return Err(IndexError::Shape),
+        | Question::Task(ref _name) | Question::Replay(ref _name) => return Err(IndexError::Shape),
         | Question::Move(ref _name, key) => Query::Key(key.owned()),
         | Question::Play(ref _name, attempt) => {
             let range = attempt.range()?;
@@ -66,7 +65,7 @@ pub(super) async fn question(
     let verified = answer.verify(digest, IndexKind::Dialogue, &request.query)?;
     writeln!(output, "proved {digest} {}", reader.author)?;
     match question {
-        | Question::Task(_name) => Err(IndexError::Shape),
+        | Question::Task(_name) | Question::Replay(_name) => Err(IndexError::Shape),
         | Question::After(_name, attempt) => {
             let later = prove::later(tree, &verified)?;
             match later {
@@ -102,7 +101,7 @@ pub(super) async fn question(
                 | Verified::Range(_records) => return Err(IndexError::Shape),
             };
             let movement = prove::read_move(tree, value)?;
-            self::movement(reader, tree, digest, key, movement, output).await
+            self::movement(reader, tree, digest, key, &movement, output).await
         },
     }
 }
@@ -130,7 +129,7 @@ pub(super) async fn movement(
     tree: TreeId,
     digest: IndexDigest,
     key: MoveKey,
-    movement: Move,
+    movement: &Move,
     mut output: String,
 ) -> Result<(Reader, String), IndexError>
 {
@@ -144,11 +143,11 @@ pub(super) async fn movement(
             .iter()
             .map(|movement| (movement.commit, movement))
             .collect();
-        emit(&mut output, &movement, &related)?;
+        emit(&mut output, movement, &related)?;
         Ok((reader, output))
     }
     else {
-        emit(&mut output, &movement, &BTreeMap::new())?;
+        emit(&mut output, movement, &BTreeMap::new())?;
         Ok((reader, output))
     }
 }
@@ -217,127 +216,8 @@ fn emit(
     related: &BTreeMap<CommitId, &Move>,
 ) -> Result<(), IndexError>
 {
-    let author = movement.author;
-    let step = match *movement.receipt.kind() {
-        | Kind::Dispatch {
-            seat,
-            edition,
-            ref brief,
-        } => Step::Dispatch {
-            seat,
-            edition,
-            brief: brief.clone(),
-        },
-        | Kind::Report {
-            dispatch,
-            content,
-            ref summary,
-        } => Step::Report {
-            dispatch,
-            content,
-            author,
-            summary: summary.clone(),
-        },
-        | Kind::Handoff { dispatch, to } => Step::Handoff {
-            dispatch,
-            from: author,
-            to,
-        },
-        | Kind::Retire { dispatch } => Step::Retire { dispatch, author },
-        | Kind::Pause { dispatch } => Step::Pause { dispatch, author },
-        | Kind::Verdict {
-            dispatch,
-            judge,
-            rubric,
-            transcript,
-            ref answers,
-        } => Step::Verdict {
-            dispatch,
-            judge,
-            rubric,
-            transcript,
-            answers: answers.clone(),
-        },
-        | Kind::Verified {
-            dispatch,
-            runner,
-            playbook,
-            ref step,
-            output,
-            status,
-        } => Step::Verified {
-            dispatch,
-            runner,
-            playbook,
-            step: step.clone(),
-            output,
-            status,
-        },
-        | Kind::Graded {
-            verdict,
-            ref grades,
-            composed,
-        } => {
-            let verdict_move = related.get(&verdict).ok_or(IndexError::Shape)?;
-            let Kind::Verdict {
-                dispatch,
-                rubric,
-                ref answers,
-                ..
-            } = *verdict_move.receipt.kind()
-            else {
-                return Err(IndexError::Shape);
-            };
-            if grades.len() != answers.len() {
-                return Err(IndexError::Shape);
-            }
-            let grades = answers
-                .iter()
-                .zip(grades)
-                .map(|(answer, grade)| (answer.0, *grade))
-                .collect();
-            Step::Graded {
-                dispatch,
-                verdict,
-                rubric,
-                grades,
-                composed,
-            }
-        },
-        | Kind::Decide {
-            dispatch,
-            operator,
-            ref decision,
-        } => Step::Decide {
-            dispatch,
-            operator,
-            decision: decision.clone(),
-        },
-        | Kind::Landed { decided, merge } => {
-            let decision = related.get(&decided).ok_or(IndexError::Shape)?;
-            let Kind::Decide {
-                dispatch, operator, ..
-            } = *decision.receipt.kind()
-            else {
-                return Err(IndexError::Shape);
-            };
-            Step::Landed {
-                dispatch,
-                decided,
-                operator,
-                merge,
-            }
-        },
-        | Kind::Indexed { .. }
-        | Kind::Open { .. }
-        | Kind::Grant { .. }
-        | Kind::Note { .. }
-        | Kind::Bind { .. }
-        | Kind::Claim { .. }
-        | Kind::Introduce { .. }
-        | Kind::Present { .. }
-        | Kind::Withdraw { .. } => return Err(IndexError::Shape),
-    };
+    let step = domhringr_record_index::replay::resolve(movement, related)
+        .map_err(|_reason| IndexError::Shape)?;
     write!(output, "{}", StepLine {
         commit: movement.commit,
         step: &step

@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 anodized = { workspace = true }
+domhringr-arena-session = { workspace = true }
 domhringr-judge-oracle = { workspace = true }
 domhringr-record-evidence = { workspace = true }
 domhringr-record-index = { workspace = true }
