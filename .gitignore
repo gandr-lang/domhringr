@@ -7,3 +7,5 @@ mise.local.lock
 # A global ignore may hide `.cargo`; the build aliases and dist config live
 # there and are part of the repository.
 !/.cargo/
+# Compiler crash dumps carry absolute paths of the machine that built.
+rustc-ice*
