@@ -22,6 +22,7 @@ use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 
+use anodized::spec;
 use domhringr_record_tree::Content;
 use domhringr_record_tree::StateDir;
 use gandr_storage_values::CHUNK_DIGEST_LEN;
@@ -71,6 +72,12 @@ impl Chunks
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — fetched chunks retain their digest and corrupted or
+    ///   missing content is refused before a reader receives it.
+    /// - witness: `fetch::tests::a_reader_fetches_what_a_holder_holds`
+    #[spec(ensures: |ref output| output.is_err() || self.0.contains_key(&digest))]
     pub fn admit(
         &mut self,
         digest: ChunkDigest,
@@ -106,6 +113,13 @@ impl ChunkStore for Chunks
     ///
     /// # Errors
     /// None; the signature is the trait's.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — staging and reopening a value preserves its bytes;
+    ///   corpus witnesses independently pin the distinct chunk inventory.
+    /// - witness: `store::tests::a_committed_content_reads_back`
+    /// - witness: `corpus::tests::the_cuts_of_the_corpus_are_pinned`
+    #[spec(ensures: |ref output| output.is_ok() && self.0.contains_key(&chunk.digest()))]
     fn insert(
         &mut self,
         chunk: VerifiedChunk<'_>,
@@ -128,6 +142,13 @@ impl ChunkStore for Chunks
     ///
     /// # Errors
     /// - [`ValueError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — complete content round-trips and a missing chunk is
+    ///   refused by digest instead of exposing partial bytes.
+    /// - witness: `store::tests::a_committed_content_reads_back`
+    /// - witness: `store::tests::each_refusal_names_what_it_refuses`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |chunk| chunk.digest() == digest))]
     fn load(
         &self,
         digest: ChunkDigest,
@@ -164,6 +185,9 @@ impl Staged
     /// - fails: [`EvidenceError::Commit`] when the value plane refuses the
     ///   value.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the store
+    ///   round-trip and independent corpus goldens observe the delegated
+    ///   commit.
     ///
     /// # Errors
     /// - [`EvidenceError::Commit`]: as listed above.
@@ -208,9 +232,17 @@ impl Staged
 /// - ensures: as [`Staged::new`], under the profile given.
 /// - fails: as [`Staged::new`].
 /// - panics: none.
+/// - executable: none — the function is its own specification; corpus goldens
+///   and store round-trips check the value-plane commit independently.
 ///
 /// # Errors
 /// - [`EvidenceError::Commit`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L2 — independent corpus goldens fix the emitted chunks; store
+///   witnesses distinguish a profile mismatch from missing content.
+/// - witness: `corpus::tests::the_cuts_of_the_corpus_are_pinned`
+/// - witness: `store::tests::each_refusal_names_what_it_refuses`
 fn stage(
     content: &Content,
     profile: &ValueProfile,
@@ -310,6 +342,14 @@ impl Evidence
     /// - ensures: names the store at [`StateDir::evidence_dir`]; nothing is
     ///   read or created until a value is kept or read.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; store
+    ///   round-trips observe the location without duplicating path
+    ///   construction.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — reopening the same state directory reads the value
+    ///   committed there, distinguishing a store opened elsewhere.
+    /// - witness: `store::tests::a_committed_content_reads_back`
     #[inline]
     #[must_use]
     pub fn open(state: &StateDir) -> Self
@@ -324,6 +364,8 @@ impl Evidence
     ///   manifest's identity.
     /// - fails: as those two.
     /// - panics: none.
+    /// - executable: none — durability needs an independent reopen, not a
+    ///   second commit in a predicate; the store round-trip is that observer.
     ///
     /// # Errors
     /// - [`EvidenceError::Commit`], [`EvidenceError::Store`]: as those two.
@@ -352,6 +394,8 @@ impl Evidence
     /// - fails: [`EvidenceError::Store`] naming the path that cannot be created
     ///   or written.
     /// - panics: none.
+    /// - executable: none — sync and rename ordering are filesystem effects;
+    ///   the reopening witness checks durable content and repeated keeps.
     ///
     /// # Errors
     /// - [`EvidenceError::Store`]: as listed above.
@@ -391,6 +435,9 @@ impl Evidence
     ///   held under another's name; [`EvidenceError::Store`] when a file cannot
     ///   be read.
     /// - panics: none.
+    /// - executable: none — rereading can observe concurrent filesystem
+    ///   changes; fixed store fixtures independently check content and
+    ///   refusals.
     ///
     /// # Errors
     /// - [`EvidenceError`]: as listed above.
@@ -432,9 +479,16 @@ impl Evidence
     /// - fails: as [`Evidence::read`] for the manifest and for a held chunk
     ///   that does not verify.
     /// - panics: none.
+    /// - executable: none — the filesystem may change during a second read; the
+    ///   fetch witness observes complete and partial held closures.
     ///
     /// # Errors
     /// - [`EvidenceError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — a complete holder answers equal bytes, a holder
+    ///   missing a chunk cannot make a reader accept incomplete content.
+    /// - witness: `fetch::tests::a_reader_fetches_what_a_holder_holds`
     pub(crate) fn held(
         &self,
         digest: ManifestDigest,
@@ -472,6 +526,12 @@ impl Evidence
     ///
     /// # Errors
     /// - [`EvidenceError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — fetched content reads back from a fresh reader; an
+    ///   incomplete closure is refused naming its absent chunk.
+    /// - witness: `fetch::tests::a_reader_fetches_what_a_holder_holds`
+    #[spec(requires: manifest.identity() == digest)]
     pub(crate) fn receive(
         &self,
         digest: ManifestDigest,
@@ -503,6 +563,12 @@ impl Evidence
     ///
     /// # Errors
     /// - [`EvidenceError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — an absent manifest, a foreign image and a manifest
+    ///   under another digest each meet their named refusal.
+    /// - witness: `store::tests::each_refusal_names_what_it_refuses`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |manifest| manifest.identity() == digest))]
     pub(crate) fn manifest(
         &self,
         digest: ManifestDigest,
@@ -534,9 +600,17 @@ impl Evidence
     /// - fails: [`EvidenceError::Refused`] for a held chunk that does not
     ///   verify, [`EvidenceError::Store`] for a file that cannot be read.
     /// - panics: none.
+    /// - executable: none — the index and chunk files can change after reading;
+    ///   fixed store fixtures observe complete and incomplete inventories.
     ///
     /// # Errors
     /// - [`EvidenceError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — committed content reads back and removing a chunk
+    ///   produces its named refusal rather than accepting a partial inventory.
+    /// - witness: `store::tests::a_committed_content_reads_back`
+    /// - witness: `store::tests::each_refusal_names_what_it_refuses`
     fn indexed(
         &self,
         digest: ManifestDigest,
@@ -575,6 +649,13 @@ impl Evidence
     ///
     /// # Errors
     /// - [`EvidenceError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the full closure reads back; a missing chunk is
+    ///   refused by digest rather than silently ending the walk.
+    /// - witness: `store::tests::a_committed_content_reads_back`
+    /// - witness: `store::tests::each_refusal_names_what_it_refuses`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |closure| closure.digests().iter().all(|digest| chunks.0.contains_key(digest))))]
     fn complete(
         &self,
         digest: ManifestDigest,
@@ -621,9 +702,16 @@ impl Evidence
     /// - ensures: as [`Evidence::keep`].
     /// - fails: as [`Evidence::keep`].
     /// - panics: none.
+    /// - executable: none — the closure is a consuming iterator and persistence
+    ///   is an external effect; the reopen witness observes the written value.
     ///
     /// # Errors
     /// - [`EvidenceError::Store`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — committing and keeping twice preserves the bytes seen
+    ///   after reopening the evidence store.
+    /// - witness: `store::tests::a_committed_content_reads_back`
     fn persist(
         &self,
         manifest: &ValueManifest,
@@ -663,9 +751,17 @@ impl Evidence
 ///   when nothing is at `path`.
 /// - fails: [`EvidenceError::Store`] for any other read failure.
 /// - panics: none.
+/// - executable: none — the function is its own specification; store fixtures
+///   observe held bytes and the absence of a removed chunk independently.
 ///
 /// # Errors
 /// - [`EvidenceError::Store`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — store reads distinguish present content from an absent
+///   manifest or chunk, naming the missing object.
+/// - witness: `store::tests::a_committed_content_reads_back`
+/// - witness: `store::tests::each_refusal_names_what_it_refuses`
 fn found<Bytes>(path: &Path) -> Result<Found<Bytes>, EvidenceError>
 where
     Bytes: From<Box<[u8]>>,
@@ -685,9 +781,16 @@ where
 ///   already at `path` is kept, its name fixing its bytes.
 /// - fails: [`EvidenceError::Store`] naming `path` when a step fails.
 /// - panics: none.
+/// - executable: none — atomic visibility and durability are filesystem
+///   effects; the reopen witness observes the completed write externally.
 ///
 /// # Errors
 /// - [`EvidenceError::Store`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — reopening reads complete committed bytes, and keeping the
+///   same value again preserves them; crash interleavings remain untested.
+/// - witness: `store::tests::a_committed_content_reads_back`
 fn put<Bytes>(
     dir: &Path,
     path: &Path,

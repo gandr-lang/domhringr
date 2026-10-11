@@ -29,14 +29,22 @@ publish = false
 # on only because a build or a test failed without it.
 [workspace.dependencies]
 
-# Executable specifications at the storage sibling's revision.
-# features: none; predicates use the core-only facade.
+# Authored specification predicates, stripped or panic-enforced by build cfg.
+# features:
+# - anodized: the runtime-checking backend selected by `anodized_panic`
 # consumers:
+# - arena-session
+# - judge-oracle
+# - record-evidence
 # - record-index
+# - strategy-document
+# - surface-driver
 [workspace.dependencies.anodized]
-git = "https://github.com/gandr-lang/anodized"
-rev = "372f70b50ef7af68f4e8a750132d90d54e780426"
+package = "quenchant-anodized"
+git = "https://github.com/gandr-lang/quenchant"
+rev = "8b8d0702d69409549e855606a85492c777e05fc9"
 default-features = false
+features = ["anodized"]
 
 # The reference BLAKE3: a brief's, a playbook's, a rubric's and a question's
 # content hash, and the tests' independent oracle for commit ids. Already in
@@ -537,7 +545,7 @@ rust_2024_compatibility = "deny"
 # The policy library's lint-selection cfg: `cfg_attr(dylint_lib = …)` on each
 # crate root selects the opt-in quenchant lints under Dylint and is inert
 # everywhere else.
-unexpected_cfgs = { level = "deny", check-cfg = ['cfg(dylint_lib, values("quenchant_dylints"))', "cfg(anodized_panic)"] }
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(dylint_lib, values("quenchant_dylints"))', "cfg(anodized_panic)", "cfg(anodized_print)"] }
 unknown_or_malformed_diagnostic_attributes = "deny"
 # Nightly-creep guard: consumer crates have no feature exemption. A library
 # producer scopes its rustc_private expectation to the compiler-plugin crate.
@@ -557,7 +565,7 @@ private_intra_doc_links = "allow"
 # ownership cycles. Loaded from the pinned Git source by `mise run check:dylint`.
 [[workspace.metadata.dylint.libraries]]
 git = "https://github.com/gandr-lang/quenchant"
-rev = "111850988c96b7b33ee898f54c017ca645243e7f"
+rev = "8b8d0702d69409549e855606a85492c777e05fc9"
 pattern = "crates/quenchant-dylints"
 
 # Sibling checkouts a path dependency reaches under `vendor/`, each at the

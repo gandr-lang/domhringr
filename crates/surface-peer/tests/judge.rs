@@ -4,6 +4,18 @@
 //! every refusal is recorded as an unread ruling, never a default letter, and
 //! the replay shows the verdict.
 
+// Temporary until the executable-specs-record backfill covers this crate.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        spec_attribute_present,
+        adequacy_present,
+        maybe_shape,
+        erased_error_signature,
+        spec_attribute_unqualified
+    )
+)]
+
 #[cfg(test)]
 mod tests
 {

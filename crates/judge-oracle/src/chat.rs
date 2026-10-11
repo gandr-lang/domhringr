@@ -24,6 +24,7 @@ use core::fmt;
 use core::time::Duration;
 use std::ffi::OsString;
 
+use anodized::spec;
 use domhringr_record_tree::Letter;
 use domhringr_record_tree::ParseProbabilityError;
 use domhringr_record_tree::Probability;
@@ -179,6 +180,7 @@ impl Config
     ///   with only the two required variables are read and compared; each
     ///   refusal is met by a configuration one variable away from a good one.
     /// - witness: `chat::tests::the_configuration_is_read_from_the_environment`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |config| !config.model.is_empty() && config.url.path().ends_with("/chat/completions")))]
     #[inline]
     pub fn from_variables<Variables>(variables: Variables) -> Result<Self, ConfigError>
     where
@@ -240,9 +242,7 @@ impl Config
     /// The configuration the process's environment names.
     ///
     /// # Specification
-    /// - ensures: [`Config::from_variables`] over the process's environment.
-    /// - fails: as [`Config::from_variables`].
-    /// - panics: none.
+    /// trivial.
     ///
     /// # Errors
     /// - [`ConfigError`]: as [`Config::from_variables`].
@@ -294,9 +294,17 @@ impl ChatCompletions
     /// - fails: [`EndpointError::Tls`] when the TLS configuration cannot be
     ///   built, [`EndpointError::Client`] when the client cannot.
     /// - panics: none.
+    /// - executable: none — reqwest exposes neither TLS roots nor its timeout
+    ///   for readback; the loopback witness observes the constructed client.
     ///
     /// # Errors
     /// - [`EndpointError`]: as listed above.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the constructed client sends the configured request
+    ///   to a loopback endpoint; this does not establish TLS-root or timeout
+    ///   behavior.
+    /// - witness: `chat::tests::the_endpoint_is_asked_for_one_letter_and_read`
     #[inline]
     pub fn new(config: Config) -> Result<Self, EndpointError>
     {
@@ -340,6 +348,7 @@ impl Backend for ChatCompletions
     ///   transcript named alone each meet their own refusal.
     /// - witness: `chat::tests::the_endpoint_is_asked_for_one_letter_and_read`
     /// - witness: `chat::tests::what_the_endpoint_cannot_answer_is_refused_by_cause`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |readout| readout.probabilities().count() == question.options().len()))]
     #[inline]
     async fn ask(
         &self,
@@ -427,6 +436,7 @@ impl Backend for ChatCompletions
 /// - hypothesis: L3 — through the client, the user message a loopback server
 ///   captures is compared whole.
 /// - witness: `chat::tests::the_endpoint_is_asked_for_one_letter_and_read`
+#[spec(ensures: |ref output| output.as_ref().map_or(true, |prompt| prompt.contains(question.text()) && question.options().iter().all(|option| prompt.contains(option))))]
 fn prompt(
     question: &Question,
     transcript: &Transcript,

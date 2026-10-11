@@ -16,6 +16,7 @@ use core::str::Utf8Error;
 use std::path::Path;
 use std::path::PathBuf;
 
+use anodized::spec;
 use domhringr_judge_oracle::Question;
 use domhringr_record_tree::Content;
 use domhringr_record_tree::ContentHash;
@@ -55,6 +56,8 @@ where
     ///   [`LoadError::Refused`] when its text is not the document, each naming
     ///   the file.
     /// - panics: none.
+    /// - executable: none — file contents can change after reading and the
+    ///   generic document has no readback; fixture witnesses pin the bytes.
     ///
     /// # Errors
     /// - [`LoadError`]: as listed above.
@@ -147,6 +150,7 @@ impl Plan
     ///   examples shipped with the repository read.
     /// - witness: `load::tests::a_plan_reads_its_rubrics_beside_its_playbook`
     /// - witness: `load::tests::the_example_playbook_and_rubric_read`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |plan| plan.rubrics.len() <= plan.playbook.document().steps().len()))]
     #[inline]
     pub fn read(file: &Path) -> Result<Self, LoadError>
     {
@@ -219,6 +223,7 @@ impl Plan
     ///   question twice, groups its questions per rubric in step order and asks
     ///   the repeated question once.
     /// - witness: `load::tests::a_plan_reads_its_rubrics_beside_its_playbook`
+    #[spec(ensures: |ref output| output.len() == self.rubrics.len())]
     #[inline]
     #[must_use]
     pub fn gradings(&self) -> Vec<Grading<'_>>

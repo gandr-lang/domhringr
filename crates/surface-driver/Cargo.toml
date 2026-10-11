@@ -17,6 +17,7 @@ name = "domhringr"
 path = "src/main.rs"
 
 [dependencies]
+anodized = { workspace = true }
 domhringr-judge-oracle = { workspace = true }
 domhringr-record-evidence = { workspace = true }
 domhringr-record-tree = { workspace = true }

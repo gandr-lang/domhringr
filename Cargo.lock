@@ -75,7 +75,15 @@ name = "anodized"
 version = "0.7.0"
 source = "git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426#372f70b50ef7af68f4e8a750132d90d54e780426"
 dependencies = [
- "anodized-macros",
+ "anodized-macros 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
+]
+
+[[package]]
+name = "anodized"
+version = "0.7.0"
+source = "git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87#5483862f402da57329dd22e8e2f272fde576af87"
+dependencies = [
+ "anodized-macros 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87)",
 ]
 
 [[package]]
@@ -90,11 +98,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "anodized-core"
+version = "0.7.0"
+source = "git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87#5483862f402da57329dd22e8e2f272fde576af87"
+dependencies = [
+ "bitflags",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "anodized-macros"
 version = "0.7.0"
 source = "git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426#372f70b50ef7af68f4e8a750132d90d54e780426"
 dependencies = [
- "anodized-core",
+ "anodized-core 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "anodized-macros"
+version = "0.7.0"
+source = "git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87#5483862f402da57329dd22e8e2f272fde576af87"
+dependencies = [
+ "anodized-core 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87)",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -684,6 +714,7 @@ dependencies = [
  "domhringr-strategy-document",
  "gandr-storage-values",
  "lexopt",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -696,6 +727,7 @@ dependencies = [
  "gandr-core-session",
  "gandr-kernel-core",
  "gandr-kernel-term",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
  "thiserror 2.0.21",
 ]
 
@@ -707,6 +739,7 @@ dependencies = [
  "domhringr-record-tree",
  "gandr-storage-values",
  "iroh",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
  "reqwest",
  "serde",
  "serde_json",
@@ -723,6 +756,7 @@ dependencies = [
  "gandr-storage-chunker",
  "gandr-storage-values",
  "iroh",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -732,7 +766,6 @@ dependencies = [
 name = "domhringr-record-index"
 version = "0.0.0"
 dependencies = [
- "anodized",
  "blake3",
  "data-encoding",
  "domhringr-record-tree",
@@ -740,6 +773,7 @@ dependencies = [
  "gandr-storage-records",
  "gandr-storage-values",
  "iroh",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
  "quenchant-arith",
  "sedimentree_core",
  "subduction_core",
@@ -794,6 +828,7 @@ dependencies = [
  "domhringr-judge-oracle",
  "domhringr-record-evidence",
  "domhringr-record-tree",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
  "tempfile",
  "thiserror 2.0.21",
  "toml",
@@ -1113,7 +1148,7 @@ dependencies = [
 name = "gandr-core-session"
 version = "0.0.0"
 dependencies = [
- "anodized",
+ "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
  "gandr-kernel-core",
  "gandr-kernel-term",
 ]
@@ -1122,21 +1157,21 @@ dependencies = [
 name = "gandr-kernel-check-memo"
 version = "0.0.0"
 dependencies = [
- "anodized",
+ "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
 ]
 
 [[package]]
 name = "gandr-kernel-conversion-trace"
 version = "0.0.0"
 dependencies = [
- "anodized",
+ "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
 ]
 
 [[package]]
 name = "gandr-kernel-core"
 version = "0.0.0"
 dependencies = [
- "anodized",
+ "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
  "gandr-kernel-check-memo",
  "gandr-kernel-conversion-trace",
  "gandr-kernel-strata",
@@ -1149,14 +1184,14 @@ dependencies = [
 name = "gandr-kernel-strata"
 version = "0.0.0"
 dependencies = [
- "anodized",
+ "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
 ]
 
 [[package]]
 name = "gandr-kernel-term"
 version = "0.0.0"
 dependencies = [
- "anodized",
+ "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
  "gandr-kernel-conversion-trace",
  "gandr-kernel-strata",
 ]
@@ -1165,14 +1200,14 @@ dependencies = [
 name = "gandr-storage-chunker"
 version = "0.0.0"
 dependencies = [
- "anodized",
+ "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
 ]
 
 [[package]]
 name = "gandr-storage-records"
 version = "0.0.0"
 dependencies = [
- "anodized",
+ "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
  "blake3",
  "gandr-storage-chunker",
 ]
@@ -1181,7 +1216,7 @@ dependencies = [
 name = "gandr-storage-values"
 version = "0.0.0"
 dependencies = [
- "anodized",
+ "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
  "blake3",
  "gandr-storage-chunker",
 ]
@@ -2736,7 +2771,17 @@ name = "quenchant-anodized"
 version = "0.0.0"
 source = "git+https://github.com/gandr-lang/quenchant?rev=111850988c96b7b33ee898f54c017ca645243e7f#111850988c96b7b33ee898f54c017ca645243e7f"
 dependencies = [
- "quenchant-spec-macros",
+ "quenchant-spec-macros 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=111850988c96b7b33ee898f54c017ca645243e7f)",
+]
+
+[[package]]
+name = "quenchant-anodized"
+version = "0.0.0"
+source = "git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9#8b8d0702d69409549e855606a85492c777e05fc9"
+dependencies = [
+ "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87)",
+ "anodized-macros 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87)",
+ "quenchant-spec-macros 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 
 [[package]]
@@ -2744,7 +2789,7 @@ name = "quenchant-arith"
 version = "0.0.0"
 source = "git+https://github.com/gandr-lang/quenchant?rev=111850988c96b7b33ee898f54c017ca645243e7f#111850988c96b7b33ee898f54c017ca645243e7f"
 dependencies = [
- "quenchant-anodized",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=111850988c96b7b33ee898f54c017ca645243e7f)",
 ]
 
 [[package]]
@@ -2752,13 +2797,18 @@ name = "quenchant-shape"
 version = "0.0.0"
 source = "git+https://github.com/gandr-lang/quenchant?rev=111850988c96b7b33ee898f54c017ca645243e7f#111850988c96b7b33ee898f54c017ca645243e7f"
 dependencies = [
- "quenchant-anodized",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=111850988c96b7b33ee898f54c017ca645243e7f)",
 ]
 
 [[package]]
 name = "quenchant-spec-macros"
 version = "0.0.0"
 source = "git+https://github.com/gandr-lang/quenchant?rev=111850988c96b7b33ee898f54c017ca645243e7f#111850988c96b7b33ee898f54c017ca645243e7f"
+
+[[package]]
+name = "quenchant-spec-macros"
+version = "0.0.0"
+source = "git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9#8b8d0702d69409549e855606a85492c777e05fc9"
 
 [[package]]
 name = "quick-xml"

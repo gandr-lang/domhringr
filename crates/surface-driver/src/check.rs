@@ -15,6 +15,7 @@ use alloc::vec::Vec;
 use std::path::Path;
 use std::path::PathBuf;
 
+use anodized::spec;
 use domhringr_judge_oracle::Backend;
 use domhringr_judge_oracle::ChatCompletions;
 use domhringr_judge_oracle::Config;
@@ -75,6 +76,8 @@ use crate::report;
 ///   output cannot be written, and as [`Checkout::remove`], a failure of the
 ///   steps reported first.
 /// - panics: none.
+/// - executable: none — verifier processes, committed receipts and checkout
+///   cleanup require the operator process witness to observe their effects.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -170,9 +173,15 @@ pub async fn verify(
 /// - fails: [`RunError::Random`] when the receipt could not be built, and
 ///   [`RunError::Commit`] when it cannot be committed.
 /// - panics: none.
+/// - executable: none — committing a receipt is an asynchronous store effect;
+///   the operator witness replays the resulting task.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — the task records verifications and decisions.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
 async fn record(
     peer: &Peer,
     tree: TreeId,
@@ -219,6 +228,8 @@ pub struct Deciding<'store>
 ///   [`change::state`], as [`grade`], and [`RunError::Random`],
 ///   [`RunError::Commit`] and [`RunError::Output`].
 /// - panics: none.
+/// - executable: none — decision receipts and process output require external
+///   observation; recomputing a grade cannot attest to their persistence.
 ///
 /// # Errors
 /// - [`RunError`]: as listed above.
@@ -292,7 +303,14 @@ pub async fn decide(
 /// folds: each step's status, in step order.
 ///
 /// # Specification
-/// trivial.
+/// - ensures: selects the latest status for each step on `dispatch`, ordered by
+///   step id; unrelated dispatches contribute nothing.
+/// - panics: none.
+///
+/// # Adequacy
+/// - hypothesis: L3 — a passing verification participates in the decision.
+/// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
+#[spec(ensures: |ref ret| ret.len() <= view.task().steps().len())]
 fn verifications(
     view: &View,
     dispatch: CommitId,
@@ -359,6 +377,7 @@ struct Graded
 /// - hypothesis: L3 — the process tests read every line of a grading all
 ///   refused, one met and one unmet, and the task holds each grading.
 /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
+#[spec(ensures: |ref ret| ret.as_ref().map_or(true, |graded| graded.composed != Grade::Met || matches!(graded.unmet, Unmet::Nothing)))]
 async fn grade(
     on: Deciding<'_>,
     dispatch: CommitId,
@@ -438,6 +457,7 @@ async fn grade(
 /// - hypothesis: L3 — the process tests answer from an empty table and from a
 ///   table seeded met and unmet.
 /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
+#[spec(ensures: |ref ret| ret.as_ref().map_or(true, |rulings| rulings.len() == questions.len()))]
 async fn rulings(
     judging: &Judging,
     questions: &[Question],
@@ -481,6 +501,7 @@ async fn rulings(
 /// - hypothesis: L3 — the process tests rule from a table that answers none of
 ///   a rubric's questions and from one that answers each.
 /// - witness: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one`
+#[spec(ensures: |ref ret| ret.as_ref().map_or(true, |rulings| rulings.len() == questions.len()))]
 async fn rule<Answering>(
     backend: &Answering,
     questions: &[Question],

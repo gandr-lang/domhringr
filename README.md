@@ -35,7 +35,7 @@ The test task signs both test executables and the binaries they launch with `org
 
 CI builds every target under the test profile: size-optimized `release` code without debuginfo, with debug assertions and overflow checks explicitly enabled. `mise run test -- --profile ci` runs the existing test task against that build; private-item rustdoc uses the same Cargo profile. `release` and the aggressive, uncached `dist` profile are unchanged.
 
-The complete test artifact set is archived with zstd and uploaded without recompression. The archive contains `target/debug`, not unrelated profiles or generated documentation. Its cache retains integration-test binaries independently of dependency-cache cleanup, and Cargo checks source contents rather than checkout mtimes. Main promotes verified queue artifacts; hosted manual runs warm branch-local caches. The locked mise cache supplies installed policy tools, including sizelint, without rebuilding them on warm runs.
+The complete test artifact set is archived with zstd and uploaded without recompression. The archive contains `target/debug` and `target/enforcing/debug`, not unrelated profiles or generated documentation. Its cache retains integration-test binaries independently of dependency-cache cleanup, and Cargo checks source contents rather than checkout mtimes. Main promotes verified queue artifacts; hosted manual runs warm branch-local caches. The locked mise cache supplies installed policy tools, including sizelint, without rebuilding them on warm runs.
 
 Archive creation stops the job if either tar or zstd fails.
 
@@ -44,6 +44,16 @@ Archive creation stops the job if either tar or zstd fails.
 Completed and interrupted gates remove their containers, networks and volumes. Before starting, each gate reaps resources from abandoned runs whose workflow process is gone; live runs and the shared `act-toolcache` volume remain untouched.
 
 Each gate snapshots the shared action cache. Successful gates publish only new cache entries under a directory lock; a 30-second lock timeout fails the gate.
+
+## Executable specifications
+
+Specification attributes use `use anodized::spec;` through the pinned [quenchant facade](https://github.com/gandr-lang/quenchant). Ordinary builds strip their predicates; `--cfg anodized_panic` enforces them. `mise run check:tests-enforcing` runs the test suite in that mode with isolated artifacts under `target/enforcing`. The whole local gate and CI run both modes.
+
+The dylint lane denies `spec_attribute_present`, `adequacy_present`, `maybe_shape`, `erased_error_signature` and `spec_attribute_unqualified`. Nontrivial specification clauses carry an independent executable predicate or an item-local `executable: none` reason. Adequacy witnesses resolve against the test inventory. Predicates check stated bounds, implications or membership; they do not prove the entire prose contract. Effectful obligations retain process or storage witnesses rather than repeating the effect in an assertion.
+
+`arena-session`, `record-evidence`, `judge-oracle`, `strategy-document` and `surface-driver` satisfy these checks. `record-tree`, `seat-slot`, `surface-peer` and `record-index` carry temporary crate-root allowances for the `executable-specs-record` backfill.
+
+The facade keeps extraction and mode selection in one dependency. Direct anodized dependencies would bypass its stripping policy; hand-written assertions would lose specification extraction. Reconsider this choice if the facade cannot express the required predicates or maintain consistent stripped and enforcing builds.
 
 ## Landing changes
 

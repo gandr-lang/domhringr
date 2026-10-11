@@ -16,6 +16,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::fmt;
 
+use anodized::spec;
 use gandr_core_session::Action;
 use gandr_core_session::Move;
 use gandr_core_session::Node;
@@ -91,6 +92,8 @@ impl core::str::FromStr for Edition
     /// - ensures: preserves every representable unsigned edition number.
     /// - fails: rejects nonnumeric or overflowing input.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the witness
+    ///   distinguishes parsing a number from knowing its protocol.
     ///
     /// # Errors
     /// Returns the integer parser's error for malformed input.
@@ -335,6 +338,10 @@ impl Arena
     /// - witness: `tests::unknown_editions_never_replay_as_known_protocols`
     /// - witness: `tests::named_refusal_preserves_the_prefix`
     /// - witness: `tests::task_channels_replay_with_their_duals`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |arena|
+        arena.session(Edition::ONE, Channel::Slot).is_ok()
+        && arena.session(Edition::TWO, Channel::Slot).is_ok() == cfg!(feature = "edition-2")
+    ))]
     #[inline]
     pub fn new() -> Result<Self, ArenaError>
     {
@@ -354,6 +361,8 @@ impl Arena
     /// - ensures: returns the selected channel of exactly the named edition.
     /// - fails: unknown numbers name themselves in `UnknownEdition`.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; directed
+    ///   replay and unknown-edition witnesses check the finite lookup table.
     ///
     /// # Errors
     /// Returns `UnknownEdition` when the edition is not compiled in.
@@ -402,6 +411,7 @@ impl Arena
     ///   forward, reverse, unknown and incomplete traces separate the names,
     ///   relation direction, conformance and completion obligations.
     /// - witness: `tests::pause_is_certified_and_old_runs_transport`
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |transported| transported.channel == play.channel && transported.moves == play.moves))]
     #[inline]
     pub fn transport(
         &self,
@@ -539,6 +549,7 @@ impl Play
     /// - witness: `tests::named_refusal_preserves_the_prefix`
     /// - witness: `tests::unknown_editions_never_replay_as_known_protocols`
     /// - witness: `tests::task_channels_refuse_missing_and_repeated_moves`
+    #[spec(ensures: |ref output| !matches!(*output, Ok(Progress::Complete)) || self.moves.last() == Some(&Move::End))]
     #[inline]
     pub fn record(
         &mut self,
@@ -613,6 +624,8 @@ impl Play
     ///   admitted prefix unchanged on both success and failure.
     /// - fails: propagates the named monitor refusal.
     /// - panics: none.
+    /// - executable: none — the function is its own specification; the trace
+    ///   witness distinguishes observation from admitting the candidate.
     ///
     /// # Errors
     /// Returns `Refusal` when the action cannot enter the named protocol.
@@ -655,6 +668,8 @@ impl Play
 ///   verification; operator selects once and only land continues to a landing.
 /// - fails: malformed finite session syntax returns its type error.
 /// - panics: none.
+/// - executable: none — the function is its own specification; independent dual
+///   replay witnesses check the channel tables rather than duplicating them.
 ///
 /// # Errors
 /// - [`TypeError`]: invalid channel syntax.
@@ -726,6 +741,7 @@ fn channels(edition: Edition) -> Result<Channels, gandr_core_session::TypeError>
 ///   and both closing moves.
 /// - witness: `tests::named_refusal_preserves_the_prefix`
 /// - witness: `tests::pause_is_certified_and_old_runs_transport`
+#[spec(requires: edition == Edition::ONE || (cfg!(feature = "edition-2") && edition == Edition::TWO))]
 fn session(edition: Edition) -> Result<Session, gandr_core_session::TypeError>
 {
     let mut before = BTreeMap::from([("report".into(), NodeId(3))]);

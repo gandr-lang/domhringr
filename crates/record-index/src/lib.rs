@@ -3,6 +3,17 @@
 //! The receipt fold owns admission. Index manifests bind a kind, layout,
 //! boundary rule, record count and node identity independently of storage.
 
+// Temporary until the executable-specs-record backfill covers this crate.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        spec_attribute_present,
+        adequacy_present,
+        maybe_shape,
+        erased_error_signature,
+        spec_attribute_unqualified
+    )
+)]
 #![expect(
     clippy::multiple_crate_versions,
     reason = "iroh and subduction depend on different cryptographic crate majors"

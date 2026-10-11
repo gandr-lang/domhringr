@@ -35,6 +35,9 @@ const CODEC_VERSION: u16 = 0x0001_u16;
 ///   same profile on every call and every peer, so a value one peer commits
 ///   reads under another's, and a value cut under other constants is refused.
 /// - panics: none.
+/// - executable: none — the function is its own specification; independent
+///   commitment and corpus goldens fix the profile without repeating its
+///   fields.
 ///
 /// # Adequacy
 /// - hypothesis: L2 agreement — the chunker commitment is pinned byte by byte,
