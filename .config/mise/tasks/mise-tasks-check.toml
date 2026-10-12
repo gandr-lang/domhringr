@@ -151,7 +151,8 @@ eval "args=(${usage_args:-})"
 target=$(cargo metadata --manifest-path Cargo.toml --locked --no-deps --format-version 1 | jq -r '.target_directory')
 cargo build --package domhringr-surface-peer --bin domhringr-peer --no-default-features --locked
 cp "$target/debug/domhringr-peer" "$target/debug/domhringr-peer-edition-one"
-cargo nextest run --workspace --locked --no-run "${args[@]}"
+# macOS ships bash 3.2, where an empty "${args[@]}" is unbound under set -u.
+cargo nextest run --workspace --locked --no-run ${args[@]+"${args[@]}"}
 if [[ -n "${CODESIGN_IDENTITY:-}" && "$(uname -s)" == "Darwin" ]]; then
   find "$target/debug" "$target/debug/deps" -maxdepth 1 -type f -perm -u+x ! -name '*.*' \
     -exec codesign --force --sign "$CODESIGN_IDENTITY" --identifier org.gandr-lang.domhringr.test {} +
@@ -168,10 +169,10 @@ run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 eval "args=(${usage_args:-})"
-mise run build:tests -- "${args[@]}"
+mise run build:tests -- ${args[@]+"${args[@]}"}
 target=$(cargo metadata --manifest-path Cargo.toml --locked --no-deps --format-version 1 | jq -r '.target_directory')
 export DOMHRINGR_EDITION_ONE="$target/debug/domhringr-peer-edition-one"
-cargo nextest run --workspace --locked "${args[@]}"
+cargo nextest run --workspace --locked ${args[@]+"${args[@]}"}
 '''
 
 # Git writes conflict markers as EXACTLY seven marker characters followed by
