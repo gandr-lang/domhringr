@@ -9,6 +9,15 @@ final-status-level = "slow"
 failure-output = "immediate"
 slow-timeout = { period = "30s", terminate-after = 4 }
 
+# Start the hosted heavy tail first; the ci profiles inherit these overrides.
+# Priorities change scheduling only, never cases, domains or timeouts. The
+# tables are the reviewed output of gandr's `test-timing` tool run with
+# `--repo gandr-lang/domhringr`, which proposes each test's level from the
+# recent merge-queue durations.
+[[profile.default.overrides]]
+filter = "test(=stream::tests::an_answer_at_the_cap_is_read_and_one_byte_past_is_refused) or test(=tests::a_project_only_reader_replays_every_standing)"
+priority = 70
+
 [profile.ci]
 status-level = "slow"
 final-status-level = "slow"
@@ -18,3 +27,9 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 
 [profile.ci.junit]
 path = "junit.xml"
+
+# Nextest stores reports by profile, independently of Cargo's target directory.
+# The enforcing pass, CI's full test pass, writes its report under its own
+# name. Its kill limit stays at least twice the slowest enforcing test.
+[profile.ci-enforcing]
+inherits = "ci"

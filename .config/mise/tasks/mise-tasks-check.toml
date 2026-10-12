@@ -73,10 +73,26 @@ depends = ["workflow:install"]
 env.PATH = "{{ config_root }}/target/workflow-tools/bin:{{ env.PATH }}"
 run = "quenchant-gates anodized --manifest-path Cargo.toml"
 
+# The facade selects enforcement from the annotated crate's cfg, so it is
+# set for the whole graph. The enforcing tasks build into their own target
+# directory: the wall runs its tasks in parallel, and a shared directory would
+# rebuild artifacts under a sibling task's flags.
+["check:anodized-enforcing"]
+description = "Require specification enforcement in the enforcing configuration"
+depends = ["workflow:install"]
+env.PATH = "{{ config_root }}/target/workflow-tools/bin:{{ env.PATH }}"
+env.RUSTFLAGS = "--cfg anodized_panic"
+env.CARGO_TARGET_DIR = "{{ config_root }}/target/enforcing"
+run = "quenchant-gates anodized --manifest-path Cargo.toml --require-enforcing"
+
+# Witness discovery lists the enforcing test inventory, the graph the
+# enforcing test run has already built.
 ["check:witnesses"]
 description = "Resolve adequacy witnesses in the consumer test inventory"
 depends = ["workflow:install"]
 env.PATH = "{{ config_root }}/target/workflow-tools/bin:{{ env.PATH }}"
+env.RUSTFLAGS = "--cfg anodized_panic"
+env.CARGO_TARGET_DIR = "{{ config_root }}/target/enforcing"
 run = "quenchant-gates witnesses --manifest-path Cargo.toml"
 
 # `RUSTDOCFLAGS="-D warnings"` makes every rustdoc lint fatal, so a broken
@@ -113,6 +129,38 @@ env.RUSTFLAGS = "--cfg anodized_panic"
 env.CARGO_TARGET_DIR = "{{ config_root }}/target/enforcing"
 run = "mise run test -- --profile {{ env.NEXTEST_PROFILE | default(value='default') }}"
 
+# CI separates compilation from execution so a failed test keeps the built
+# state; `test` runs the same build first, which is then fresh.
+["build:tests-enforcing"]
+description = "Build and sign the enforcing test executables without running them"
+env.RUSTFLAGS = "--cfg anodized_panic"
+env.CARGO_TARGET_DIR = "{{ config_root }}/target/enforcing"
+run = "mise run build:tests"
+
+# The edition-1-only peer binary is built apart from the workspace feature
+# union and kept beside the default one; the tests find it through
+# DOMHRINGR_EDITION_ONE.
+["build:tests"]
+description = "Build and sign the test executables, nextest arguments selecting them"
+usage = 'arg "[args]" var=#true double_dash="optional"'
+tools.jq = "1.8.1"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+eval "args=(${usage_args:-})"
+target=$(cargo metadata --manifest-path Cargo.toml --locked --no-deps --format-version 1 | jq -r '.target_directory')
+cargo build --package domhringr-surface-peer --bin domhringr-peer --no-default-features --locked
+cp "$target/debug/domhringr-peer" "$target/debug/domhringr-peer-edition-one"
+# macOS ships bash 3.2, where an empty "${args[@]}" is unbound under set -u.
+cargo nextest run --workspace --locked --no-run ${args[@]+"${args[@]}"}
+if [[ -n "${CODESIGN_IDENTITY:-}" && "$(uname -s)" == "Darwin" ]]; then
+  find "$target/debug" "$target/debug/deps" -maxdepth 1 -type f -perm -u+x ! -name '*.*' \
+    -exec codesign --force --sign "$CODESIGN_IDENTITY" --identifier org.gandr-lang.domhringr.test {} +
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+  echo "test: CODESIGN_IDENTITY is unset; skipping code signing. Firewall prompts may recur; see README.md." >&2
+fi
+'''
+
 [test]
 description = "Build, sign, and run tests with nextest arguments"
 usage = 'arg "[args]" var=#true double_dash="required"'
@@ -121,18 +169,10 @@ run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 eval "args=(${usage_args:-})"
+mise run build:tests -- ${args[@]+"${args[@]}"}
 target=$(cargo metadata --manifest-path Cargo.toml --locked --no-deps --format-version 1 | jq -r '.target_directory')
-cargo build --package domhringr-surface-peer --bin domhringr-peer --no-default-features --locked
 export DOMHRINGR_EDITION_ONE="$target/debug/domhringr-peer-edition-one"
-cp "$target/debug/domhringr-peer" "$DOMHRINGR_EDITION_ONE"
-cargo nextest run --workspace --locked --no-run "${args[@]}"
-if [[ -n "${CODESIGN_IDENTITY:-}" && "$(uname -s)" == "Darwin" ]]; then
-  find "$target/debug" "$target/debug/deps" -maxdepth 1 -type f -perm -u+x ! -name '*.*' \
-    -exec codesign --force --sign "$CODESIGN_IDENTITY" --identifier org.gandr-lang.domhringr.test {} +
-elif [[ "$(uname -s)" == "Darwin" ]]; then
-  echo "test: CODESIGN_IDENTITY is unset; skipping code signing. Firewall prompts may recur; see README.md." >&2
-fi
-cargo nextest run --workspace --locked "${args[@]}"
+cargo nextest run --workspace --locked ${args[@]+"${args[@]}"}
 '''
 
 # Git writes conflict markers as EXACTLY seven marker characters followed by
