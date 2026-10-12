@@ -30,6 +30,69 @@
 //! others; otherwise refused when any is refused; otherwise undecided when
 //! any is undecided; otherwise met. A refused question is never read as met
 //! or unmet.
+//!
+//! # Rubrics
+//!
+//! A rubric holds `name`, `state`, `band` and `questions`, nothing else.
+//! `state` is a non-empty array of paths relative to the task's state
+//! directory: `/`-separated segments of ASCII letters, digits, `.`, `_` and
+//! `-`, none empty, `.` or `..`. `band` holds `low` and `high`, floats from
+//! zero to one with `low` strictly below `high`; an integer such as `1` is
+//! refused, as TOML keeps the two types apart, so a bound is written `1.0`.
+//! `questions` is a non-empty table of questions by name, each holding
+//! `instructions`, `criteria.true` and `criteria.false`, three non-empty texts,
+//! the criteria each one line.
+//!
+//! The transcript is each state file in order as `<state name="<path>">`, the
+//! file's bytes, a newline when they lack one, and `</state>`. Each question is
+//! asked as the judge's question with its instructions as the text and two
+//! options, `A` the true criterion and `B` the false one. A rubric's questions
+//! are kept in the order of their names; a playbook asks those its steps name,
+//! rubric by rubric in the order each rubric is first named, and within a
+//! rubric in step order, a question named twice asked once.
+//!
+//! **A question is a choice between its criterion holding and failing.** The
+//! judge reads a probability on each letter, and the band reads the probability
+//! on `A`.
+//!
+//! - a question kind field (`type`) beside the boolean kind: a field with one
+//!   value, read by nothing.
+//! - a free-form scale of options per question: a band would then need a
+//!   reading per option.
+//!
+//! Reversal: a question that has more than two answers worth telling apart,
+//! which adds a `type` and a grade for its options.
+//!
+//! # Grades and their composition
+//!
+//! **A ruling is graded by the probability on its true criterion against the
+//! band.** At or above `high` it is `met`, at or below `low` `unmet`, strictly
+//! between `undecided`; an unread ruling is `refused`.
+//!
+//! **A rubric's grades compose as the conjunction of its criteria.** Any
+//! `unmet` makes the composition `unmet`; otherwise any `refused` makes it
+//! `refused`; otherwise any `undecided` makes it `undecided`; otherwise it is
+//! `met`, as is an empty composition. This is the strong three-valued
+//! conjunction with refusal placed between failure and indecision: a criterion
+//! decided as failing settles the conjunction whatever the others say, and a
+//! refusal is never read as met, nor as merely close.
+//!
+//! `domhringr_record_tree::compose` owns this rule beside `Grade`. Writers and
+//! the record fold use the same definition; a grading with a different composed
+//! grade is refused as `miscomposed`. The dependency on `record-tree` supplies
+//! it.
+//!
+//! - refusal absorbing everything: an unread question would hide a criterion
+//!   that was decided as failing.
+//! - `undecided` before `refused`: a judge that did not answer would read as
+//!   one that weighed the evidence and stayed between.
+//! - a number per rubric (the least or the product of the probabilities) and a
+//!   threshold over it: a second band per rubric, and a refusal with no number
+//!   to stand for it.
+//!
+//! Reversal: rubrics whose questions are not a conjunction, such as
+//! alternatives of which one must hold. A composition rule per rubric is then a
+//! field of the rubric.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;

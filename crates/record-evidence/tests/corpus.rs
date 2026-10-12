@@ -2,7 +2,7 @@
 //! cuts of the checked-in corpus under it — each value's chunk count and the
 //! size of every distinct chunk. The corpus is the reports, verifier outputs
 //! and transcripts the tree's tests and the operator loop produce, frozen
-//! under `tests/corpus`; the README states the measurement this pins.
+//! under `tests/corpus`; the `profile` module states the measurement this pins.
 
 extern crate alloc;
 

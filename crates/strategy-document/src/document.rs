@@ -9,6 +9,35 @@
 //! refusals. A table's unknown fields are refused before any of its fields is
 //! read, the smallest key first, so a misspelt field is refused as unknown
 //! rather than as the missing field it was meant to be.
+//!
+//! # Refusals
+//!
+//! A refusal names the field at fault and why: `steps[1].verifier.args[0]:
+//! expected a string`, `band: the band's low bound is not below its high
+//! bound`, `questions.synopsis.criteria.false: missing field`. A field is the
+//! path of keys and array positions from the document's root; a text that is
+//! not TOML is refused at the root with the line and column where the parser
+//! stopped. Each table refuses an unknown field first, the smallest key in
+//! order, then reads its fields in the order the shapes above list them, so the
+//! first refusal in that order is the one reported.
+//!
+//! **The documents are read by hand from the TOML document tree.** Each refusal
+//! is a value with a field path and a reason a test compares exactly, and every
+//! rule — a unique step id, a bound strictly below the other, a question the
+//! rubric holds — is checked where the field is read.
+//!
+//! - `serde` derives with `deny_unknown_fields`: the type checks for free, and
+//!   a refusal is a message with a byte span, not a field, while the
+//!   cross-field rules still need code of their own.
+//! - a JSON Schema validator over the document read as JSON: a second language
+//!   for the shape, whose errors name a JSON pointer and know nothing of a
+//!   rubric file's questions.
+//! - `toml_edit` or `toml-span`: a format-preserving editor or a second spanned
+//!   parser for documents this crate only reads.
+//!
+//! Reversal: a consumer that needs the shape as a machine-readable schema, such
+//! as an editor completing a playbook's fields. A schema is then generated from
+//! these readers' field lists, and the readers stay the authority.
 
 use alloc::string::String;
 use alloc::vec::Vec;

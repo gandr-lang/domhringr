@@ -5,6 +5,31 @@
 //! project's book says where each seat is reached. A task tree's own book
 //! names its seat once the seat has presented itself there, so a seat is
 //! reached through the task's book first and the project's after.
+//!
+//! # The lifecycle
+//!
+//! A task's tree folds to its current attempt — the latest dispatch — and how
+//! far the attempt has gone. The standing is the last line of the peer's
+//! `replay` and the end of each `task` line `open` prints.
+//!
+//! `open` prints standings and refusals from the index, refreshing tasks only
+//! when their heads moved or their cached images are missing. Routing for sync
+//! may fold task books; the no-refold rule applies to listing and refresh, not
+//! routing.
+//!
+//! | Standing | Reached by | Command |
+//! | -------- | ---------- | ------- |
+//! | `undispatched` | the task's `Open` | `dispatch`, minting the task |
+//! | `dispatched <dispatch> <holder>` | `Dispatch` | `dispatch` |
+//! | `reported <dispatch> <report>` | the holder's `Report` | the seat |
+//! | `verified <dispatch> <verification>` | `Verified` | `verify` |
+//! | `graded <dispatch> <grading> <composed>` | `Graded` | `decide` |
+//! | `decided <dispatch> <decision-commit> <decision>` | `Decide` | `decide` |
+//! | `landed <dispatch> <landing> <revision>` | `Landed` | `land` |
+//!
+//! Past the report, the attempt only advances: a verification after a grading
+//! leaves it graded. A rework is a decision; the next attempt is a new
+//! dispatch, back to `dispatched`.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;

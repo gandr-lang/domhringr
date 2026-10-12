@@ -9,6 +9,50 @@
 //! which carries the seat's presence when the seat had none, and drops the
 //! link. Neither line is stored or hashed: the record holds the dispatch, and
 //! the stream only says which one to read.
+//!
+//! # The wake
+//!
+//! **A wake is one line naming the dispatch by its commit anchor and the
+//! operator by its peer id.** The record holds the dispatch, and the line only
+//! says which one to read. The seat folds the task it pulled and does not trust
+//! the line for anything the fold decides. The line is 512 bytes at most,
+//! UTF-8, ending in its one newline. The reply is `woken`, or `declined` with
+//! its reason: `malformed`, `unsynced`, `unfolded`, `not current`, `not held`
+//! or `unpresented`. Neither line is stored or hashed.
+//!
+//! - a value-plane token stream for the line: a second canonical encoding for
+//!   bytes that are never stored and that a person reading a capture can
+//!   already read.
+//! - the dispatch's receipt carried in the line: a second copy of a record the
+//!   seat must fold anyway, to judge it in its causal past.
+//!
+//! Reversal: a wake that carries something the record cannot, such as a
+//! capability, when it needs a canonical form.
+//!
+//! **The seat pulls the task over the operator's link; the operator does not
+//! push it.** The operator links over subduction first and only then opens the
+//! wake's connection. The node admits links one at a time, so the link is
+//! registered before the wake is handed over, and the seat pulls over it
+//! without dialing back. On `woken` the operator pulls in turn, and the seat's
+//! presence, committed while it answered, comes back with it.
+//!
+//! - the operator pushing the task before it wakes the seat: a sync's batch
+//!   round goes both ways, so the push and the pull are one round. The seat
+//!   still has to fold what arrived, and the push could not include a presence
+//!   the seat has not yet committed.
+//! - the seat dialing the operator back: the operator would need a presence or
+//!   a reachable endpoint of its own, and a short-lived command line has
+//!   neither.
+//!
+//! Reversal: an operator that serves, reachable at its own presence, when the
+//! seat can sync on its own schedule.
+//!
+//! **The operator waits thirty seconds for the reply.** In that time the seat
+//! pulls, folds and, when it has no presence in the book, presents itself.
+//! Presenting waits up to five seconds for the seat's endpoint to reach its
+//! home relay. The seat waits up to ten seconds after replying for the operator
+//! to close the connection, so that the reply is read before the connection is
+//! dropped.
 
 use core::fmt;
 use core::str::FromStr;

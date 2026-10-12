@@ -65,11 +65,13 @@ command = "typos"
 options = ["--write-changes", "--force-exclude"]
 includes = ["*"]
 
-# Check-only: doc-sprawl size budgets.
+# Check-only: file size budgets. Markdown shape and budgets belong to
+# `check:markdown`, which judges every tracked markdown file once.
 [formatter.sizelint]
 command = "sizelint"
 options = ["check"]
 includes = ["*"]
+excludes = ["*.md"]
 
 # Check-only: shell lint at default severity (style included); a per-line directive with its reason is the only sanctioned suppression.
 [formatter.shellcheck]

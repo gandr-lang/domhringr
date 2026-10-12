@@ -123,6 +123,202 @@
 //! ([`ValueError::UnexpectedConstructor`] at its open record): the value
 //! plane's refusals name token shapes, and this is the one that names the
 //! constructor a codec turns away.
+//!
+//! # Receipts and views
+//!
+//! A peer is a state directory holding two ed25519 keys, one for the iroh
+//! endpoint and one for subduction's signer, the key of every tree it opened,
+//! and the tree store. Every commit carries a receipt: the format version, the
+//! tree it belongs to, a 16-byte operation fence drawn at random, and its kind
+//! — `Open { proof }` (the tree's root; its author owns the tree, and the proof
+//! is the tree key's signature naming that author), `Grant { to }` (write
+//! authority delegated to a peer), `Note { text }`, `Bind { path, target }` (a
+//! path in the tree bound to an anchor — a tree, a path, or a commit, in this
+//! tree or another — to an endpoint, or to an opaque datum), `Claim { domain }`
+//! (a DNS name claimed for the tree), `Introduce { tree, label }` (another tree
+//! introduced by a label in this one), `Present { endpoint, proof }` (the
+//! author's iroh endpoint and the addresses it is reached at; the proof is the
+//! endpoint key's signature naming the author), or `Withdraw { of }` (the
+//! withdrawal of a peer's presence). The commit's blob is the encoded receipt,
+//! its id the BLAKE3 digest of that blob, its parents the tree's heads when it
+//! is made, and its author the commit's verified signer.
+//!
+//! A view is the fold of a tree's commits: walked in canonical order
+//! (topological, the smallest commit id next among the ready), a receipt is
+//! admitted when it is the tree's Open, when its author owns the tree, or when
+//! an admitted grant to its author is among its ancestors, except that a claim
+//! is admitted from the owner alone, a presence only when its proof holds for
+//! its author under the presented endpoint's key, and a member's withdrawal
+//! only of its own presence; everything else is refused with its reason — wrong
+//! tree, undecodable, duplicate operation, no authority, not owner, second
+//! Open, bad proof, foreign endpoint, foreign presence. The tree's Open is the
+//! root Open with the smallest commit id among those whose proof holds under
+//! the tree id, so a tree id names exactly the tree its key opened. Among the
+//! admitted binds of one path, the last in canonical order binds it, among the
+//! admitted introductions of one label, the last introduces it, and among an
+//! author's admitted presences, the last is its entry in the book unless an
+//! admitted withdrawal of it follows; an anchor's path resolves to that binding
+//! or to unbound. The view keeps the id of every commit it admitted beside
+//! every refusal, so a commit resolves to the fold's verdict on it. Every peer
+//! holding the same commits folds them to the same view, whatever order they
+//! arrived in. Refused commits stay in the tree and sync like any other.
+//!
+//! # Codec
+//!
+//! **Receipts use the value plane's flat form, `gandr-storage-values` at the
+//! pinned sibling revision.** `Receipt` implements `CanonicalValue` using the
+//! token grammar in the `receipt` module. A commit's blob is the flat form
+//! written by `encode_flat` and read by `decode_flat`. This is the token stream
+//! `cam_commit` cuts, so committing a receipt through the value plane's chunk
+//! DAG requires no re-encoding; a receipt fitting one chunk is exactly the body
+//! that chunk frames. The encoder writes an explicit edition word in every
+//! dispatch. The decoder also admits an editionless dispatch as edition 1; its
+//! original signed blob and commit id remain unchanged during folding and sync.
+//! Re-encoding such a decoded value is a new explicit-edition blob, never an
+//! in-place migration.
+//!
+//! Two identities name a receipt and neither stands in for the other. The
+//! `CommitId` is sedimentree's: the BLAKE3 digest of the blob, the flat bytes
+//! alone. A value-plane `ContentPtr` names the framed chunk: BLAKE3 over the
+//! chunk image, the plane's domain and frame header included. A commit is found
+//! by its `CommitId`; a `ContentPtr` names a receipt committed into the value
+//! plane.
+//!
+//! - postcard over a serde mirror of the receipt: compact, but requires
+//!   re-encoding for the value plane and maintains a second canonical form.
+//! - sedimentree's `codec`: the format of its signed payloads (schema header,
+//!   issuer key, fields, signature) with big-endian integers; it already seals
+//!   the commit that carries the blob, and as a receipt form it would be a
+//!   second canonical form in another byte order.
+//! - a hand-rolled fixed layout: one more canonical form to keep in step with
+//!   the value plane's.
+//!
+//! Reversal: an incompatible change to the value plane's token grammar or flat
+//! form requires a matching receipt version change; moving receipts into the
+//! value plane's store makes the blob a `ContentPtr` and changes what the
+//! commit id hashes.
+//!
+//! **A bind's target carries its anchor as typed parts, not as anchor text.**
+//! The target is a constructor — anchor, endpoint, or datum — and an anchor a
+//! constructor for what it names in its tree — nothing, a path, or a commit —
+//! around an authority constructor — key, DNS name, or label. Each part is the
+//! record the receipt grammar already uses for its kind: a 32-byte key, a DNS
+//! name or label as UTF-8 bytes, a path as its text, a commit id as its 32
+//! bytes. Each part has one encoding, the decoder refuses what the parsers
+//! refuse (an empty or reserved segment, a short key, a commit id of other than
+//! 32 bytes), and an abbreviated commit has none. The receipt grammar is
+//! version 3; a receipt of any other version is refused.
+//!
+//! - the anchor's text as one UTF-8 record: a second canonical form to keep in
+//!   step with the parser, its refusals reached only by parsing decoded text.
+//! - a commit id and a tree id as targets of their own beside the anchor: two
+//!   spellings of what an anchor names.
+//!
+//! Reversal: a new form within a tree or a new authority adds a constructor
+//! under a new receipt version.
+//!
+//! **A presence and a withdrawal are new kinds, not a new version.** A decoder
+//! that predates them refuses them as an unknown kind, folded as undecodable,
+//! while every receipt it knows keeps its blob and its commit id; a version
+//! change would make every new receipt unreadable to it instead.
+//!
+//! - a new receipt version: an old decoder refuses notes and binds it could
+//!   read.
+//!
+//! Reversal: a change to an existing kind's payload, which needs a new version.
+//!
+//! **The seat receipts are new kinds, not a new version, and a brief a
+//! constructor.** `Dispatch`, `Report`, `Handoff` and `Retire` follow the
+//! presence and the withdrawal for the same reason; a brief is an anchor, as a
+//! bind's target carries it, or a content hash of 32 bytes; a summary is UTF-8
+//! bytes that parse as a summary.
+//!
+//! - a new receipt version: an old decoder refuses every receipt it could read.
+//!
+//! **The dispatch ends with an unsigned edition word.** The decoder recognizes
+//! absence only at the dispatch's closing token and assigns edition 1;
+//! malformed fields fail decoding, while unknown numbers survive decoding for a
+//! named protocol refusal. This bounded extension keeps receipt version 3 and
+//! every other kind unchanged. A version bump would refuse otherwise readable
+//! receipts. Revisit when a field cannot be distinguished from absence without
+//! ambiguity.
+//!
+//! Witnesses:
+//! `receipt::tests::dispatch_editions_distinguish_absence_unknown_and_malformed`,
+//! `fold::tests::editionless_dispatches_keep_edition_one_refusals` and
+//! `fold::tests::dispatch_editions_govern_each_attempt`.
+//!
+//! **A verdict is a new kind, and a ruling a constructor.** `Verdict` follows
+//! the seat receipts for the same reason. A read ruling is a word per option,
+//! in letter order, then a word for the mass outside the options, each the IEEE
+//! 754 binary64 bits of a number from zero to one, never negative zero; its
+//! answer letter is not written, since it is the option holding the most. An
+//! unread ruling is a constructor naming its reason. The decoder refuses a
+//! probability out of `[0, 1]` or negative zero, a readout `Readout::new`
+//! refuses — fewer than two options or more than twenty-six, a sum other than
+//! one, a tie — and a reason it does not know.
+//!
+//! - probabilities as decimal text: a second canonical form of each number, and
+//!   a parser in the decoder.
+//! - fixed-point integers: a rounding step between the readout and the record,
+//!   and a sum that no longer reads back exactly.
+//!
+//! Reversal: a change to the readout's form — another number of options, a
+//! log-probability — which needs a new kind.
+//!
+//! **A verification and a grading are new kinds, a status and a grade
+//! constructors.** `Verified` and `Graded` follow the verdict for the same
+//! reason. A step is ASCII bytes that parse as a `StepId`; a status is a
+//! constructor, exited or signalled, holding one word, the 32 bits of the
+//! code's or the signal's two's-complement value; a grade is an empty
+//! constructor, and a grading writes its count of grades, the grades, then the
+//! composed grade. The decoder refuses a step `StepId` refuses, a status or a
+//! grade it does not know, and a word beyond 32 bits.
+//!
+//! - the code as signed decimal text: a second canonical form of each number,
+//!   and a parser in the decoder.
+//! - one word carrying a flag bit beside the number: a case named by a bit
+//!   rather than by a constructor, as the grammar names every other case.
+//!
+//! Reversal: a platform whose exit status does not fit 32 bits, which needs a
+//! new constructor.
+//!
+//! **A decision and a landing are new kinds, with a decision constructor and a
+//! revision of either git width.** `Decide` and `Landed` follow the grading for
+//! the same reason. A `Decide` writes its dispatch, its operator's 32-byte peer
+//! id, then the decision: a constructor, land and abandon empty, rework holding
+//! its reason as one bytes record that parses as a `Summary`; a `Landed` writes
+//! its decision, then the revision as one bytes record of 20 or 32 bytes. The
+//! decoder refuses a decision it does not know, a reason `Summary` refuses, and
+//! a revision of any other length.
+//!
+//! - a revision padded to 32 bytes: a padded SHA-1 id reads back as a SHA-256
+//!   one.
+//! - the reason as a field of every decision, empty for land and abandon: an
+//!   absence named by an empty value, which a decoder must then refuse
+//!   elsewhere.
+//!
+//! Reversal: a version control system whose ids are neither width, which needs
+//! a revision constructor per system.
+//!
+//! **Evidence is named by manifest digest under receipt version 3.** A report's
+//! content, a verdict's transcript and a verification's output are each the 32
+//! bytes of a `ManifestDigest`, where version 2 held the BLAKE3 hash of the
+//! bytes in the same 32 bytes. The layout is unchanged and the meaning is not,
+//! so the version moves: a version-2 receipt is refused at its version word as
+//! an unexpected constructor, never read as naming a manifest, and a version-2
+//! decoder refuses every version-3 receipt the same way.
+//!
+//! - new kinds beside the old, a digest report beside a hash report: two kinds
+//!   for one step of the task, and a fold that must say which counts.
+//! - a constructor per evidence field, hash or digest: a receipt could still
+//!   name evidence no reader can dereference.
+//! - the old version read on: a hash read as a digest names a manifest that
+//!   does not exist, and the refusal arrives at the read instead of at the
+//!   decode.
+//!
+//! Reversal: a change to an existing kind's payload, which needs a new version
+//! again.
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;

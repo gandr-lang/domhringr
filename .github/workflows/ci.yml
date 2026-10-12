@@ -540,6 +540,8 @@ jobs:
       - *setup-rust
       - name: treefmt --ci
         run: mise run treefmt:check
+      - name: markdown allowlist and budgets
+        run: mise run check:markdown
       - name: conflict marker check
         run: mise run check:conflict-markers
       - name: validate npm lock sidecars

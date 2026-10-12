@@ -13,6 +13,42 @@
 //! of how far the model was answering the question at all; a judge whose
 //! [`Ceiling`] admits less refuses. A distribution holding no option letter,
 //! or two options sharing the most, is no answer, and is refused by name.
+//!
+//! # The readout
+//!
+//! **The readout renormalises the option letters' mass, records the outside
+//! mass, and refuses only what names no answer.** Each option's probability is
+//! the summed mass of the reported tokens that are its letter, a token trimmed
+//! of whitespace being exactly the uppercase letter, divided by the mass on all
+//! the option letters. A letter reported twice, as `B` and `B`, holds both
+//! masses; a letter not reported holds none. The outside mass is one less the
+//! option letters' mass, never below zero: what the model put on prose, a
+//! lowercase letter, or a letter past the last option. The readout refuses, in
+//! this order, a reported log-probability that is NaN or above zero
+//! (`endpoint`), a distribution with no option letter in it (`no letter`), an
+//! outside mass above the configured ceiling (`outside`), and two options
+//! sharing the most (`tied`). It never chooses a default letter.
+//!
+//! The alternative constrains decoding to the option letters: it tokenizes each
+//! letter through the server, allows only those token ids in a one-token
+//! completion, and normalises their log-probabilities. This crate reads the
+//! unconstrained distribution instead, for two reasons. Constraining is a
+//! server extension (`allowed_token_ids`, `/tokenize`) that the
+//! OpenAI-compatible API does not define, and it needs a tokenization per
+//! model. It also erases the outside mass, which measures how far the model was
+//! answering the question at all and is what a ceiling bounds.
+//!
+//! - constrained decoding to the letters' token ids: an exact distribution over
+//!   the letters on the servers that offer it, without the outside mass, and
+//!   with a judge tied to one server's extensions.
+//! - refusing whenever the outside mass passes a fixed bound: a threshold fixed
+//!   in the tree before any calibration says what a good one is. The ceiling is
+//!   the same refusal, configured, and unbounded by default.
+//! - the argmax token alone: a letter with no probability to grade or compare.
+//!
+//! Reversal: calibration showing a judge's top twenty tokens miss an option
+//! letter that a constrained decoding would find. Constrained decoding is then
+//! the better read where the server offers it, behind the same `Backend`.
 
 use alloc::string::String;
 use alloc::vec::Vec;

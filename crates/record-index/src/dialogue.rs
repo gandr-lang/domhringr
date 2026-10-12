@@ -1,4 +1,12 @@
 //! Canonical fold positions and original receipt bytes form a dialogue.
+//!
+//! A dialogue keys admitted moves by `(attempt, seq)`: two big-endian `u32`
+//! fields, with attempts starting at one and each dispatch at sequence zero.
+//! Numbering follows the fold's canonical order, not arrival order. A move
+//! value retains its original receipt bytes and verified author; its commit
+//! identity is recomputed from those bytes. Refused receipts and non-move
+//! receipts have no dialogue entry. Coordinates belong to one manifest: a late
+//! concurrent move can shift later coordinates in its attempt.
 
 use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;

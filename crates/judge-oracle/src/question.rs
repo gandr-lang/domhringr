@@ -14,6 +14,26 @@
 //! identity of the value manifest its bytes stage to in the evidence plane
 //! ([`Staged`]): a judge asking a model needs its text, a judge answering
 //! from a table its name, and a verdict names it so any reader can fetch it.
+//!
+//! # Questions and transcripts
+//!
+//! **A question is named by the BLAKE3 hash of its canonical form in the value
+//! plane's token records.** The form is `open 0x01 · word 1 · bytes text · word
+//! count · bytes option{count} · close`, the leading word its version. Two
+//! judges asking the same question name it alike, and a verdict names each
+//! question by that hash. The text and every option are non-empty and UTF-8,
+//! and each option is one line with no control character. A transcript is named
+//! by the identity of the value manifest its bytes stage to, as a report names
+//! its content: the evidence plane's name, which any reader can fetch and
+//! check.
+//!
+//! - the question's text alone as its name: two questions with the same text
+//!   and different options would share it.
+//! - a JSON form: a second canonical form beside the value plane's, with its
+//!   own key-order and number rules.
+//!
+//! Reversal: a question that depends on an earlier answer, which needs that
+//! dependency in the form under a new version.
 
 use alloc::string::String;
 use alloc::vec::Vec;

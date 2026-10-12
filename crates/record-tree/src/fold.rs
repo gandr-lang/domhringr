@@ -7,6 +7,21 @@
 //! authority and by endpoint replay of its dispatch's accepted canonical
 //! prefix. Refused commits stay in the DAG and sync like any other; the fold
 //! retains their named reasons without admitting their effects.
+//!
+//! # Index attestations
+//!
+//! `Indexed { index }` attests an `IndexDigest`: a project manifest's 32-byte
+//! identity, distinct from an evidence digest. The owner or a causally granted
+//! member may attest; a dispatch alone grants no attestation authority.
+//! `View::indexes` holds each author's last admitted claim in canonical order,
+//! including its commit and parents; `View::attestations` retains every claim.
+//! The receipt uses kind `0x13` under version 3, leaving other kinds unchanged.
+//!
+//! `Peer::view_at(tree, heads)` folds precisely the heads' causal past and
+//! names a missing head or ancestor as a refusal. `Task::sources` retains
+//! original receipt bytes and verified authors beside the admitted steps, so
+//! the index plane, `domhringr-record-index`, derives move identities without
+//! re-encoding receipts. `StepLine` shares the task replay's move renderer.
 
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;

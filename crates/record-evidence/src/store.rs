@@ -14,6 +14,25 @@
 //! file is an index the read loads ahead of the walk; the walk is the check,
 //! and a chunk the index omits is looked for under its own name before the
 //! read refuses it.
+//!
+//! # The store
+//!
+//! **A value is kept as files named by digest, written chunks first and
+//! manifest last.**
+//!
+//! Each file is written beside its name, synced and renamed into place, so a
+//! manifest that is held names a value whose chunks were written before it, and
+//! a crash leaves at most chunks and a closure index no manifest reaches. Every
+//! file is written once and never changes: a digest names its content. The
+//! closure index lets a read load the closure's chunks ahead of the walk; the
+//! walk is the check, and a chunk the index omits is looked for under its own
+//! name before the read refuses it.
+//!
+//! - a redb table beside the tree store: a database and its transactions for
+//!   files that are written once, named by their content, and never updated.
+//!
+//! Reversal: values numerous and small enough that a file per chunk costs more
+//! than the database, which moves the chunks into a table.
 
 use alloc::collections::BTreeMap;
 use core::fmt;

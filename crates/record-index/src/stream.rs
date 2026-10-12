@@ -1,5 +1,13 @@
 //! One authenticated question per bidirectional stream under
 //! `domhringr/index/0`.
+//!
+//! The protocol carries one question per bidirectional stream. Dependent
+//! project and dialogue questions share one connection. Answers include all
+//! framing within an inclusive 1 MiB cap. An oversized proof produces only its
+//! encoded size; a reader also rejects an over-cap stream from a dishonest
+//! holder. Readers allow sixty seconds per answer; holders allow ten idle
+//! seconds between streams. Transport returns untrusted proof material; a
+//! reader calls `Answer::verify` before reading its contents.
 
 mod codec;
 

@@ -2,6 +2,22 @@
 //!
 //! The receipt fold owns admission. Index manifests bind a kind, layout,
 //! boundary rule, record count and node identity independently of storage.
+//!
+//! The record-tree API and proof language come from `gandr-storage-records`.
+//! Verification uses its membership, non-membership and range proofs against
+//! the resealed root alone.
+//!
+//! # Decisions
+//!
+//! | Choice | Alternative | Reversal condition |
+//! | ------ | ----------- | ------------------ |
+//! | Derive above the fold | Maintain indexes during receipt admission | Admission itself needs authenticated index queries |
+//! | Kind-bound manifest images | Use a record root or a value manifest as the index name | Record-root metadata changes, requiring a new manifest layout |
+//! | Original receipt bytes in move values | Re-encode displayed moves | The receipt language supplies a canonical, lossless transformation with preserved identity |
+//! | Replay through the arena monitor and share the fold's standing projection | Maintain another receipt automaton or trust the claimed standing | The monitor gains a resumable cursor, allowing replay without rebuilding channel prefixes |
+//! | Content-addressed node files | A separate database table | Measured file overhead exceeds the cost of a transactional store |
+//! | `quenchant-arith` at the storage sibling's pin, with defaults off | Primitive arithmetic loses the nominal boundary; local wrappers duplicate its checked and saturating families | The shared arithmetic contract changes or the dependency is no longer maintained |
+//! | Dedicated proof protocol | Mix derived bytes into receipt sync or evidence transfer | Batching or subscription requires another protocol version |
 
 #![expect(
     clippy::multiple_crate_versions,

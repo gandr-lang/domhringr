@@ -108,6 +108,35 @@ run = "cargo doc --workspace --locked --no-deps --document-private-items"
 description = "Spelling"
 run = "typos"
 
+# Documentation shape. `README.md` is a crate's only document: an overview
+# linking into the crate's rustdoc, where mechanism, decisions and
+# specification detail live. The first command refuses tracked markdown
+# outside the allowlist, matched by Git's glob pathspec so `*` stays within
+# one directory, which sizelint's patterns cannot express. `rubrics/**` holds
+# the rubric set and the fixtures it is graded against. The second holds
+# every tracked markdown file to its budget in `sizelint.toml`; treefmt's
+# sizelint pass leaves markdown to this gate.
+["check:markdown"]
+description = "Tracked markdown on the README allowlist and within its budgets"
+run = [
+  '''
+outside=$(git ls-files -- '*.md' \
+  ':(exclude,glob)README.md' \
+  ':(exclude,glob)CHANGELOG.md' \
+  ':(exclude,glob)crates/README.md' \
+  ':(exclude,glob)crates/*/README.md' \
+  ':(exclude,glob)contrib/*/README.md' \
+  ':(exclude,glob)rubrics/**')
+if [ -n "$outside" ]; then
+  printf '%s\n' "$outside" >&2
+  echo 'markdown check FAILED: tracked markdown outside the README allowlist; move its prose into rustdoc' >&2
+  exit 1
+fi
+echo 'markdown check OK: every tracked markdown file is on the README allowlist'
+''',
+  "git ls-files -z -- '*.md' | xargs -0 sizelint check",
+]
+
 # On macOS the application firewall keys its "allow incoming connections"
 # decision on the code signature, and cargo's ad-hoc signature changes with
 # every build, so an unsigned run prompts for each executable that binds a
@@ -157,7 +186,7 @@ if [[ -n "${CODESIGN_IDENTITY:-}" && "$(uname -s)" == "Darwin" ]]; then
   find "$target/debug" "$target/debug/deps" -maxdepth 1 -type f -perm -u+x ! -name '*.*' \
     -exec codesign --force --sign "$CODESIGN_IDENTITY" --identifier org.gandr-lang.domhringr.test {} +
 elif [[ "$(uname -s)" == "Darwin" ]]; then
-  echo "test: CODESIGN_IDENTITY is unset; skipping code signing. Firewall prompts may recur; see README.md." >&2
+  echo "test: CODESIGN_IDENTITY is unset; skipping code signing. Firewall prompts may recur; see check:tests in .config/mise/tasks/mise-tasks-check.toml." >&2
 fi
 '''
 

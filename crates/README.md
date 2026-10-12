@@ -26,6 +26,7 @@ Game semantics is the general register; the specific name is kept where it says 
 One row per directory: the directory, its package, and what it is.
 
 ```text
+# Rows sort lexicographically by directory; the dependency order is § Layering.
 crates/
 ├── arena-session/      domhringr-arena-session      task channels and their duals, conformance by replay, named move refusals and kernel-certified label widening
 ├── judge-oracle/       domhringr-judge-oracle       the judge: a lettered question about a transcript, read from a model's next-token distribution over an OpenAI-compatible endpoint into a letter and a probability per option, or a refusal by its reason; a table of rulings for tests and replay
@@ -40,7 +41,9 @@ crates/
 
 ## Crate README shape
 
-Every crate's `README.md` follows this order. Include a section when the crate has content for it. Name crate-specific sections plainly by subject, never by negation or metaphor.
+A crate's `README.md` is its only document: an overview and conceptual entry that links into the crate's `src/lib.rs` `//!` docs and the owning module, where mechanism, invariants, decisions (choice, alternatives, reversal) and specification detail live and `check:doc` builds them. A crate carries no `docs/` directory and no changelog of its own; a measurement or a report belongs to neither. `check:markdown` refuses tracked markdown outside `README.md`, `CHANGELOG.md`, `crates/README.md`, `crates/*/README.md`, `contrib/*/README.md` and `rubrics/**`, and a README over its budget: 12 KB for a crate, 6 KB at the root.
+
+Every crate README follows this order. Include a section when the crate has content for it.
 
 1. `# <package>` and one sentence stating what the crate is.
 2. A table of contents linking every section below.
@@ -49,7 +52,7 @@ Every crate's `README.md` follows this order. Include a section when the crate h
 5. `## Provided features` — an itemized list of what the crate provides.
 6. `## Expected features` — what the crate requires of its consumer or environment to be useful: a digest function, a store implementation, a spawner, a target requirement, or a specification facade's `cfg`. Do not list absent or planned work here.
 7. `## Examples` — runnable usage and the test command.
-8. Crate-specific sections, one per decision or mechanism, each stated as present fact with its reason.
+8. `## Where the detail lives` — the modules whose rustdoc states each mechanism and decision, as a table or one sentence.
 9. `## License` — `Apache-2.0 WITH LLVM-exception`, the workspace licence at the repository root.
 
 ## Divergences

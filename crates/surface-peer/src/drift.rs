@@ -12,6 +12,57 @@
 //! ([`State`]). Both checkouts are read by the `git` binary, run as a
 //! subprocess whose output is read whole, each as the repository at its own
 //! path.
+//!
+//! # Drift
+//!
+//! `drift` checks one concepts tree, named by its key, against two git
+//! checkouts. The tree binds each concept, a path in it, to the vault page its
+//! public derivative was written or last confirmed against; the public checkout
+//! cites each concept by its anchor; the vault holds the pages.
+//!
+//! A binding's target is a datum `vault:<path>@<commit>`. `<path>` is the
+//! page's path from the vault repository's top: one or more `/`-separated
+//! segments, none empty, `.` or `..`, holding no control character. `<commit>`
+//! is the vault commit the page was confirmed at, 40 lowercase hex digits. The
+//! path ends at the datum's last `@`, so a path may hold one. Any other target
+//! is malformed.
+//!
+//! A citation is an occurrence of the tree's anchor, `domhringr://<tree-id>/`,
+//! in a tracked text file of the public checkout, and runs to the first
+//! whitespace, control character, or one of `` ` `` `"` `'` `<` `>` `(` `)` `[`
+//! `]` `{` `}` `|` `\`, less any `.` `,` `:` `;` `!` `?` that ends it, so a
+//! citation stands in backticks, angle brackets, a Markdown link, or at the end
+//! of a sentence. A citation naming a path cites that concept; one naming the
+//! bare tree or a commit in it cites no concept and is not reported; one that
+//! is no anchor is malformed. Binary files are skipped, and files are named
+//! from the repository's top.
+//!
+//! The report holds one line per finding, `<state> <anchor> <file>:<line>` for
+//! a citation and `<state> <anchor> <vault path>@<commit>` for a binding, a
+//! binding whose target is no page datum naming the target as `view` writes it:
+//!
+//! | State | Finding |
+//! | ----- | ------- |
+//! | `unbound` | A cited concept no binding names, once per line citing it. |
+//! | `drifted` | A binding whose page is at the vault's `HEAD` with a blob other than its blob at the bound commit, or that commit holds no such page. A rebind at the current revision clears it. |
+//! | `missing` | A binding whose page is not at the vault's `HEAD`: renamed, deleted, or not a file. |
+//! | `orphaned` | A binding whose concept nothing in the public checkout cites. |
+//! | `malformed` | A binding whose target is no page datum, or a citation that reads as no anchor. |
+//!
+//! A binding can be both orphaned and drifted, missing or malformed, and then
+//! has a line for each. Lines are in anchor order, then in the state order of
+//! the table, then by place: a citing file by name and its lines by number,
+//! before a page, before a target. Anchors escape backslashes, control
+//! characters, and spaces as paths do in `view`; file and page paths escape
+//! backslashes and control characters. A consistent pair prints nothing and
+//! exits 0; any finding exits 3, with nothing written to standard error. A
+//! checkout git cannot read fails the command with exit status 1.
+//!
+//! Each checkout is read as the repository at its path whatever repository the
+//! environment names: `drift` clears the variables git itself clears before
+//! running a command in another repository, such as `GIT_DIR` and
+//! `GIT_INDEX_FILE`, so it reads the right repositories inside another
+//! repository's hook.
 
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;

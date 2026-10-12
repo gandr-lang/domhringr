@@ -1,4 +1,12 @@
 //! Compare an attested project with independent folds at its named frontiers.
+//!
+//! An owner's or granted member's `Indexed` receipt attests a project
+//! manifest. Its parents name the project frontier used by derivation; each
+//! task entry names its own frontier. A proof establishes membership, absence
+//! or a complete range under that claim, not the claim's agreement with the
+//! fold. Historical checking rebuilds each held task at its entry's heads and
+//! the project at the attestation's parents. Later receipts do not invalidate
+//! a true historical claim.
 
 #[cfg(test)]
 mod tests;
