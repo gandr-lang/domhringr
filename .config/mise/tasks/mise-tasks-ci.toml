@@ -25,7 +25,7 @@
 # Two host-wide slots bound concurrent gates across repositories and worktrees.
 # Acquisition waits for a free slot and reclaims holders whose process is gone.
 # The gandr sibling is a real clone at the revision the root manifest pins,
-# materialised in the disposable clone's vendor/ (`sibling:sync --clone`) so
+# materialised in the disposable clone's vendor/ (`sibling:sync`) so
 # act copies it with the tree; vendor/ is gitignored, so the copy keeps
 # ignored paths (--use-gitignore=false), and the workflow's own checkout of
 # the sibling, which needs a token, is skipped under act.
@@ -145,7 +145,7 @@ done
 mkdir -p "$action_cache" "$scratch/actions"
 cp -R "$action_cache/." "$scratch/actions/"
 git clone --quiet --local --no-hardlinks -- "{{config_root}}" "$scratch/checkout"
-mise run sibling:sync --clone "$scratch/checkout"
+mise run sibling:sync "$scratch/checkout"
 cd "$scratch/checkout"
 ACT_RUN_ID=${scratch##*/} yq '.name += "-" + strenv(ACT_RUN_ID)' .github/workflows/ci.yml > "$scratch/ci.yml"
 act workflow_dispatch --workflows "$scratch/ci.yml" --action-cache-path "$scratch/actions" --action-offline-mode --rm --use-gitignore=false "$@" &

@@ -205,6 +205,23 @@ cargo metadata --manifest-path Cargo.toml --locked --format-version 1 | jq -se '
 description = "Validate the declared hook floor"
 run = "prek validate-config prek.toml"
 
+# A sibling at another revision than the pin resolves another dependency
+# graph than CI does: Cargo.lock drifts and the --locked gates refuse it with
+# a lockfile error that names neither cause nor remedy.
+["check:sibling"]
+description = "vendor/gandr stands at the revision [workspace.metadata.siblings] pins"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+rev=$(sed -n '/^\[workspace\.metadata\.siblings\]$/,/^\[/s/^gandr = "\([0-9a-f]*\)"$/\1/p' Cargo.toml)
+test -n "$rev"
+head=$(git -C vendor/gandr rev-parse HEAD)
+if [[ $head != "$rev" ]]; then
+  echo "check:sibling: vendor/gandr is at $head, the pin is $rev; run mise run sibling:sync, or move the pin in the change that needs the newer gandr" >&2
+  exit 1
+fi
+'''
+
 ["check:format"]
 description = "Shared formatter and configuration wall"
 run = "treefmt --ci"
