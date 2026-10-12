@@ -28,7 +28,7 @@ Binary task channels, their duals, receipt replay and certified protocol widenin
 ## References
 
 - Simon Gay and Malcolm Hole. _Subtyping for session types in the pi calculus_. Acta Informatica, 2005. [DOI:10.1007/s00236-005-0177-z](https://doi.org/10.1007/s00236-005-0177-z). Supplies the labeled session subtyping discipline used by the upstream engine.
-- gandr contributors. _gandr-core-session: finite session types, replay and certified transport_. Source snapshot, 2026-10-10, revision [84b94d3](https://github.com/gandr-lang/gandr/tree/84b94d316a1c961fc89072a79b855a7d87b0c6aa/crates/core-session). Supplies executable syntax, duality, the monitor and the native-kernel bridge.
+- gandr contributors. _gandr-core-session: finite session types, replay and certified transport_. Source snapshot, 2026-10-10, revision [e32224a](https://github.com/gandr-lang/gandr/tree/e32224aa7ebc474d1ea306d631f0ed1b82029fb9/crates/core-session). Supplies executable syntax, duality, the monitor and the native-kernel bridge.
 
 ## Provided features
 

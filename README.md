@@ -12,7 +12,7 @@ The first arena, [`domhringr-arena-session`](crates/arena-session/README.md), st
 
 ```sh
 mise install           # the pinned toolchain and tools
-mise run sibling:sync  # vendor/gandr: link the gandr checkout beside this one
+mise run sibling:sync  # vendor/gandr: gandr at the pinned revision (--link: the checkout beside this one)
 mise run check         # every gate: format, clippy, dylint, rustdoc, tests, typos
 cargo build-dist       # the shipped binary: fat LTO, size-optimized std
 ```
