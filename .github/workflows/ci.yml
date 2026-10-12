@@ -226,11 +226,14 @@ jobs:
           compression-level: 0
       # Only this workflow's queue runs are trusted artifact producers:
       # GitHub sets the event, and only an owner-queued PR reaches the queue.
-      # Exact cache hits need no artifact download. Another toolchain
-      # generation's state is never downloaded.
+      # A test lane downloads only when the cache matched nothing: a prefix
+      # match is main's newest state of the generation, usually the same
+      # landing the latest queue run built, and Cargo rebuilds what differs.
+      # Promotion matches only its exact key. Another toolchain generation's
+      # state is never downloaded.
       - &download-build-state
         name: download reusable queue build state
-        if: ${{ steps.test-state-restore.outputs.cache-hit != 'true' && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), format('build-state-{0}--{1}', env.CI_BUILD_STATE, env.CI_BUILD_GENERATION)) }}
+        if: ${{ (github.event_name == 'push' && steps.test-state-restore.outputs.cache-hit != 'true' || github.event_name != 'push' && steps.test-state-restore.outputs.cache-matched-key == '') && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), format('build-state-{0}--{1}', env.CI_BUILD_STATE, env.CI_BUILD_GENERATION)) }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: build-state-${{ env.CI_BUILD_STATE }}--${{ env.CI_BUILD_GENERATION }}
@@ -564,8 +567,8 @@ jobs:
   # Completed queue runs supply successful builds independently of their test
   # verdict. A new queue ref can read these artifacts even when it cannot read
   # its predecessor's branch-local cache. Cargo still checks all fingerprints.
-  # Main promotion requires the exact landing SHA; test lanes may reuse the
-  # latest queue build just as they reuse older cache-prefix matches.
+  # Main promotion requires the exact landing SHA; a test lane reuses the
+  # latest queue build only when no cached state of its generation matched.
   # Hosted artifact discovery is skipped under act, never a compilation gate.
   # A failed lookup means no reuse, never a failed job: the test lanes need
   # this one, and a required lane skipped behind a failure reports success.
