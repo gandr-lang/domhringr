@@ -21,6 +21,27 @@
 //! `rubric`, the rubric file relative to the playbook's directory, and
 //! `question`, a question that rubric names. Steps run in their order; no two
 //! share an identifier.
+//!
+//! # Playbooks
+//!
+//! A playbook holds `name` and `steps`, nothing else. `name` and each step's
+//! `id` are identifiers: one to 64 bytes, a lowercase ASCII letter, then
+//! lowercase letters, digits and hyphens. `steps` is a non-empty array of
+//! tables, each holding `id`, unique in the playbook, `why`, a non-empty text,
+//! and exactly one of `verifier` and `question`. A verifier is `command`, a
+//! non-empty text, and `args`, an array of texts, none when absent. A question
+//! is `rubric`, a non-empty relative path read from the playbook's directory,
+//! and `question`, the name of a question that rubric holds.
+//!
+//! **Every step says why it holds and is backed by a check.** A step without a
+//! verifier or a question is refused: a reason with nothing behind it is a step
+//! nobody runs.
+//!
+//! - steps of prose alone, run by whoever reads them: a playbook that records
+//!   intent and checks nothing.
+//!
+//! Reversal: a step that a human performs and attests to, which needs a third
+//! binding and a receipt for the attestation.
 
 use alloc::string::String;
 use alloc::vec::Vec;

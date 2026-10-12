@@ -17,6 +17,30 @@
 //! closing each after its payload; decoding reads the opens, then the payloads
 //! in content order. Neither recurses. The decoder admits only the split
 //! [`Split`] produces, so one content has one value and one manifest.
+//!
+//! # The codec
+//!
+//! **A content is a list of lines, nested to the left.** `lines := Start |
+//! Line(lines, bytes)`: a line runs to and including the first newline within
+//! its next 512 bytes, or is exactly 512 bytes when none falls there, and the
+//! last line ends where the content does. The content's last line is the root's
+//! payload and its first sits innermost beside `Start`, so a prefix of whole
+//! lines is a subtree of every content extending it: two contents sharing a
+//! prefix share the chunks it was cut into wherever the chunker's pending count
+//! agrees, and an appended line is a path edit at the root. The decoder admits
+//! only the split the encoder writes, so one content has one value and one
+//! manifest. A line is one boundary event for the chunker, so κ counts lines.
+//!
+//! - the content as one bytes token: the chunker cuts at token boundaries, so a
+//!   value would be one chunk however long.
+//! - fixed-width records: a line inserted or lengthened shifts every later
+//!   record, and nothing past the edit is shared.
+//! - a list nested to the right: suffixes would be subtrees, and an appended
+//!   line would rewrite every chunk on the spine.
+//!
+//! Reversal: evidence edited in its middle rather than grown at its end, which
+//! needs a balanced tree whose edits stay local: this nesting shares prefixes
+//! alone.
 
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
@@ -38,8 +62,8 @@ const START: u8 = 0x01_u8;
 const LINE: u8 = 0x02_u8;
 
 /// The most bytes one line holds. A chunk holds lines whole, so this bounds a
-/// chunk's payload at half the token cap times it; the README's measurement
-/// states the choice.
+/// chunk's payload at half the token cap times it; the measurement in the
+/// `profile` module states the choice.
 pub const LINE_BYTES: usize = 512_usize;
 
 /// Content as the codec reads it: borrowed when committed, owned when read.

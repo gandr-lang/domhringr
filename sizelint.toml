@@ -29,3 +29,25 @@ max_size = "64KB"
 # Burn-down list for pages that predate the budgets. Entries leave as splits
 # land; entries never enter without owner sign-off.
 excludes = []
+
+# README budgets. A README is its crate's overview and conceptual entry; the
+# mechanism, decisions and specification detail it links to live in the
+# crate's rustdoc. Over budget: move more into rustdoc, never trim to pass.
+# Both rules outrank `doc_sprawl`. A pattern without a slash matches at any
+# depth, so the root rule excludes every other tree that holds a README.
+[rules.readme_root]
+enabled = true
+priority = 200
+description = "Root README over its budget"
+suggestion = "Keep what domhringr is, its binaries, the build and the licence; move the rest into rustdoc"
+includes = ["README.md"]
+max_size = "6KB"
+excludes = ["contrib/**", "crates/**", "rubrics/**"]
+
+[rules.readme]
+enabled = true
+priority = 200
+description = "Crate README over its budget"
+suggestion = "Move mechanism, decisions and specification detail into the crate's rustdoc; never trim to pass"
+includes = ["contrib/*/README.md", "crates/*/README.md", "crates/README.md"]
+max_size = "12KB"

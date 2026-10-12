@@ -12,7 +12,7 @@ The rubric set: seven rubrics that grade a change to a repository of this worksp
 
 ## The set
 
-A rubric is an Opponent strategy: the state files it reads into a transcript, a band, and named questions a judge answers about the transcript. Each answer is graded against the band, and the grades compose as the conjunction of the rubric's criteria; [`domhringr-strategy-document`](../crates/strategy-document/README.md#rubrics) states the document's shape and the grading. The `domhringr-peer` binary grades a rubric on a task and commits the verdict and the grading: `rubric grade <file> <tree> --task-state <dir>` ([`domhringr-surface-peer`](../crates/surface-peer/README.md#playbooks-and-rubrics)).
+A rubric is an Opponent strategy: the state files it reads into a transcript, a band, and named questions a judge answers about the transcript. Each answer is graded against the band, and the grades compose as the conjunction of the rubric's criteria; [`domhringr-strategy-document`](../crates/strategy-document/src/rubric.rs) states the document's shape and the grading. The `domhringr-peer` binary grades a rubric on a task and commits the verdict and the grading: `rubric grade <file> <tree> --task-state <dir>` ([`domhringr-surface-peer`](../crates/surface-peer/src/strategy.rs)).
 
 | Rubric | The question it answers | Reads | Questions |
 | ------ | ----------------------- | ----- | --------- |
@@ -100,7 +100,7 @@ mise exec -- cargo nextest run -p domhringr-surface-peer -E 'test(every_rubric_i
 
 Reversal: `decide` writing every artifact the set reads — the issue, the review, the workflow — from the record of the task, when its tests then walk the set.
 
-**A table grades what it is told.** The test shows that each rubric reads, that each pair's states read and differ, and that the band grades a judge 90 percent sure as met or unmet; it does not show that a model tells a pair apart. An ignored test asks that of a real judge, grading the `stable-refs` pair through the endpoint the environment configures, as [`domhringr-judge-oracle`](../crates/judge-oracle/README.md#configuration) states:
+**A table grades what it is told.** The test shows that each rubric reads, that each pair's states read and differ, and that the band grades a judge 90 percent sure as met or unmet; it does not show that a model tells a pair apart. An ignored test asks that of a real judge, grading the `stable-refs` pair through the endpoint the environment configures, as [`domhringr-judge-oracle`](../crates/judge-oracle/src/chat.rs) states:
 
 ```sh
 DOMHRINGR_JUDGE_ENDPOINT=http://127.0.0.1:8000/v1 DOMHRINGR_JUDGE_MODEL=<model> \

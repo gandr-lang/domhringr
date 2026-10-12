@@ -15,6 +15,33 @@
 //! [`Surface`] and report, answer fetches of the evidence it keeps, and
 //! resume on start what it holds unreported; it tells what it did as
 //! [`Event`]s.
+//!
+//! # Dependencies
+//!
+//! **Tokio's `sync` feature carries the event channel and the set of dispatches
+//! being acted on.** The feature is already in the graph through iroh and
+//! subduction, so it adds nothing to the build. The set sits behind
+//! `tokio::sync::Mutex`, whose lock does not poison.
+//!
+//! - `std::sync::Mutex`: poisoning makes every lock a `Result` the seat has no
+//!   use for, and the lock is held across no await either way.
+//!
+//! Reversal: a single-threaded seat, which needs no lock.
+//!
+//! **`iroh` is a direct dependency for the connection the wake runs on.**
+//! `Node::accept` hands over an `iroh::endpoint::Connection`, and the seat
+//! opens and reads its streams. iroh is the transport the record plane already
+//! binds.
+//!
+//! # References
+//!
+//! | Artifact | Use |
+//! | -------- | --- |
+//! | S. Friedl, A. Popov, A. Langley, E. Stephan, _Transport Layer Security (TLS) Application-Layer Protocol Negotiation Extension_, IETF RFC 7301, July 2014, [doi:10.17487/RFC7301](https://doi.org/10.17487/RFC7301) | The protocol name a connection carries, by which the node routes the wake apart from subduction's sync. |
+//! | `iroh`, [crate documentation](https://docs.rs/iroh) | QUIC connections and their bidirectional streams. |
+//! | `tokio`, [crate documentation](https://docs.rs/tokio) | Tasks, the event channel, blocking threads for the program, and the reply deadline. |
+//! | `domhringr-record-evidence` | The evidence store a report's output is kept in, and the fetch a seat answers. |
+//! | `domhringr-record-index` | Derived-index nodes and authenticated key and range answers. |
 
 #![expect(
     clippy::multiple_crate_versions,

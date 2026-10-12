@@ -6,6 +6,18 @@
 //! commit's message. git is run as the `git` program, in the repository at
 //! its path, so the repository's own configuration — hooks, signing, merge
 //! drivers — applies as it does to the operator by hand.
+//!
+//! # The change
+//!
+//! A seat reports its change as its summary, the first line of its report:
+//! `<branch> <commit>[ <text>]`. The branch is one or more ASCII letters,
+//! digits, `-`, `_`, `.` and `/`, not beginning with `-`; the commit is 40 or
+//! 64 lowercase hex digits, git's object id in a SHA-1 or SHA-256 repository;
+//! the text after a third space is the seat's own. `verify`, `decide` and
+//! `land` act on the commit, which the repository at `--repo` must hold — the
+//! seat pushes the branch there, or the operator fetches it — and the branch
+//! names the merge commit, `Merge branch '<branch>'`. A report that names no
+//! change is refused by every command that reads it.
 
 use alloc::string::String;
 use alloc::vec::Vec;

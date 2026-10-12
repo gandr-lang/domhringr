@@ -1,4 +1,11 @@
 //! Evidence and landed revisions mapped to the admitted moves naming them.
+//!
+//! Provenance keys evidence by `0x01 || digest || task || attempt || seq` and
+//! landings by `0x02 || width || revision || task || attempt || seq`, where
+//! revision width is 20 or 32. Each value names the field and its holder:
+//! report content, verifier output, judged transcript or landed revision.
+//! Repeated use of a digest retains every naming move; aliases of one task do
+//! not duplicate its records.
 
 use alloc::collections::BTreeMap;
 use core::fmt;

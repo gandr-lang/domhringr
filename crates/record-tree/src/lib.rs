@@ -83,6 +83,67 @@
 //! timer subduction is generic over, the key files, the receipt grammar, the
 //! fold, the anchor form, the witnesses, and the shape of a sync: dial, one
 //! batch round, disconnect.
+//!
+//! # Dependencies
+//!
+//! **Operation fences use `getrandom` 0.4 with no features.** `getrandom::fill`
+//! draws the 16 fence bytes from the operating system's source. iroh already
+//! brings the crate into the dependency graph, so it adds no crate to the
+//! build; native targets require no feature.
+//!
+//! - `rand`: a seeded generator and its traits where one read from the OS
+//!   source suffices.
+//! - `uuid` with `v4`: a crate and a UUID type for what is 16 opaque bytes.
+//!
+//! Reversal: a high-risk advisory against `getrandom`, its departure from the
+//! dependency graph, or a fence source the value plane supplies.
+//!
+//! **The DNS witness uses iroh's resolver, `iroh::dns::DnsResolver`.** iroh
+//! resolves endpoint ids through DNS with it, so reading a name's TXT records
+//! adds no crate and no feature to the build. It reads the host's resolver
+//! configuration, falls back to public resolvers, bounds a lookup by
+//! `iroh::dns::DNS_TIMEOUT`, and reports a name that does not exist apart from
+//! a failed lookup.
+//!
+//! - `hickory-resolver`: a second resolver, with its own configuration and
+//!   feature set, beside the one iroh already carries.
+//! - the operating system's resolver through the standard library: it resolves
+//!   addresses and returns no TXT records.
+//!
+//! Reversal: iroh no longer exporting its resolver, or a witness that needs
+//! record types or DNSSEC validation the resolver does not expose.
+//!
+//! **A content hash is `blake3` 1.8 with no features.** It names a brief, a
+//! playbook, a rubric and a question; it is the hash sedimentree names commits
+//! by, already in the graph through sedimentree, iroh and subduction, so it
+//! adds no crate to the build. Evidence is named by the value plane's manifest
+//! digest instead (§ Tasks).
+//!
+//! - SHA-256: a second hash function, and a crate the graph does not otherwise
+//!   need.
+//!
+//! Reversal: a brief, a playbook or a rubric reachable from the record, when it
+//! is named by a manifest digest as evidence is.
+//!
+//! **`subduction_iroh` is built without its `server` feature.** The node
+//! accepts connections itself to route them by ALPN, so the crate's server half
+//! is unused.
+//!
+//! Reversal: `subduction_iroh`'s own accept loop, when it routes other
+//! protocols.
+//!
+//! # References
+//!
+//! | Artifact | Use |
+//! | -------- | --- |
+//! | `subduction_core`, [crate documentation](https://docs.rs/subduction_core) | Signed commit storage and batch synchronization. |
+//! | `sedimentree_core`, [crate documentation](https://docs.rs/sedimentree_core) | Causal trees, commit ids, and signed payloads. |
+//! | `subduction_redb_storage`, [crate documentation](https://docs.rs/subduction_redb_storage) | Durable redb storage. |
+//! | `iroh`, [crate documentation](https://docs.rs/iroh) | Endpoint discovery, direct connections, and relays. |
+//! | `tokio`, [crate documentation](https://docs.rs/tokio) | Runtime, task spawning, and timers. |
+//! | `gandr-storage-values`, [crate documentation](https://github.com/gandr-lang/gandr/tree/main/crates/storage-values) | Canonical receipt tokens and flat encoding, and the manifest digest evidence is named by. |
+//! | `getrandom`, [crate documentation](https://docs.rs/getrandom/0.4) | Operating-system randomness for operation fences. |
+//! | `blake3`, [crate documentation](https://docs.rs/blake3) | The hash a brief, a playbook, a rubric and a question are named by. |
 
 #![expect(
     clippy::multiple_crate_versions,

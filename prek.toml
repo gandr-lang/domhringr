@@ -47,6 +47,15 @@ always_run = true
 stages = ["pre-commit"]
 
 [[repos.hooks]]
+id = "markdown"
+name = "markdown allowlist and budgets"
+language = "system"
+entry = "mise run check:markdown"
+pass_filenames = false
+always_run = true
+stages = ["pre-commit"]
+
+[[repos.hooks]]
 id = "commitlint"
 name = "commitlint"
 entry = "mise x -- commitlint --edit"

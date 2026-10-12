@@ -1,4 +1,15 @@
 //! A typed, loadable identity binding one ordered tree.
+//!
+//! Each manifest binds its index kind, layout, opaque record-boundary
+//! commitment, record count and root-node identity. Its name is BLAKE3 of the
+//! complete image. Foreign kinds, layouts and commitments fail before any
+//! node is opened. A reader reseals the record root from the checked
+//! manifest; a proof never supplies a root to trust.
+//!
+//! Layout 2 adds refusals to held entries. It changes every manifest
+//! identity, including empty indexes; layout 1 images are refused before node
+//! access. Deriving again replaces the local cache and an old own attestation
+//! with the current layout. Receipt and proof-stream versions are unchanged.
 
 use anodized::spec;
 use domhringr_record_tree::IndexDigest;

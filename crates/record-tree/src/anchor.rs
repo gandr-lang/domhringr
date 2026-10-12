@@ -22,6 +22,50 @@
 //! [`Kind::Bind`]: crate::receipt::Kind::Bind
 //! [`Kind::Claim`]: crate::receipt::Kind::Claim
 //! [`Kind::Introduce`]: crate::receipt::Kind::Introduce
+//!
+//! # Anchors and witnesses
+//!
+//! An anchor names its tree in one of three forms, told apart by its authority.
+//! The key form, `domhringr://<tree-id>/…`, names the tree by its key and
+//! resolves in that tree's view. The DNS form, `domhringr://<domain>/…`, whose
+//! authority holds a dot, names the one tree that a witness names for the DNS
+//! name and whose own view admits its owner's claim of it: a witness naming no
+//! tree is `unwitnessed`, no witnessed tree holding the claim `unclaimed`, and
+//! two holding it `ambiguous`. The label form, `domhringr://<label>/…`, whose
+//! authority holds no dot and is not spelled as a tree id, names the tree
+//! introduced by that label in the tree the label is read in (`Scope::In`):
+//! read in no tree it is `unscoped`, and a label that tree never introduced is
+//! `unintroduced`. A bare DNS or label anchor resolves to the key-form anchor
+//! of the tree it names, bound under the claim's or the introduction's author;
+//! a path or a commit under it resolves in that tree's view. A label means what
+//! one tree says it means, so the same label read in two trees names two trees
+//! or none.
+//!
+//! Within its tree an anchor names nothing (the bare anchor,
+//! `domhringr://<authority>/`), a path, or a commit,
+//! `domhringr://<authority>/.commit/<commit-id>`, the id as 64 lowercase hex
+//! digits. A segment beginning with `.` is reserved for forms the scheme names,
+//! `.commit` among them, so no path holds one, in an anchor or in a receipt. A
+//! commit resolves to the fold's verdict on it, `admitted` or `refused` with
+//! the refusal's reason, and to `unknown` when its tree holds no commit by that
+//! id, among them a commit held in another tree. An `Anchor` carries the whole
+//! id, as a receipt does. A `Reference`, what a reader types, may also
+//! abbreviate it, as git does, to a prefix of at least eight hex digits: the
+//! prefix names the one commit of the tree whose id begins with it, resolves to
+//! `unknown` when none does, and is refused as `ambiguous commit` with every
+//! match when several do. A prefix is not stable as the tree grows, so no
+//! receipt carries one.
+//!
+//! The witness alone resolves nothing. A tree resolves only when its own signed
+//! root claims the name, so a forged or stale record can make a name fail but
+//! cannot point it at a tree that did not claim it; a witnessed tree the store
+//! does not hold claims nothing until it is synced. The `Dns` witness queries
+//! the absolute name `_domhringr.<domain>.` for TXT records, each naming one
+//! tree as `tree=<tree-id>`; a name with no records, or none at all, names no
+//! tree, and other records are ignored. A DNS name is lowercase letters,
+//! digits, and hyphens in at least two dot-separated labels of at most 63
+//! characters, at most 242 in all so that the witness name fits DNS's 253; an
+//! internationalized name is written in its ASCII form.
 
 use alloc::string::String;
 use core::fmt;

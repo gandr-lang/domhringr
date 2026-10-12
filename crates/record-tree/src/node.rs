@@ -16,6 +16,36 @@
 //! serve ([`Incoming`]). A link to a peer ([`Node::connect`]) stays up until
 //! [`Node::disconnect`], so either side pulls a tree over it
 //! ([`Node::pull`]) while another protocol runs beside it ([`Node::open`]).
+//!
+//! # Networking
+//!
+//! A bound peer is reached by endpoint id alone: on the local network through
+//! mDNS and direct addresses, across networks through n0's relay and DNS. It
+//! binds an ephemeral UDP port, or a fixed one that a firewall rule can name. A
+//! sync dials the remote, runs one batch round for one tree, and disconnects; a
+//! dialer that knows the remote's addresses — from its presence in the book, or
+//! named by hand — names them in the dial, and the dial does not wait on the
+//! lookups. Each side reports the network path iroh selected — direct, relayed,
+//! or not yet chosen. A caller holds a link open instead with `Node::connect`,
+//! pulls trees over it with `Node::pull` — the other side may pull over the
+//! same link — and drops it with `Node::disconnect`.
+//!
+//! **A node accepts other application protocols beside subduction's, routed by
+//! ALPN.** `Peer::bind` takes the `Protocol`s the node accepts; `Node::accept`
+//! yields an `Incoming`: a peer admitted to subduction, or a connection under
+//! another protocol, handed over unread; `Node::open` dials a remote under one.
+//! The node runs subduction's handshake itself on the connections it accepts,
+//! one at a time, so a peer that links and then opens another protocol is
+//! linked before its second connection is handed over.
+//!
+//! - `subduction_iroh`'s `accept_one`: it accepts any connection and runs
+//!   subduction's handshake on it, so a second protocol on the endpoint fails
+//!   its handshake.
+//! - one endpoint per protocol: two ports to bind, present and reach for one
+//!   peer.
+//!
+//! Reversal: `subduction_iroh` routing ALPNs itself, when the node hands it the
+//! endpoint's other protocols.
 
 use core::convert::Infallible;
 use core::fmt;

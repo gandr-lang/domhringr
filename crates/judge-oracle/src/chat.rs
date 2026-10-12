@@ -17,6 +17,80 @@
 //! `DOMHRINGR_JUDGE_KEY` a bearer key and `DOMHRINGR_JUDGE_CEILING` the most
 //! mass the judge admits outside the option letters. TLS is iroh's: the
 //! embedded Mozilla roots and the ring provider.
+//!
+//! # The endpoint
+//!
+//! **The judge asks the chat API, and the server applies the model's chat
+//! template.** The request is `POST <base>/chat/completions` with `max_tokens`
+//! 1, `temperature` 0, `logprobs` and `top_logprobs` 20, the most the API
+//! admits. Its system message states the judge's task and the answer's form, a
+//! letter alone. The user message holds the transcript between `<transcript>`
+//! tags, the question, and one `<letter>. <option>` line per option. A `400`,
+//! `413` or `422` answer means the endpoint refused the request as put, and the
+//! question is unread as `malformed`. Every other failure is unread as
+//! `endpoint`: no connection, another status, a body that is not the API's, or
+//! an answer without log-probabilities. A request may take five minutes.
+//!
+//! - the completions API with the prompt rendered here: a model-specific
+//!   template kept in the crate for every model a judge might use.
+//! - the reasoning or tool-call forms of the chat API: an answer that is not
+//!   the first token.
+//!
+//! Reversal: a model whose chat template puts text before the answer, such as a
+//! thinking preamble. Its first token is then never a letter, and the judge
+//! needs the completions API with the template rendered and the preamble
+//! closed.
+//!
+//! # Configuration
+//!
+//! **The endpoint is configured by the environment, never by the tree.**
+//! `DOMHRINGR_JUDGE_ENDPOINT` is the base URL the API's paths follow (`…/v1`),
+//! `http` or `https`. `DOMHRINGR_JUDGE_MODEL` is the model asked.
+//! `DOMHRINGR_JUDGE_KEY`, when set, is sent as a bearer key, and its `Debug`
+//! form never shows it. `DOMHRINGR_JUDGE_CEILING`, when set, is the most
+//! outside mass a readout may hold, a number from zero to one. An unset
+//! endpoint or model, a value that is not Unicode, an endpoint that is no
+//! `http` or `https` URL, an empty model, and a ceiling that is no probability
+//! are each refused by name (`ConfigError`).
+//!
+//! - a file under the XDG configuration directory: a path and a format for four
+//!   values that the environment of the process already carries.
+//! - command-line options: a key on a command line is visible to every process
+//!   on the host.
+//!
+//! Reversal: a peer that runs several judges against different endpoints, or a
+//! key that must not sit in the environment. A file under
+//! `$XDG_CONFIG_HOME/domhringr/` then names each judge.
+//!
+//! # Dependencies
+//!
+//! **The HTTP client is `reqwest` 0.13 with `rustls-no-provider`, configured
+//! with iroh's TLS.** iroh already brings `reqwest` with that feature into the
+//! graph, so the client adds no crate to the build. The TLS configuration is
+//! iroh's `CaTlsConfig::embedded()` with the ring provider, the roots and
+//! provider the endpoint already uses, handed over through
+//! `tls_backend_preconfigured`.
+//!
+//! - `ureq`: a blocking client, so a thread per request in an async caller, and
+//!   a second TLS setup and crate set beside iroh's.
+//! - `hyper` and `hyper-util` directly: the connection pool, timeout and TLS
+//!   connector `reqwest` already compiles, written again.
+//!
+//! Reversal: iroh dropping `reqwest` from its graph. The client would then cost
+//! a build of its own, and `hyper-util` over iroh's rustls is the smaller one.
+//!
+//! **The request and response bodies are `serde` derives and `serde_json` with
+//! `alloc` alone.** `serde` with `derive` is already in the graph; `serde_json`
+//! adds itself and its float formatter. The wire structs are the only `serde`
+//! types, and no `serde` type leaves the crate.
+//!
+//! - `miniserde` or `nanoserde`: a second derive framework beside the one the
+//!   graph already carries.
+//! - writing and reading the JSON by hand: a parser for the response's nested
+//!   arrays and the API's escaping, kept in step with the API.
+//!
+//! Reversal: a response large enough that parsing its whole tree costs more
+//! than the request, which needs a streaming reader.
 
 use alloc::string::String;
 use alloc::vec::Vec;

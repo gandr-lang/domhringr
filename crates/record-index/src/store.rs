@@ -1,4 +1,25 @@
 //! Content-addressed node files, published before their manifest.
+//!
+//! State lives beneath `index/nodes/<node identity>` and
+//! `index/manifests/<index digest>`. Synced temporary files publish nodes
+//! before their manifest. Publishing a derived index retains valid files and
+//! atomically repairs damaged images. Hydration authenticates every node
+//! through the record store, rebuilds the tree and requires its count and root
+//! to match. Every attested manifest remains held; there is no collection
+//! policy.
+//!
+//! `index/projects/<project>` holds the last locally derived manifest
+//! identity. This atomic cursor lets `open` refresh without attesting and
+//! reuse that refresh on its next invocation; it is published only after the
+//! complete index. When no cursor exists, the local author's latest
+//! attestation seeds the cache. Another author's claim never does. Missing
+//! images are rebuilt from the receipt store.
+//!
+//! The serving cache retains at most four hydrated trees, each limited to
+//! 65,536 records and 4 MiB of key/value payload. Larger trees are served
+//! without being retained. Derivation reuses only entries it independently
+//! derived at unchanged heads; it does not import an attester's unverified
+//! claims into its cache.
 
 use std::io;
 use std::io::Read as _;

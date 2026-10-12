@@ -29,7 +29,14 @@ publish = false
 # on only because a build or a test failed without it.
 [workspace.dependencies]
 
-# Authored specification predicates, stripped or panic-enforced by build cfg.
+# Authored specification predicates, stripped or panic-enforced by build cfg,
+# through the quenchant facade: import `anodized::spec`. Ordinary builds strip
+# the predicates; `--cfg anodized_panic` enforces them. The facade keeps
+# extraction and mode selection in one dependency: a direct anodized
+# dependency would bypass its stripping policy, and hand-written assertions
+# would lose specification extraction. Reconsider if the facade cannot
+# express the required predicates or keep stripped and enforcing builds
+# consistent.
 # features:
 # - anodized: the runtime-checking backend selected by `anodized_panic`
 # consumers:

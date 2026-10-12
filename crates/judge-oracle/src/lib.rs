@@ -18,6 +18,47 @@
 //! The verdict that carries a judge's rulings is the record's
 //! ([`domhringr_record_tree::Kind::Verdict`]): this crate reads the rulings,
 //! and a caller commits them.
+//!
+//! # The laws
+//!
+//! A judge classifies evidence and never adds to it. Refusal is outside the
+//! laws: an endpoint that fails, a question the endpoint refuses, or an answer
+//! that names no option is an operational outcome, recorded as an unread ruling
+//! with its reason, never as a letter. Three laws bind what the judge records,
+//! each witnessed by a test:
+//!
+//! - **Unit.** A verdict changes no attempt: the task stands where its seat
+//!   receipts put it, with or without rulings. Witnesses:
+//!   `fold::tests::a_judge_rules_on_the_current_dispatch` in
+//!   `domhringr-record-tree`, and
+//!   `judge::tests::a_judge_rules_on_a_transcript_and_replay_shows_the_verdict`
+//!   in `domhringr-surface-peer`, where the task replays `dispatched` after the
+//!   verdict.
+//! - **Composition.** A verdict over several questions holds, in the order
+//!   asked, the ruling each question gets when asked alone: a ruling depends on
+//!   its question and its transcript alone. Witnesses:
+//!   `backend::tests::a_table_answers_what_it_records`, and the peer's process
+//!   test, where the verdict's first ruling is the one `judge ask` printed.
+//! - **Property grade.** A verdict is a function of what it records. Replay
+//!   reads the same rulings from the record on any day and against no endpoint,
+//!   and `Static` answers a recorded ruling again. The verdict names the rubric
+//!   by hash and the transcript by its manifest, and holds only the rulings, so
+//!   it adds no evidence: the transcript it names is the one the judge read,
+//!   kept in the evidence plane. Witnesses:
+//!   `receipt::tests::every_kind_round_trips` and
+//!   `ruling::tests::a_ruling_reads_back_from_its_text` in
+//!   `domhringr-record-tree`, and
+//!   `backend::tests::each_refusal_records_its_reason` for refusals.
+//!
+//! # References
+//!
+//! | Artifact | Use |
+//! | -------- | --- |
+//! | D. Ahman, A. Bauer, _Sheaves as oracle computations_, arXiv, February 2026, [arXiv:2602.22135](https://arxiv.org/abs/2602.22135) | The oracle reading: a judge answers a query and classifies evidence, and never contributes a witness. |
+//! | OpenAI, _Chat Completions API reference_, [`POST /v1/chat/completions`](https://platform.openai.com/docs/api-reference/chat/create) | The request and its `logprobs` and `top_logprobs` fields: the next-token distribution at the answer's position. |
+//! | vLLM, _OpenAI-Compatible Server_, [documentation](https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html) | A local server of that API, reporting log-probabilities for chat requests. |
+//! | `reqwest`, [crate documentation](https://docs.rs/reqwest) | The HTTP client. |
+//! | `serde_json`, [crate documentation](https://docs.rs/serde_json) | The request and response bodies. |
 
 #![expect(
     clippy::multiple_crate_versions,

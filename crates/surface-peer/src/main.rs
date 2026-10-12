@@ -15,48 +15,39 @@
 //! checks and measures the attested indexes.
 //!
 //! ```text
-//! domhringr-peer --state <dir> id
-//! domhringr-peer --state <dir> serve [--port <port>] [--surface <program>]
-//! domhringr-peer --state <dir> open
-//! domhringr-peer --state <dir> grant <tree> <peer-id>
-//! domhringr-peer --state <dir> note <tree> <text>
-//! domhringr-peer --state <dir> bind <anchor> <target>
-//! domhringr-peer --state <dir> claim <tree> <domain>
-//! domhringr-peer --state <dir> introduce <tree> <label> <tree>
-//! domhringr-peer --state <dir> present <tree> [--port <port>]
-//! domhringr-peer --state <dir> withdraw <tree> [<peer-id>]
-//! domhringr-peer --state <dir> book <tree>
-//! domhringr-peer --state <dir> whence <name> [--witness <domain>=<tree-id>]... [--in <tree>]
-//!                [--peer <peer-id>] [--at <endpoint>] [--local]
-//! domhringr-peer --state <dir> view <tree>
-//! domhringr-peer --state <dir> heads <tree>
-//! domhringr-peer --state <dir> sync <tree> [--peer <peer-id>] [--at <endpoint>]
-//! domhringr-peer --state <dir> dispatch <tree> <peer-id> <brief> [--edition <number>] [--at <endpoint>]
-//! domhringr-peer --state <dir> report <tree> <file> <summary>
-//! domhringr-peer --state <dir> handoff <tree> <peer-id>
-//! domhringr-peer --state <dir> retire <tree>
-//! domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]
-//! domhringr-peer --state <dir> transport <tree> <edition>
-//! domhringr-peer --state <dir> evidence <tree> <digest> [--peer <peer-id>] [--at <endpoint>]
-//!                [--local]
-//! domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>
-//! domhringr-peer --state <dir> judge ask --question <text> --option <text>...
-//!                (--transcript <digest> | --transcript-file <file>) [--static <file>]
-//! domhringr-peer --state <dir> judge verdict <tree> --rubric <content-hash>
-//!                (--transcript <digest> | --transcript-file <file>)
-//!                (--question <text> --option <text>...)... [--static <file>]
-//! domhringr-peer --state <dir> playbook validate <file>
-//! domhringr-peer --state <dir> playbook run <file> <tree> [--task-state <dir>] [--static <file>]
-//! domhringr-peer --state <dir> rubric validate <file>
-//! domhringr-peer --state <dir> rubric grade <file> <tree> [--task-state <dir>] [--static <file>]
-//! domhringr-peer --state <dir> index derive <project>
-//! domhringr-peer --state <dir> index task <project> <name> [--by <peer-id>] [--at <endpoint>]
-//! domhringr-peer --state <dir> index move <project> <name> <attempt>.<seq> [--by <peer-id>] [--at <endpoint>]
-//! domhringr-peer --state <dir> index play <project> <name> <attempt> [--by <peer-id>] [--at <endpoint>]
-//! domhringr-peer --state <dir> index replay <project> <name> [--by <peer-id>] [--at <endpoint>]
-//! domhringr-peer --state <dir> index after <project> <name> <attempt> [--by <peer-id>] [--at <endpoint>]
-//! domhringr-peer --state <dir> index check <project> [--by <peer-id>]
-//! domhringr-peer --state <dir> index measure <project>
+//! domhringr-peer --state <dir> id                                    # endpoint id, then peer id
+//! domhringr-peer --state <dir> serve [--port <port>] [--surface <program>]  # ids, listening, then what the peer and the seat do
+//! domhringr-peer --state <dir> present <tree> [--port <port>]        # the presence's commit id
+//! domhringr-peer --state <dir> withdraw <tree> [<peer-id>]           # the withdrawal's commit id
+//! domhringr-peer --state <dir> book <tree>                           # one line per present peer
+//! domhringr-peer --state <dir> open                                  # the new tree's anchor
+//! domhringr-peer --state <dir> grant <tree> <peer-id>                # the grant's commit id
+//! domhringr-peer --state <dir> note <tree> <text>                    # the note's commit id
+//! domhringr-peer --state <dir> bind <anchor> anchor <name>           # the bind's commit id
+//! domhringr-peer --state <dir> bind <anchor> endpoint <endpoint-id>  # the bind's commit id
+//! domhringr-peer --state <dir> bind <anchor> datum <text>            # the bind's commit id
+//! domhringr-peer --state <dir> claim <tree> <domain>                 # the claim's commit id
+//! domhringr-peer --state <dir> introduce <tree> <label> <tree>       # the introduction's commit id
+//! domhringr-peer --state <dir> whence <name> [--witness <domain>=<tree-id>]... [--in <tree>] [--peer <peer-id>] [--at <endpoint>] [--local]  # where each tree read was reached, then what the name resolves to
+//! domhringr-peer --state <dir> view <tree>                           # the view, one line per fact
+//! domhringr-peer --state <dir> heads <tree>                          # the heads, one sorted hex line each
+//! domhringr-peer --state <dir> sync <tree> [--peer <peer-id>] [--at <endpoint>]  # where the endpoint came from, the heads after sync, then its path
+//! domhringr-peer --state <dir> dispatch <tree> <peer-id> anchor <anchor> [--edition <number>] [--at <endpoint>]  # the dispatch's commit id, where the seat was reached, woken
+//! domhringr-peer --state <dir> dispatch <tree> <peer-id> content <hash> [--edition <number>] [--at <endpoint>]   # the same, for a brief named by content hash
+//! domhringr-peer --state <dir> report <tree> <file> <summary>        # the report's commit id
+//! domhringr-peer --state <dir> handoff <tree> <peer-id>              # the handoff's commit id
+//! domhringr-peer --state <dir> retire <tree>                         # the retirement's commit id
+//! domhringr-peer --state <dir> pause <tree>                          # the pause receipt's commit id
+//! domhringr-peer --state <dir> replay <tree> [--peer <peer-id>] [--at <endpoint>] [--local]  # source, refusals, admitted steps, standing and evidence
+//! domhringr-peer --state <dir> transport <tree> <edition>             # certified transport of the current complete play
+//! domhringr-peer --state <dir> evidence <tree> <digest> [--peer <peer-id>] [--at <endpoint>] [--local]  # the value's bytes
+//! domhringr-peer --state <dir> drift --public <checkout> --vault <checkout> <tree>  # one line per finding, nothing when consistent
+//! domhringr-peer --state <dir> judge ask --question <text> --option <text>... --transcript <digest> | --transcript-file <file> [--static <file>]  # the transcript's digest, then the ruling
+//! domhringr-peer --state <dir> judge verdict <tree> --rubric <hash> --transcript <digest> | --transcript-file <file> (--question <text> --option <text>...)... [--static <file>]  # the transcript's digest, one ruling per question, then the verdict's commit id
+//! domhringr-peer --state <dir> playbook validate <file>              # the playbook's hash and name, then one line per step
+//! domhringr-peer --state <dir> playbook run <file> <tree> [--task-state <dir>] [--static <file>]  # one line per verification, then each rubric's rulings, verdict, grades and grading
+//! domhringr-peer --state <dir> rubric validate <file>                # the rubric's hash and name, then one line per question
+//! domhringr-peer --state <dir> rubric grade <file> <tree> [--task-state <dir>] [--static <file>]  # the rubric's rulings, verdict, grades and grading
 //! ```
 //!
 //! A tree is named by its anchor, `domhringr://<tree-id>/`, whose tree id is
@@ -221,6 +212,355 @@
 //! The exit status is 0 on success, 1 when the command fails, 2 for a
 //! command line that cannot be run, and 3 when `drift` reports a finding;
 //! diagnostics go to standard error.
+//!
+//! # Identifiers and state
+//!
+//! A tree is named by its anchor; every other id is 64 hex digits, and the
+//! binary prints each in the form it reads:
+//!
+//! | Name | Form | Meaning |
+//! | ---- | ---- | ------- |
+//! | Tree | `domhringr://<tree-id>/` | Selects a sedimentree; the tree id is the tree key's verifying key in 52 z-base-32 characters. |
+//! | Anchor | `domhringr://<tree-id>/<segment>/…/<segment>` | A path in a tree; each segment is non-empty, holds no `/`, and does not begin with `.`, which is reserved for forms the scheme names. |
+//! | Commit | `domhringr://<tree-id>/.commit/<commit-id>` | A commit in a tree by its whole id; `whence` also reads a prefix of at least 8 hex digits that no other commit of the tree begins with. |
+//! | Name, key form | a tree, an anchor, or a commit | What `whence` resolves, and a bind's target anchor, its tree named by key; a bare tree resolves as no bind binds it. |
+//! | Name, DNS form | `domhringr://<domain>/…` | The tree a witness names for the DNS name and whose root claims it; the name holds a dot and is lowercase letters, digits, and hyphens. |
+//! | Name, label form | `domhringr://<label>/…` | The tree introduced by the label in the `--in` tree; the label holds no dot and no `/` and is not spelled as a tree id. |
+//! | Witness | `<domain>=<tree-id>` | A `--witness` value: a candidate tree for the DNS name, in place of its TXT records. Any `--witness` replaces DNS for the command. |
+//! | Commit id | 64 hex digits | BLAKE3 digest of the encoded receipt blob. |
+//! | Endpoint id | 64 hex digits | Public key of the remote's iroh endpoint. |
+//! | Endpoint | `<endpoint-id>@<address>…` | An endpoint id and the addresses it is reached at, each an IP address and port, an IPv6 address in brackets, or a relay URL: `<endpoint-id>@192.0.2.7:4433@https://relay.example.org/`. What `--at` reads and `book` prints. |
+//! | Peer id | 64 hex digits | Public key of the subduction signer that authenticates handshakes and signs commits. |
+//!
+//! Only `whence` and a bind's target anchor read the DNS and label forms, and
+//! only `whence` reads an abbreviated commit id; every other tree operand and
+//! the anchor to bind name the tree by key, and a DNS name or a label there is
+//! a usage error. The state directory's two keys and store are created on first
+//! use, and `open` keeps each tree's key beside them. Secret keys are never
+//! printed. A running command holds the store exclusively, so every command but
+//! `id` fails while `serve` runs on the same directory; `id` runs beside it.
+//!
+//! # Output
+//!
+//! `view` prints `owner <peer-id>`, then `member <peer-id>` for each peer
+//! granted write authority, `note <peer-id> <text>` for each admitted note in
+//! canonical order, `bind <path> <target>` for each bound path in path order,
+//! `claim <domain>` for each claimed DNS name in name order, `introduce <label>
+//! <tree>` for each introduced label in label order, `present <peer-id>
+//! <endpoint> <commit-id>` for each peer in the book in peer order, and
+//! `refused <commit-id> <reason>` for each refused commit. A target reads
+//! `anchor <anchor>`, its anchor a tree, a path, or a commit in any of the
+//! three forms, `endpoint <endpoint-id>`, or `datum <text>`. Notes, paths,
+//! labels, data, and target anchors escape backslashes and control characters;
+//! paths and labels escape spaces as `\u{20}` too. Refusal reasons are `wrong
+//! tree`, `undecodable`, `duplicate operation`, `no authority`, `not owner` (a
+//! claim by anyone but the owner), `second open`, `bad proof`, `foreign
+//! endpoint` (a presence of an endpoint whose key did not sign for its author),
+//! and `foreign presence` (a member's withdrawal of another peer's presence).
+//!
+//! `open` prints the new tree's anchor; `present` and `withdraw` print their
+//! commit's id, a presence's id being the commit `book` prints for it. `book`
+//! prints `<peer-id> <endpoint> <commit-id>` for each peer in the book in peer
+//! order, the commit the one that presented the endpoint, and nothing for a
+//! book that is empty. For a path, `whence` prints the target the path is bound
+//! to in the local view of the tree its name resolves to, as `view` writes it,
+//! or `unbound`; for a bare DNS-form or label-form name, `anchor <tree>` naming
+//! by key the tree it names; and for a commit, `commit <commit-id> admitted`,
+//! `commit <commit-id> refused <reason>`, or `unknown` when that tree holds no
+//! commit by the id, the id printed whole however it was abbreviated. Before it
+//! resolves, `whence` syncs each tree the resolution reads — the key's tree,
+//! every tree the DNS name's witness names, or the label's `--in` tree and then
+//! the tree it introduces — with the peer aimed at, and prints a source line
+//! for each tree reached at another peer; a tree whose peer aimed at is this
+//! one is read as held, so an owner's `whence` of its own tree dials no one and
+//! prints the resolution alone. With `--local` it reads the local store and
+//! syncs nothing. It asks DNS only for a DNS-form name with no `--witness`. A
+//! name that does not resolve fails the command with one of `unwitnessed
+//! <domain>` (the witness names no tree), `unclaimed <domain>` (no witnessed
+//! tree in the store claims it), `ambiguous <domain>` (more than one does),
+//! `unscoped <label>` (no `--in`), `unintroduced <label>` (the `--in` tree did
+//! not introduce it), `cannot read the witness of <domain>` (the DNS lookup
+//! failed), `cannot fold the tree <tree-id>` (a tree the resolution reads is
+//! not in the store), or `ambiguous commit <prefix>` (more than one commit of
+//! the tree begins with the prefix), each followed by its cause where it has
+//! one. `serve` prints its endpoint id, peer id, and `listening`, then
+//! `accepted <peer-id>` and the selected path for each admitted peer. `sync`
+//! prints its source line, then sorted heads, then its selected path.
+//!
+//! # Networking
+//!
+//! `serve --port` binds iroh's IPv4 and IPv6 UDP sockets at that port so a
+//! firewall rule can name it; without it the port is ephemeral. A path line
+//! reads `path <peer-id> direct <address>`, `path <peer-id> relay <url>`, or
+//! `path <peer-id> pending`.
+//!
+//! `present <tree> --port <port>` binds the endpoint at that port, waits up to
+//! five seconds for it to reach its home relay, and commits a presence of it at
+//! the addresses iroh then names for it: the host's direct addresses at that
+//! port, and the relay. The book is the record's: a peer is reached where it
+//! last said it is, until it presents again or it or the tree's owner withdraws
+//! the presence. `withdraw <tree>` withdraws this peer's own presence and
+//! `withdraw <tree> <peer-id>` another's, which only the owner may.
+//!
+//! `sync` and `whence` dial the tree's owner, or the peer `--peer` names, at
+//! the endpoint `--at` names, or else at that peer's presence in the tree's
+//! book, and print where the endpoint came from: `source <tree> at <endpoint>`
+//! or `source <tree> book <commit-id>`, the commit that presented it. The dial
+//! names the endpoint's addresses and does not wait on iroh's lookups. A peer
+//! the book holds no presence of, with no `--at`, fails the command as
+//! `unreachable <peer-id>: no presence in the book`; a tree not in the store
+//! has no owner to aim at and no book, so it fails as `unheld <tree-id>` unless
+//! `--peer` and `--at` name the remote; `sync` aimed at this peer fails as `no
+//! one to reach`. First contact names the endpoint by hand, and that sync
+//! carries the book.
+//!
+//! `serve` reports the path selected when it admits a peer. `sync` reports the
+//! path once its round ends, giving iroh up to five seconds to move a relayed
+//! connection to a direct path. iroh does not promise that move, even between
+//! two peers on one host, so a sync can end relayed.
+//!
+//! **`present` runs before `serve`, at the port `serve` binds.** A command
+//! holds the store exclusively, so no other command commits while `serve` runs;
+//! `present` binds at the fixed port first, commits the addresses that port is
+//! reached at, and exits, and `serve --port` binds the same port after it. An
+//! ephemeral port is presented too, but no later `serve` binds it, so only the
+//! relay in such a presence reaches the peer. `serve` commits on its own only
+//! as a seat: its presence in a task whose book lacks it, and its reports.
+//!
+//! - `serve` presenting itself as it starts: a commit for every start, whether
+//!   or not the addresses changed.
+//! - a control channel to a running `serve`: a second interface to the store
+//!   for one verb.
+//!
+//! Reversal: a `serve` that can commit while it serves, as one that holds the
+//! store for other writers.
+//!
+//! **An endpoint `--at` names overrides the book.** A presence goes stale when
+//! its peer moves before presenting again; reading the book first would leave
+//! the peer unreachable even with its current endpoint in hand.
+//!
+//! - the book first, `--at` only when the book holds no presence: one fewer way
+//!   to name the remote, at the cost of the stale case.
+//!
+//! Reversal: a book that cannot go stale, as when a dial that fails at a
+//! presence falls back on its own.
+//!
+//! **`whence` syncs the trees it reads before resolving.** A name resolves
+//! against the record as the peer aimed at holds it, not as the local store
+//! last synced it; `--local` keeps the local, offline resolution.
+//!
+//! - resolving from the local store unless asked to sync: a stale binding read
+//!   as current, with nothing in the output saying where it came from.
+//!
+//! Reversal: a resolution that needs no remote, as one served from a published
+//! snapshot.
+//!
+//! # Tasks
+//!
+//! An operator dispatches a seat with `dispatch <tree> <peer-id> <brief>`, the
+//! brief an anchor or a content hash. The command routes to the seat first, at
+//! `--at` or its presence in the task's book, so a seat no endpoint names gets
+//! no dispatch. It then commits the dispatch, prints its commit id, wakes the
+//! seat, and prints `source <tree> at <endpoint>` or `source <tree> book
+//! <commit-id>` and `woken`. A seat that declines fails the command as `the
+//! seat declined the wake: <reason>`, and a seat that cannot be reached fails
+//! it after the dispatch's id is printed: the dispatch stays committed, to be
+//! sent again. A woken operator holds the seat's presence, so the next
+//! dispatch, a `replay` or a `sync` reaches the seat through the book.
+//!
+//! `serve --surface <program>` serves as a seat. It prints `accepted` and
+//! `path` lines for each link, `woken <tree> <dispatch-id>` for a wake it
+//! answers, `declined <reason>` for one it declines, `reported <tree>
+//! <commit-id>` for a report it commits, `unreported <tree> <dispatch-id>` for
+//! an act that committed none, `served <digest>` for a fetch it answers with
+//! the value it holds, and `unserved <digest>` for one whose manifest it does
+//! not hold, each failure's cause on standard error. Without `--surface` the
+//! seat holds the slots it is dispatched to and never reports. `report <tree>
+//! <file> <summary>` keeps the file's bytes as evidence and commits a report
+//! naming them by digest; it, `handoff <tree> <peer-id>` and `retire <tree>`
+//! commit their receipt on the task's current dispatch, and fail as `the task
+//! has no dispatch: nothing to report on, hand off, retire from or rule on`
+//! when there is none; the fold admits them from the slot's holder alone.
+//!
+//! `replay <tree>` reaches the current attempt's seat, the owner when nothing
+//! is dispatched, or the peer `--peer` names, syncs the task as `sync` does,
+//! and prints the source line and the task. The task is one line per admitted
+//! seat receipt in canonical order: `dispatch <commit-id> <peer-id> edition
+//! <number> <brief>`, `report <commit-id> <dispatch-id> <peer-id>
+//! <digest> <summary>`, `handoff <commit-id> <dispatch-id> <from> <to>` and
+//! `retire <commit-id> <dispatch-id> <peer-id>`; a verdict is `verdict
+//! <commit-id> <dispatch-id> <judge> <rubric> <transcript-digest>` and one
+//! `ruling <commit-id> <question> <ruling>` line per question; a verification
+//! is `verified <commit-id> <dispatch-id> <runner> <playbook> <step>
+//! <output-digest> <status>`; a grading is `graded <commit-id> <dispatch-id>
+//! <verdict-id> <rubric> <composed>` and one `grade <commit-id> <question>
+//! <grade>` line per question; an operator's decision is `decide <commit-id>
+//! <dispatch-id> <operator> <decision>`, the decision `land`, `rework <reason>`
+//! or `abandon`, and a landing `landed <commit-id> <dispatch-id> <decision-id>
+//! <operator> <revision>`. Then one line says where the task stands:
+//! `undispatched`; for an attempt checked past its report, its furthest step —
+//! `landed <dispatch-id> <landing-id> <revision>`, `decided <dispatch-id>
+//! <decision-id> <decision>`, `graded <dispatch-id> <grading-id> <composed>` or
+//! `verified <dispatch-id> <verification-id>`; otherwise `dispatched
+//! <dispatch-id> <holder>`, `reported <dispatch-id> <report-id>` or `stalled
+//! <dispatch-id> <retirement-id>`. Last comes one line per value the task
+//! names, as § Evidence states. `--local` prints the local store's task and its
+//! evidence and dials no one.
+//!
+//! Replay uses the edition named by each dispatch, never a peer-local default.
+//! Edition 1 requires at least one report before handoff or retirement; edition
+//! 2 adds pause without changing those obligations. Refusals print as `refused
+//! <commit-id> protocol edition <number> <move>: <detail>`; an unavailable
+//! protocol reports `unknown edition <number>`. Editionless dispatches mean
+//! edition 1, so their pause and order violations remain refused. A `pause
+//! <commit-id> <dispatch-id> <peer-id>` step retains the holder and report
+//! phase only under edition 2. It does not suspend the process. The protocol is
+//! `domhringr-arena-session`'s.
+//!
+//! `dispatch --edition <number>` names the protocol explicitly; omission
+//! chooses the newest compiled edition only when creating a dispatch. Both
+//! binaries enable `edition-2` by default. Building `domhringr-surface-peer`
+//! with `--no-default-features` compiles edition 1 only. The test task builds
+//! that variant separately from the workspace feature union, preserves it as
+//! `domhringr-peer-edition-one`, signs both binaries through the normal macOS
+//! signing path, and passes its path through `DOMHRINGR_EDITION_ONE`.
+//! `seat::tests::two_binaries_replay_named_editions_and_transport` exercises
+//! the two binaries over the same signed records.
+//!
+//! `transport <tree> <edition>` reads the current complete admitted play from
+//! the local record, derives the source-to-target relation and forms its kernel
+//! certificate locally. Success prints `transported <dispatch-id> edition
+//! <source> -> <target> <count> moves`. It does not change receipts, admit
+//! refused moves, or ship a certificate; missing protocols, invalid directions
+//! and incomplete plays fail.
+//!
+//! **A dispatch to the seat already holding the current attempt's slot, for the
+//! same brief and edition, is sent again, not committed again.** The command
+//! prints the same commit id and wakes the seat once more. An operator whose
+//! wake failed, or that was killed while it dialed, repeats the command and
+//! reaches the same dispatch, and a seat that already reported answers `woken`
+//! without acting again.
+//!
+//! - a dispatch per invocation: a second dispatch supersedes the first, and a
+//!   report the seat is writing to the first is then refused as not current.
+//! - a separate `wake` verb for an existing dispatch: a second command for what
+//!   repeating the first already says.
+//!
+//! Reversal: a task that dispatches one seat to one brief twice on purpose,
+//! which needs the new commit asked for.
+//!
+//! **The seat acts through a program and reports its standard output.** The
+//! design and its alternatives are the seat's, in `domhringr-seat-slot`'s
+//! `seat` module; the binary adds only the `--surface` option and the event
+//! lines.
+//!
+//! # Evidence
+//!
+//! A report's content, a verdict's transcript and a verification's output are
+//! evidence: values in the state directory's evidence store, named in their
+//! receipt by manifest digest, as `domhringr-record-evidence` holds and fetches
+//! them. `report`, a seat's act, `judge verdict`, `playbook run` and `rubric
+//! grade` keep what they record before committing the receipt that names it, so
+//! a name this peer commits resolves in its own store.
+//!
+//! **`replay` ends with one line per value the task names, held or not.** After
+//! the task it prints `evidence <digest> held` or `evidence <digest> unheld`,
+//! once per digest in the order the task first names it, the cause of an unheld
+//! value on standard error. A replay that reached a peer first fetches from it
+//! each value the local store lacks, every chunk checked before the value is
+//! kept; `--local` and a route to this peer read the local store alone. An
+//! unheld value is a line, and the command still succeeds: the record replayed
+//! is whole, and what this peer can read of its evidence is a fact about its
+//! store.
+//!
+//! - failing the replay on an unheld value: the record could not be read while
+//!   the peer that keeps one value is away.
+//! - fetching each value from the peer that holds it, its receipt's author: a
+//!   dial per author, where a replay reaches one peer.
+//!
+//! Reversal: a replay that must prove every value whole, as an audit does,
+//! which needs an exit status for an unheld one.
+//!
+//! **`evidence <tree> <digest>` writes a value's bytes and nothing else.** A
+//! value the local store holds whole is read from it; otherwise the command
+//! reaches the peer `--peer` names, or else the author of the first admitted
+//! receipt of the local task naming the digest, at `--at` or through the task's
+//! book, and fetches the value, keeping it before it writes a byte. A refusal
+//! writes nothing to standard output, names its cause — `evidence <digest> is
+//! refused: no chunk is stored under <chunk-digest>` for a chunk neither side
+//! holds — and exits 1; `--local` reads the local store alone.
+//!
+//! - a header line before the bytes: the output would no longer be the value,
+//!   and a reader comparing it would strip it first.
+//!
+//! Reversal: a value too large to hold in memory, which needs the read streamed
+//! to standard output as the walk checks each chunk.
+//!
+//! # Judging
+//!
+//! `judge ask` asks one question about a transcript and prints `transcript
+//! <digest>` and `ruling <question-hash> <ruling>`. A question is a `--question
+//! <text>` and the `--option <text>`s after it, two to twenty-six, lettered
+//! `A`, `B`, … in the order given, and named by the hash
+//! `domhringr-judge-oracle` defines. The transcript is the content of
+//! `--transcript-file`, or the content `--transcript` names by its digest, read
+//! whole from the local evidence store. `judge verdict <tree> --rubric <hash>`
+//! first names the task's current dispatch, then asks each question in the
+//! order given, prints the same lines, keeps the transcript as evidence,
+//! commits this peer's verdict on that dispatch, and prints the verdict's
+//! commit id. A ruling reads `read <letter> A=<p> B=<p> … outside=<p>`, the
+//! answer letter, each option's probability and the mass outside the options,
+//! or `unread <reason>`: `no letter`, `outside`, `tied`, `endpoint` or
+//! `malformed`.
+//!
+//! Without `--static` the judge asks the endpoint the environment configures
+//! (`domhringr-judge-oracle`'s `chat` module). With `--static <file>` it
+//! answers from a table instead, one `<question-hash> <transcript-digest>
+//! <ruling>` line per ruling, a later line for the same pair winning; a
+//! question the table does not hold is unread as `malformed`. An endpoint is
+//! asked the transcript's text, and a transcript it cannot read is unread as
+//! `malformed`.
+//!
+//! **A refused question is a ruling, and the command succeeds.** An unread
+//! ruling is printed and committed as a read one is, with its cause on standard
+//! error. The command fails, committing nothing, only when it cannot ask at
+//! all: no endpoint configured, a table file that cannot be read, a transcript
+//! file that cannot be read, a transcript `--transcript` names that the
+//! evidence store does not hold whole, or a task with no dispatch.
+//!
+//! - failing the command on any refusal: a verdict with one unread question
+//!   would not be committed, the rulings that were read would be lost, and a
+//!   refusal would read as an error rather than an outcome.
+//!
+//! Reversal: a gate that must tell an unread ruling from the exit status. A
+//! gate reads the `unread` lines.
+//!
+//! **`judge verdict` takes its questions on the command line, and the rubric by
+//! its hash.** The verdict records the rubric's hash and each question's;
+//! `judge verdict` reads no rubric document, so it asks questions no document
+//! holds. `rubric grade` and `playbook run` read the document and ask its
+//! questions (the `strategy` module).
+//!
+//! - `judge verdict` reading the rubric document alone: no way to ask a
+//!   question before a rubric holds it.
+//! - questions named by their hashes alone: a model is asked a question's text.
+//!
+//! Reversal: every question asked belonging to a rubric document, when `judge
+//! verdict` reduces to `rubric grade`.
+//!
+//! # References
+//!
+//! - `domhringr-record-tree`: the persistent peer, receipt fold, and
+//!   synchronization operation.
+//! - `domhringr-seat-slot`: the wake and the serving seat.
+//! - `domhringr-judge-oracle`: the question, the readout and the judge's
+//!   backends.
+//! - `domhringr-strategy-document`: the playbook and rubric documents, the
+//!   verifier, the band and the composition.
+//! - `iroh`, [crate documentation](https://docs.rs/iroh): endpoint discovery
+//!   and direct or relayed network paths.
+//! - `lexopt`, [crate documentation](https://docs.rs/lexopt): command-line
+//!   options and operands.
 
 // The opt-in quenchant lints: absence named by `Maybe` in signatures and in
 // fields outside wire form, arithmetic on nominal types. Selected here because

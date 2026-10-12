@@ -1,4 +1,18 @@
 //! Protocol admission of attested attempts, independently of receipt authority.
+//!
+//! Proof membership and protocol conformance are independent. `prove::play`
+//! verifies the complete attempt range and returns ordered coordinates,
+//! authors, commit identities and original receipt bytes. [`replay`] feeds
+//! those moves to the arena monitor under the dispatch's edition: one slot and
+//! decision channel per attempt, one judge channel per verdict and one runner
+//! channel per runner. Unknown editions and invalid transitions are refused at
+//! their `(attempt, seq)` with the movement named.
+//!
+//! Replay resolves grading and landing references only from earlier moves in
+//! that attempt and projects admitted steps through `Current::record`. It
+//! checks neither signed causal authority nor completeness against the task's
+//! receipt tree. Omitting a move can leave a conformant play; historical
+//! `index check` detects that omission when the task frontier is held.
 
 #[cfg(test)]
 mod tests;

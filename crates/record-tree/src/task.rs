@@ -29,6 +29,238 @@
 //! playbook's, the rubric's and the operator's.
 //!
 //! [`ContentHash`]: crate::id::ContentHash
+//!
+//! # Tasks
+//!
+//! A tree is also a task. A `Dispatch { seat, edition, brief }` names the peer
+//! that is to act and the brief it acts on — an anchor, or a content hash; a
+//! `Report { dispatch, content, summary }` answers a dispatch with the manifest
+//! digest of what the seat produced, kept as evidence, and a one-line summary
+//! of at most 256 bytes; a `Handoff { dispatch, to }` moves the dispatch's slot
+//! to another peer; a `Retire { dispatch }` gives the slot up. `View::task`
+//! holds every admitted seat receipt in canonical order and the current attempt
+//! — the admitted dispatch last in canonical order, its slot, held or retired,
+//! its answer, awaited or reported, and its progress past the report, as the
+//! decisions below state it — and prints as one line per step and one saying
+//! where the task stands: `undispatched`; for an attempt checked past its
+//! report, `verified <dispatch> <verification>`, `graded <dispatch> <grading>
+//! <composed>`, `decided <dispatch> <decision-commit> <decision>` or `landed
+//! <dispatch> <landing> <revision>`; otherwise `dispatched <dispatch>
+//! <holder>`, `reported <dispatch> <report>` or `stalled <dispatch>
+//! <retirement>`.
+//!
+//! **Causal authority and protocol conformance are independent conditions.**
+//! The owner or a member may dispatch; only the causal holder of the current
+//! dispatch may report, hand off, retire or pause. The fold also replays each
+//! dispatch's accepted canonical prefix through the Seat session type of
+//! `domhringr-arena-session`. Report is required before handoff or retirement,
+//! and either ending closes the endpoint. A protocol refusal names the move,
+//! expected action and endpoint index. It precedes the authority refusal for
+//! that candidate; probing an unauthorized move never advances the play.
+//!
+//! - the canonical-order latest dispatch instead of the causal one: a report
+//!   written before a concurrent dispatch arrived would be refused by where the
+//!   dispatch sorts, not by what its author saw.
+//! - a second receipt automaton embedded in the fold: its protocol could drift
+//!   from the arena and the kernel-certified widening.
+//!
+//! Reversal: a dispatch that names several seats or slots, which needs a slot
+//! per seat in the course.
+//!
+//! **Silence does not end a play.** The record names no time. A dispatch
+//! without a report stays open; retirement before the first report is a named
+//! protocol refusal, not an inferred stall. Whether abandonment should be an
+//! explicit widening is a protocol decision, not a timeout or a default in the
+//! fold.
+//!
+//! Every dispatch names its numeric protocol edition. Edition 1 requires
+//! dispatch → report⁺ → handoff or retire; edition 2 also permits `Pause {
+//! dispatch }`, retaining the holder and report phase without suspending a
+//! process. A peer refuses every slot move under an uncompiled edition by
+//! number, never under its own latest protocol. Editionless dispatches denote
+//! edition 1; their pause and ordering refusals remain refusals.
+//! `View::transport(dispatch, target)` locally derives and kernel-checks
+//! transport of the complete admitted play between named editions without
+//! changing receipts. Pause occupies tag `0x12`.
+//!
+//! Every task channel replays through the monitor under that edition: judge per
+//! verdict, runner per runner and dispatch, operator decision per dispatch. The
+//! judge sends one verdict and one grading; the runner may verify repeatedly;
+//! the operator chooses once, with only land continuing to a landing. Under a
+//! current dispatch, missing causal predecessors replay on empty channels.
+//! Duplicate grading, decision and landing receipts are refused as `protocol
+//! edition <edition> <move> <reason>`, naming the offending move. Canonical
+//! order chooses between concurrent candidates; a refused candidate consumes no
+//! channel state. Authorship, grading contents and the relation to the current
+//! dispatch remain fold checks.
+//!
+//! `Current::record` projects an already admitted step into the current
+//! standing, preserving the dispatch, slot, answer and progress precedence. The
+//! receipt fold and attested-index replay share this projection; it establishes
+//! neither authority nor protocol conformance on its own.
+//!
+//! **A receipt names evidence by its value manifest and carries no bytes.** A
+//! report's content, a verdict's transcript and a verification's output are
+//! committed into gandr's value plane as chunk DAGs, and the receipt names each
+//! by its `ManifestDigest`: the BLAKE3 digest of the manifest, which binds the
+//! root, the length and the profile the value was cut under.
+//! `domhringr-record-evidence` holds the bytes beside the tree store and reads
+//! them back by that digest, from its own store or fetched from the peer that
+//! holds them; `Task::evidence` lists every digest a task names with that peer
+//! — a report's author, a verdict's judge, a verification's runner — in
+//! canonical order. The tree records what was produced; the evidence plane
+//! holds it, so an operator on another machine reads what it judges.
+//!
+//! - the bytes in the receipt: a tree grows with every artifact, and a sync
+//!   carries what only a reader of that artifact needs.
+//! - the BLAKE3 hash of the flat bytes: names the bytes but resolves through
+//!   nothing the record can reach, and a reader can check them only whole.
+//!
+//! Reversal: a change to the value plane's manifest identity, which needs a new
+//! receipt version naming the new one.
+//!
+//! **A judge's verdict is admitted from the judge alone, on the current
+//! dispatch, judged in the receipt's causal past.** A `Verdict { dispatch,
+//! judge, rubric, transcript, answers }` names the judge, the BLAKE3 hash of
+//! the rubric its questions come from, the manifest digest of the transcript it
+//! read, kept as evidence, and one ruling per question, each question named by
+//! its hash, in the order asked. A ruling is `read <letter> A=<p> B=<p> …
+//! outside=<p>` — the answer, each option's probability, summing to one, and
+//! the mass the judge put outside the options — or `unread <reason>`: `no
+//! letter`, `outside`, `tied`, `endpoint` or `malformed`. A verdict whose
+//! author is not the judge it names is refused `not judge`, one on another
+//! dispatch `not current`; an admitted verdict is a step of the task, printed
+//! `verdict <commit> <dispatch> <judge> <rubric> <transcript>` and one `ruling
+//! <commit> <question> <ruling>` line per question, and changes no attempt: a
+//! ruling informs the operator, who acts on it with a receipt of their own.
+//!
+//! - a judge granted by the tree: the operator chooses the judge by acting on
+//!   its verdict, so the fold checks only that the judge speaks for itself.
+//! - a verdict as a report: a report answers the dispatch, and the seat alone
+//!   answers it.
+//! - a ruling that defaults an unread question to a letter: a judge that did
+//!   not answer would read as one that did.
+//!
+//! Reversal: a verdict that settles the task — accepting or reopening the
+//! attempt — which needs the judge's authority in the course.
+//!
+//! **A runner's verification is admitted from the runner alone, on the current
+//! dispatch.** A `Verified { dispatch, runner, playbook, step, output, status
+//! }` records that the runner ran a playbook step's verifier on the dispatch:
+//! the BLAKE3 hash of the playbook, the step's identifier in it (`StepId`: 1 to
+//! 64 lowercase ASCII letters, digits and hyphens, beginning with a letter),
+//! the manifest digest of what the process wrote to its output and error
+//! streams, kept as evidence, and how the process ended (`Status`): `exit
+//! <code>` or `signal <number>`. A verification whose author is not the runner
+//! it names is refused `not runner`, one on another dispatch `not current`; an
+//! admitted one is a step of the task, printed `verified <commit> <dispatch>
+//! <runner> <playbook> <step> <output> <status>`, and advances the attempt to
+//! verified: a failing verifier is recorded as it ended, and the operator acts
+//! on it.
+//!
+//! - the step without its playbook: a step's identifier names it only within
+//!   its playbook, so two playbooks' `test` steps would read as one check.
+//! - a pass or fail flag: a process ended by a signal would read as one that
+//!   failed its check, and what a nonzero code means is the verifier's to say.
+//! - the output's bytes in the receipt: the receipt grows with every run, as a
+//!   report's would.
+//!
+//! Reversal: a check that reads the output and error streams apart, which needs
+//! a digest per stream.
+//!
+//! **A verdict is graded once, by its judge.** `Graded { verdict, grades,
+//! composed }` names the verdict and one `Grade` per answer in its order:
+//! `met`, `unmet`, `undecided`, or `refused` exactly for an unread ruling. The
+//! rubric and question identities come from the verdict. The judge channel
+//! requires the verdict in the grading's causal past and refuses a second
+//! grading by name. Wrong authorship is `not judge`, wrong answer shape
+//! `misgraded`, wrong composition `miscomposed`, and a superseded dispatch `not
+//! current`.
+//!
+//! **Composition is checked from the receipt alone.** `compose` lives beside
+//! `Grade`, shared by writers and the fold without an added dependency. Any
+//! unmet grade makes the conjunction unmet; otherwise any refused grade makes
+//! it refused; otherwise any undecided grade makes it undecided; otherwise it
+//! is met, including the empty composition. Refused gradings remain in the DAG
+//! without advancing the task; `open` prints their commit anchors and
+//! `miscomposed`. An admitted grading is a task step naming its dispatch,
+//! verdict, rubric, question grades and composition.
+//!
+//! - the task and the rubric in the grading: a second statement of what the
+//!   verdict records, free to disagree with it.
+//! - the grades inside the verdict: the readout and its classification would
+//!   lose their separate receipt identities.
+//! - a grading from any member: two keys could grade one verdict differently,
+//!   and the grades would not be the asking key's.
+//! - the fold recomputing individual grades: it needs the rubric's band, which
+//!   is not in the record.
+//!
+//! Reversal: a reader holding the rubric as evidence can also check each grade
+//! against its band. Rubrics with a rule other than conjunction require that
+//! rule to be named in the record before the fold can check it.
+//!
+//! **One operator decision binds each dispatch.** `Decide { dispatch, operator,
+//! decision }` selects `land`, `rework <reason>` or `abandon`. The operator is
+//! the owner or a granted member, and signs the key the receipt names. The
+//! monitor refuses a second choice, including one concurrent with the first.
+//! Rework and abandon end this decision channel; land requires one later
+//! landing. A changed mind requires a fresh dispatch. Missing operator
+//! authority is `no authority`, wrong identity `not operator`, and another
+//! dispatch `not current`.
+//!
+//! The tree identifies the task; the decision names its dispatch. `Verdict`
+//! names the judge's receipt, while `decision` names the operator's choice.
+//!
+//! - the signer alone, no operator field: the decision would say who made it
+//!   only through the commit, unlike every other ruling the fold admits from
+//!   the key it names.
+//! - the decision as a verdict or a grading: a judge rules and grades, and its
+//!   key holds no authority over the attempt; deciding on those readings is the
+//!   operator's act.
+//! - repeated decisions on one dispatch: competing choices would overwrite one
+//!   another rather than bind once.
+//!
+//! Reversal: an explicit reconsideration protocol, with independently checked
+//! widening and a specified relation to the original choice.
+//!
+//! **A landing carries out its operator's one decision to land.** `Landed {
+//! decided, merge }` names that decision and the repository revision after
+//! landing: a merge commit or a fast-forwarded change, represented by
+//! `Revision` as 20 or 32 bytes. The decision channel refuses landing without a
+//! causal decision, after rework or abandon, and after an earlier landing.
+//! Every order refusal names `landed`. Wrong authorship remains `not operator`,
+//! and a superseded dispatch `not current`. An admitted landing records its
+//! dispatch, decision, operator and revision as a task step.
+//!
+//! The landing names the decision commit, retaining the exact choice it carries
+//! out.
+//!
+//! - the landing naming only the task or dispatch: it would omit the specific
+//!   admitted choice it carries out.
+//! - a landing from any operator: two operators could land one decision, and
+//!   the landing would not be the deciding key's.
+//! - the revision as text: a second spelling of a fixed-width id, and a parser
+//!   in the decoder.
+//! - the repository or the branch in the receipt: where the repository lives is
+//!   the operator's configuration, never the record's.
+//!
+//! Reversal: a repository the record can reach, when the fold checks that the
+//! revision holds the reported change.
+//!
+//! **An attempt's progress only advances.** Verification, grading, decision and
+//! landing rank in that order. Within a rank the latest admitted step in
+//! canonical order holds; a lower rank cannot undo a higher one. Verification
+//! after grading leaves the attempt graded. A verdict moves nothing until
+//! graded. Second decisions and landings are refused rather than ranked. A
+//! fresh dispatch starts an unchecked attempt.
+//!
+//! - the latest of any kind: a verifier run after a landing would read the task
+//!   as no longer landed.
+//! - one standing per kind: a reader would rebuild the lifecycle the fold
+//!   already orders.
+//!
+//! Reversal: a lifecycle that goes back — a landing reverted — which needs a
+//! receipt that undoes a step and a rank to fall to.
 
 mod codec;
 

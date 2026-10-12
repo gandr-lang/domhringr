@@ -13,6 +13,67 @@
 //! verdict. A failing verifier, an unmet grade and a refused one are
 //! recorded, and the command still succeeds: what they decide is the
 //! operator's.
+//!
+//! # Playbooks and rubrics
+//!
+//! A playbook and a rubric are TOML documents whose shapes
+//! `domhringr-strategy-document` states. `playbook validate <file>` reads a
+//! playbook and each rubric its steps name, from the playbook's directory, and
+//! prints `playbook <hash> <name>` and one line per step: `step <id> verifier`,
+//! or `step <id> question <rubric-hash> <question> <question-hash>`. `rubric
+//! validate <file>` prints `rubric <hash> <name>` and `question <name>
+//! <question-hash>` per question in the names' order: the hashes a `--static`
+//! table names questions by. A document is named by the BLAKE3 hash of its
+//! file's bytes. One that does not read fails the command, naming the file, the
+//! field and why: `<file>: steps[0].why: missing field`.
+//!
+//! `playbook run <file> <tree>` reads the documents, names the task's current
+//! dispatch, and prints the `playbook` line. It runs each verifier step in
+//! order in the task's state directory, `--task-state` or the working
+//! directory, keeps its output as evidence, commits a verification, this peer
+//! the runner, and prints `verified <commit-id> <step> <output-digest>
+//! <status>`, the status `exit <code>` or `signal <number>`. Then, for each
+//! rubric its steps name, it prints the `rubric` line, reads the rubric's state
+//! files into the transcript and prints `transcript <digest>`, asks the
+//! questions its steps name as `judge verdict` asks them, printing each
+//! `ruling` line, keeps the transcript as evidence, commits the verdict, this
+//! peer the judge, and prints `verdict <commit-id>`. It grades each ruling
+//! against the rubric's band, printing `grade <question-hash> <grade>`,
+//! composes the grades, commits the grading of the verdict, and prints `graded
+//! <commit-id> <composed>`. `rubric grade <file> <tree>` does the same for
+//! every question of one rubric. Both answer from `--static <file>` or the
+//! configured endpoint, as `judge` does.
+//!
+//! **A run names the dispatch before it runs anything.** A task with no
+//! dispatch fails the command as `the task has no dispatch: nothing to report
+//! on, hand off, retire from or rule on`, before a verifier runs or a question
+//! is asked: a check run against no attempt has nothing to be committed on.
+//!
+//! **A failing verifier and a grade short of met are outcomes, and the command
+//! succeeds.** Each is printed and committed like a passing one, with its
+//! cause, for an unread ruling, on standard error. The command fails only when
+//! it cannot check at all: a document that does not read, a verifier that
+//! cannot be started or waited on, a state file that cannot be read, or a judge
+//! it cannot ask. Verifications committed before such a failure stay committed.
+//!
+//! - failing the command on a failing verifier or an unmet grade: a playbook
+//!   stopped at its first failure records nothing of the checks after it, and
+//!   an outcome reads as an error.
+//!
+//! Reversal: a gate that must read the outcome from the exit status. A gate
+//! reads the `verified` and `graded` lines.
+//!
+//! **Verifiers run first, in step order, then each rubric is graded once.** A
+//! verifier may write the state a rubric reads, and the questions of one rubric
+//! are asked of one transcript and recorded as one verdict, so a grading
+//! composes all the grades its rubric's steps ask for.
+//!
+//! - every step in its own order, a verdict per question step: a transcript
+//!   read once per question, and a grading of one grade that composes nothing.
+//!
+//! Reversal: a playbook whose question must read the state before a later
+//! verifier changes it, which needs the run to follow the steps' order and a
+//! verdict per stretch of questions.
 
 use alloc::vec::Vec;
 use std::path::Path;

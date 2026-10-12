@@ -1,4 +1,145 @@
 //! Numbered task channels, endpoint replay, and kernel-certified widening.
+//!
+//! # Protocol
+//!
+//! A dispatch starts one play. At least one report is required before
+//! handoff or retirement; either ending closes the endpoint. Further reports
+//! are allowed before the ending. A handoff does not implicitly start another
+//! play.
+//!
+//! ```text
+//! Seat = receive Dispatch . report . μX.(report . X | handoff . end | retire . end)
+//! ```
+//!
+//! Here each named output is a label selection followed by a send of that
+//! receipt's payload. The operator endpoint is the structural dual: send the
+//! dispatch, then offer the branches and receive their payloads. Recursion is
+//! finite syntax with explicit bound variables, not Rust recursion.
+//!
+//! `Edition::ONE` is this protocol. `Edition::TWO` adds a `pause`
+//! selection and receipt send in both post-dispatch phases. Pause retains the
+//! phase: before the first report it still owes a report; afterward it still
+//! permits another report or an ending. Pause is a recorded protocol move,
+//! not process suspension or cancellation. It never reopens an ended play.
+//!
+//! The other channels share the dispatch's edition. Their mover-side
+//! protocols are:
+//!
+//! | Channel | Instance | Protocol |
+//! | ------- | -------- | -------- |
+//! | Judge | Verdict commit | `!Verdict.!Graded.end` |
+//! | Runner | Runner and dispatch | `mu t. !Verified.t` |
+//! | Decision | Dispatch | `select { land: !Decide.!Landed.end, rework: !Decide.end, abandon: !Decide.end }` |
+//!
+//! `Play::new(Channel::Judge)`, `Runner` or `Decision` selects the
+//! corresponding channel; `Play::default()` selects the slot. Grading closes a
+//! judge channel. Rework and abandon close the decision channel immediately;
+//! land closes only after its landing. A runner prefix remains open, so it
+//! cannot be transported as a complete run. The dual swaps sends with receives
+//! and selections with offers.
+//!
+//! # Replay
+//!
+//! `Play::record` expands a receipt move to the endpoint skeleton and calls
+//! `gandr-core-session`'s replay monitor. A conforming prefix returns the next
+//! expected action; only an explicit ending returns completion. A refusal
+//! names the receipt move, endpoint index, expected action, observed action
+//! and reason. It leaves the accepted prefix unchanged. `Play::inspect` makes
+//! the same observation without admitting even a conforming move.
+//!
+//! Each payload has a distinct opaque type identity. Its digest names the
+//! receipt commit. This layer checks the protocol skeleton and identities, not
+//! signatures, authorship or receipt contents. The fold supplies each
+//! channel's accepted canonical prefix. Missing causal verdicts and decisions
+//! replay grading and landing on empty channels; second gradings, decisions
+//! and landings reach consumed states. Authorship and the relation to the
+//! current dispatch remain fold conditions. Refused signed receipts remain
+//! durable facts.
+//!
+//! The slot fixtures of `domhringr-record-tree`'s fold tests are executable
+//! refusal witnesses; none adds an admitted branch:
+//!
+//! | Play / witness | Refused move and state |
+//! | -------------- | ---------------------- |
+//! | `a_handoff_before_report_is_a_named_protocol_refusal` | Handoff, selection at endpoint move 1: first report owed |
+//! | `retirement_before_report_is_refused_without_relinquishing_the_slot` | Retire, selection at move 1: first report owed; the original holder can still report |
+//! | `a_judge_rules_on_the_current_dispatch` | Retire after a verdict but without a report, selection at move 1 |
+//! | `a_runner_verifies_on_the_current_dispatch` | Retire after verification but without a report, selection at move 1 |
+//! | `a_report_on_a_superseded_dispatch_is_refused` | Report on an unknown dispatch, no current dispatch |
+//! | `handoff_closes_the_play_instead_of_permitting_a_second_handoff` | Second handoff after dispatch–report–handoff, End; recipient report and retirement after the ending, End |
+//! | `surface-peer::seat::tests::two_binaries_replay_named_editions_and_transport` | Report after dispatch–report–retire, End |
+//! | `dispatch_editions_govern_each_attempt` | Report without dispatch, no current dispatch; pause under edition 1, selection at move 1 |
+//!
+//! A verdict or a verification does not substitute for the seat's report. A
+//! report never infers its dispatch. Transport preserves an accepted
+//! edition-1 play and never admits its refused receipts; a new dispatch names
+//! edition 2 to admit pause.
+//!
+//! # Certified widening
+//!
+//! `Arena::new` constructs all channels of each compiled edition: edition 1
+//! always, edition 2 only with the `edition-2` feature. The library enables no
+//! feature by default. `Arena::session(edition, channel)` refuses editions
+//! absent from that catalogue.
+//!
+//! `Arena::transport(source, target, play)` selects the play's channel in both
+//! editions, derives its subtype relation, exports native codes and payload
+//! bindings, then asks the kernel to form the certificate independently. No
+//! certificate is stored or shipped. Transport checks the bound endpoints and
+//! replays both source and destination, preserving receipt digests and
+//! endpoint moves. Incomplete plays and reverse narrowing are refused. The
+//! decision-widening fixture adds a `defer` label and transports complete
+//! land, rework and abandon plays; `defer` is not a production receipt.
+//!
+//! # Decisions
+//!
+//! A dispatch carries a numeric edition; its protocol is compiled into the
+//! arena. Replay never selects a local default. Content-addressed protocol
+//! artifacts would allow protocols to evolve as data but require a
+//! code-distribution boundary; they replace compiled editions only when that
+//! boundary is required. A peer-local replay override would make the same
+//! dispatch mean different protocols and is not an alternative.
+//!
+//! Editionless dispatches denote edition 1. An explicit unknown number
+//! remains unknown, including zero. Refused ordering, early endings and pauses
+//! in those records stay refused.
+//!
+//! Use `gandr-core-session` for syntax, duality, relation search and replay,
+//! and `gandr-kernel-core` for certification. A hand-written receipt automaton
+//! would repeat the same protocol decisions in a second implementation without
+//! checking their relationship. The independent kernel is preferable to
+//! treating the session engine's proposed evidence as a certificate. Revisit
+//! this choice only if the kernel cannot express a required protocol change or
+//! measured replay costs prevent use on real records.
+//!
+//! The arena precedes the record category: it knows only endpoint moves and
+//! opaque receipt digests, while the record plane adapts concrete signed
+//! receipts to it. Putting concrete record types in this crate would create a
+//! dependency cycle.
+//!
+//! The upstream monitor accepts complete slices rather than resumable
+//! cursors. Recording a channel therefore replays its prefixes, with quadratic
+//! total work in its endpoint moves. The fold owns one slot and decision play
+//! per dispatch, one judge play per verdict, and one runner play per runner
+//! and dispatch; one checked arena serves the process. A resumable upstream
+//! monitor is the reversal condition for prefix replay. A second local state
+//! machine would duplicate protocol decisions.
+//!
+//! # Specification and evidence
+//!
+//! | Obligation | Witness |
+//! | ---------- | ------- |
+//! | Required report, repeated reports, named order refusal and rollback | `tests::named_refusal_preserves_the_prefix` |
+//! | Pause width, independent certification, unchanged transported digests and rejected reverse use | `tests::pause_is_certified_and_old_runs_transport` |
+//! | Judge, runner and decision protocols and their duals | `tests::task_channels_replay_with_their_duals` |
+//! | Missing predecessors, consumed choices and refusal rollback | `tests::task_channels_refuse_missing_and_repeated_moves` |
+//! | Decision-label widening, complete-play transport and rejected narrowing | `tests::decision_label_widening_transports_complete_plays` |
+//! | Second grading, decision and landing, causally and concurrently | `domhringr-record-tree`: `fold::tests::task_channels_refuse_second_choices` |
+//! | Operator processes land a met change and rework an unmet change | `domhringr`: `operator::tests::the_operator_loop_lands_a_met_change_and_reworks_an_unmet_one` |
+//! | Mixed editions, unknown names and transport failures in one signed DAG | `domhringr-record-tree`: `fold::tests::dispatch_editions_govern_each_attempt` |
+//! | Editionless signed receipts retain edition 1 and its order refusals | `domhringr-record-tree`: `fold::tests::editionless_dispatches_keep_edition_one_refusals` |
+//! | Replay does not rewrite the durable record | `domhringr-record-tree`: `store::tests::protocol_editions_replay_one_unchanged_record` |
+//! | Operator and seat processes replay both editions and name a post-end report | `domhringr-surface-peer`: `seat::tests::two_binaries_replay_named_editions_and_transport` |
 
 #![cfg_attr(
     dylint_lib = "quenchant_dylints",

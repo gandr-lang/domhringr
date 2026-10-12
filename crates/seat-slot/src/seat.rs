@@ -14,6 +14,102 @@
 //! evidence store and named by its value manifest, the first line as the
 //! summary. On start the seat resumes every dispatch it holds unreported in
 //! the trees its store holds, so a seat restarted mid-work finishes it.
+//!
+//! # Presence
+//!
+//! **A seat presents itself in the task's book when the book lacks it, during
+//! the wake.** An operator reaches the seat at an endpoint it names by hand
+//! once. After that, the task's book names where the seat is, for the next
+//! dispatch, a replay, or another operator. A seat already in the book is not
+//! presented again, so a wake commits nothing when nothing changed.
+//!
+//! - presenting on every wake: a commit per wake for an endpoint that has not
+//!   moved.
+//! - presenting at `serve` start in every tree the store holds: commits in
+//!   trees whose dispatch went to another seat.
+//!
+//! Reversal: a seat whose addresses change between wakes. It then presents
+//! again whenever its endpoint differs from its book entry.
+//!
+//! # The command surface
+//!
+//! **A seat acts by running a program, and its standard output is the report.**
+//! The seat commits the whole output to its evidence store and the report names
+//! it by the value manifest's identity, with its first line as the summary. A
+//! report is committed only when the program exits 0 with a first line that is
+//! a summary and the output is kept, so the name in the record always resolves
+//! on the seat. The program runs on Tokio's blocking pool through
+//! `std::process`, and the output is kept on the same pool.
+//!
+//! - the BLAKE3 hash of the output, its bytes not kept: a report that names
+//!   what was produced and that no reader can open.
+//! - Tokio's `process` feature: an async child for one blocking wait per act,
+//!   at the cost of a feature and its signal handling.
+//! - a long-running harness over a pipe: the harness shim. A program per act is
+//!   enough to act and report, and the shim replaces it.
+//!
+//! Reversal: the harness shim, which drives a persistent agent session instead
+//! of one program per act.
+//!
+//! **A seat answers fetches of the evidence it keeps, under its own protocol.**
+//! A connection under `domhringr/evidence/0` is answered from the seat's
+//! evidence store as the evidence plane's transport in
+//! `domhringr-record-evidence` states, beside wakes and subduction's sync, and
+//! told as `Served` or `Unserved`. An operator verifying, grading or landing a
+//! report fetches the output it names from the seat through the task's book; a
+//! seat answers whoever asks, as the record it serves is already shared with
+//! every member.
+//!
+//! - a fetch admitted only from members of a task holding the report: the seat
+//!   would fold every tree it holds to answer one digest, and the digest is
+//!   unguessable to anyone not shown the record.
+//!
+//! Reversal: evidence a member must not read, which needs the fetch admitted
+//! against the trees whose receipts name it.
+//!
+//! **A failed act leaves the slot held and the report awaited.** A program that
+//! cannot start, exits non-zero, or prints no summary is reported as
+//! `Unreported` with its reason, and nothing is committed. The next wake for
+//! the same dispatch, or the seat's next start, acts again. Only a retirement
+//! or a handoff moves the slot.
+//!
+//! - committing a retirement on failure: a transient fault would give the slot
+//!   up, and the operator would have to dispatch again.
+//!
+//! Reversal: a failure kind the operator must see in the record, such as a
+//! brief the program refuses. It needs a receipt of its own.
+//!
+//! **The report ends the seat's part; the operator verifies, grades, decides
+//! and lands from it.** After a report the operator's receipts follow on the
+//! same dispatch: verifications, gradings, a decision to land, rework or
+//! abandon, and a landing (`domhringr-record-tree`). None of them needs the
+//! seat, which is woken again only by a new dispatch, as a rework calls for.
+//! The seat records its program's summary as printed and reads nothing into it;
+//! an operator that lands code reads the change from it by its own convention
+//! (`domhringr`, the driver).
+//!
+//! - the seat committing the change's branch and commit in a field of its own:
+//!   the seat's record would hold a version-control fact that only an operator
+//!   landing code reads.
+//!
+//! Reversal: a second consumer of the change, beside the operator that lands
+//! it, which needs the change in a field the fold can check.
+//!
+//! # Resuming
+//!
+//! **On start a seat acts again on every dispatch it holds unreported, in every
+//! tree its store holds.** The store is the seat's only state. A seat killed
+//! while acting resumes the act, and a seat whose act failed retries it when it
+//! next starts. While an act runs, a wake for the same dispatch replies `woken`
+//! and starts no second act. An act interrupted by a kill runs its program
+//! again on resume, so a program sees each dispatch at least once.
+//!
+//! - a journal of acts in progress beside the store: a second record for what
+//!   the task's tree already says. A dispatch held and awaited is exactly a
+//!   dispatch to act on.
+//!
+//! Reversal: a program whose effects must not repeat. It then needs an act
+//! receipt committed before it runs.
 
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;

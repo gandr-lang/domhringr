@@ -17,6 +17,28 @@
 //! closure over the chunks received and those its own store holds. Only a
 //! whole closure is kept and its content returned: a chunk neither side holds
 //! is refused by its digest before any byte reaches a reader.
+//!
+//! # Transport
+//!
+//! - [`iroh-blobs`](https://docs.rs/iroh-blobs): each chunk image a blob and a
+//!   value the hash sequence of its closure, fetched by its request protocol.
+//!   Verified streaming, byte ranges and several providers come with it, at the
+//!   cost of a second identity for every value beside the manifest digest, a
+//!   blob store beside this one, and a dependency whose current release line
+//!   its README marks as not yet production quality.
+//! - the value in the tree's sync: evidence back in the record, which the plane
+//!   exists to keep out.
+//! - a request per chunk: a round trip per chunk to learn the closure the
+//!   manifest already lists.
+//!
+//! Reversal: a value that must be fetched in ranges, resumed part-way or drawn
+//! from several holders at once, which iroh-blobs serves; and when re-fetching
+//! a value whose chunks the reader mostly holds costs too much, the reader
+//! names the chunks it holds in its request.
+//!
+//! The value plane is the identity and the chunk form; the transport is this
+//! chunk-fetch stream under its own ALPN, with iroh-blobs the alternative on
+//! the reversal above.
 
 use core::time::Duration;
 

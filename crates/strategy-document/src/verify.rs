@@ -8,6 +8,31 @@
 //! exit code, or the signal that ended it ([`Status`]) — never a pass or a
 //! fail: what a code means is the verifier's to say. The caller commits the
 //! output as evidence and records its name.
+//!
+//! # Verifiers
+//!
+//! **A verifier runs in the task's state directory, and its output is kept as
+//! evidence.** It runs with its standard input closed and its standard output
+//! and standard error in one pipe, so the output is everything it wrote in the
+//! order written. The caller commits that output to the evidence plane
+//! (`domhringr-record-evidence`); the receipt holds the manifest digest that
+//! names it and the status, `exit <code>` or `signal <number>`. A failing
+//! status is recorded, never hidden behind an error, and the output any reader
+//! of the record fetches by the receipt's name is the output the verifier
+//! wrote.
+//!
+//! - two outputs, one per stream: interleaving lost, and a diagnostic read
+//!   apart from the output it explains.
+//! - the output's bytes in the receipt: every receipt sized by its noisiest
+//!   verifier.
+//! - a hash of the output, its bytes not kept: a verification that records what
+//!   was produced and cannot show it again.
+//! - Tokio's `process`: an async child for one blocking wait per verifier, at
+//!   the cost of a feature and its signal handling; the caller runs `run` on a
+//!   blocking thread.
+//!
+//! Reversal: a verifier whose output is too large to hold in memory, which
+//! needs the run to stream its output into the value plane as it is read.
 
 use alloc::string::String;
 use alloc::vec::Vec;

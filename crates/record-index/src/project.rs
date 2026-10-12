@@ -1,4 +1,17 @@
 //! Task bindings, their typed standings, and nested index identities.
+//!
+//! A project keys direct `tasks/<name>` tree bindings by `0x01 || name`. A
+//! held entry contains the bound tree, task heads, complete typed `Current`,
+//! attempt count, dialogue manifest identity and each refused commit with its
+//! displayed reason, in fold order. A task without a held Open is explicitly
+//! `unheld`. The `0x00 || kind` family names its nested provenance index.
+//!
+//! Standings are exactly the states reachable in the receipt fold —
+//! undispatched, dispatched, reported, verified, graded, decided and landed,
+//! with paused included only when the fold reaches it — while retirement
+//! before a report is a refused play, never a standing. Routing for sync may
+//! fold task books; listing and refresh reuse unchanged task entries,
+//! including refusals, without folding their trees again.
 
 use alloc::collections::BTreeMap;
 use core::fmt;

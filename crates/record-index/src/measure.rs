@@ -1,4 +1,18 @@
 //! Tree extents and complete single-key answer sizes.
+//!
+//! `index measure` reports record count, root children, root bytes, largest
+//! leaf bytes and the largest complete single-key answer, including
+//! membership and absence framing. An internal root at least as large as its
+//! largest leaf prints `levels open`; a tree consisting of one leaf does not
+//! request another level. The pinned measurements in this module's tests use
+//! the fixture's original move values and full task-entry standings under
+//! each compiled edition, at powers of two from 16 through 4,096 records and
+//! at both sides of each root/leaf crossing.
+//!
+//! The provenance crossing is 1,204 records in either edition: root 8,639
+//! bytes, largest leaf 8,552 bytes and largest complete single-key proof
+//! 23,977 bytes. Project crossings with refusal-bearing entries are 6,143
+//! records in edition 1 and 6,189 in edition 2.
 
 use anodized::spec;
 use gandr_storage_records::DecodeWork;
