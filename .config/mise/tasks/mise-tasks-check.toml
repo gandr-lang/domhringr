@@ -261,3 +261,20 @@ run = "treefmt --ci"
 ["check:lockfile"]
 description = "Check npm-backed pins install from the committed lockfile"
 run = "mise install --locked npm:oxfmt npm:@commitlint/cli"
+
+# The enforcing suite, instrumented into target/coverage so it never shares
+# the cached enforcing state. The edition-1 peer is the binary the suite
+# spawns; it is not part of the instrumented graph.
+["check:coverage"]
+description = "Enforcing line coverage of the workspace, as coverage.lcov"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+root="{{ config_root }}"
+export NEXTEST_PROFILE=ci-enforcing
+cargo build --package domhringr-surface-peer --bin domhringr-peer --no-default-features --locked
+cp "$root/target/debug/domhringr-peer" "$root/target/debug/domhringr-peer-edition-one"
+export DOMHRINGR_EDITION_ONE="$root/target/debug/domhringr-peer-edition-one"
+RUSTFLAGS="--cfg anodized_panic" CARGO_TARGET_DIR="$root/target/coverage" \
+  cargo llvm-cov nextest --workspace --locked --lcov --output-path "$root/coverage.lcov"
+'''
