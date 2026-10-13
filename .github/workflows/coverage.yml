@@ -1,0 +1,162 @@
+# <critical>
+# MUST preserve anchor-first CI: maximal sharing, no copied orchestration.
+# New functionality MUST reuse template anchors or add anchors for likely reuse.
+# MUST parameterize differences; performance exceptions require measured evidence.
+# Share exceptional logic through actions; preserve parallelism, caches, and gates.
+# </critical>
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Off the merge queue. The latest main commit wins; a cancelled run
+# blocks nothing the queue measures.
+concurrency:
+  group: coverage-main
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
+  MISE_CARGO_BINSTALL_QUICKINSTALL: "true"
+  MISE_CARGO_BINSTALL_NATIVE: "true"
+  # Must match ci.yml and the image. The image checks the list at build time.
+  MISE_DISABLE_TOOLS: "github:orhun/git-cliff,github:max-sixty/worktrunk,github:j178/prek,github:nektos/act"
+  # Empty selects the bare runner. A set value selects the pin-file tag,
+  # and only a published tag is used: this workflow does not publish.
+  DOMHRINGR_CI_IMAGE: ${{ vars.DOMHRINGR_CI_IMAGE }}
+  CI_IMAGE_NAME: ghcr.io/gandr-lang/domhringr-ci
+
+jobs:
+  # Definitions only: aliases run in each consuming job's context.
+  template:
+    if: false
+    runs-on: &linux ubuntu-latest
+    permissions: &image-read-permissions
+      contents: read
+      packages: read
+    steps:
+      - &git-checkout
+        name: git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - &trust-workspace
+        name: trust the workspace for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # The value plane is a path dependency into vendor/gandr. act
+      # materialises the sibling in its clone and copies it with the tree.
+      - &read-sibling-pins
+        id: siblings
+        name: read the sibling pins
+        if: ${{ !env.ACT }}
+        shell: bash
+        run: |
+          gandr=$(sed -n '/^\[workspace\.metadata\.siblings\]$/,/^\[/s/^gandr = "\([0-9a-f]*\)"$/\1/p' Cargo.toml)
+          test -n "$gandr"
+          echo "gandr=$gandr" >> "$GITHUB_OUTPUT"
+      - &checkout-gandr
+        name: check out the gandr sibling
+        if: ${{ !env.ACT }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gandr-lang/gandr
+          ref: ${{ steps.siblings.outputs.gandr }}
+          path: vendor/gandr
+          persist-credentials: false
+      - &pin-tag
+        id: pin_tag
+        name: compute the pin-file image tag
+        if: ${{ env.DOMHRINGR_CI_IMAGE != '' }}
+        shell: bash
+        run: .github/docker/image-tag.sh >> "$GITHUB_OUTPUT"
+      - &registry-login
+        name: log in to GHCR
+        if: ${{ steps.pin_tag.outputs.tag != '' }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The ci.yml lookup, parameterized by CI_IMAGE_NAME. A missing tag
+      # selects the bare runner; this workflow does not build the image.
+      - &lookup-image
+        id: lookup
+        name: look up the published image
+        if: ${{ steps.pin_tag.outputs.tag != '' }}
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ steps.pin_tag.outputs.tag }}
+        run: |
+          if error=$(docker manifest inspect "${CI_IMAGE_NAME}:${IMAGE_TAG}" 2>&1 > /dev/null); then
+            echo found=true >> "$GITHUB_OUTPUT"
+          elif [[ $error == *"manifest unknown"* ]]; then
+            echo found=false >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n' "$error" >&2
+            exit 1
+          fi
+      - &setup-rust
+        name: setup rust
+        uses: ./.github/actions/setup-rust # zizmor: ignore[self-repository]
+        with:
+          install-toolchain: ${{ needs.ci-image-ref.outputs.ref == '' }}
+          cache-save: false
+      - &install-policy-tools
+        name: install mise-managed policy tools
+        if: ${{ needs.ci-image-ref.outputs.ref == '' }}
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.10.3
+          cache: true
+          cache_key: mise-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml', 'mise.lock', 'rust-toolchain.toml') }}
+          cache_save: false
+      - &measure-coverage
+        name: measure enforcing coverage
+        run: mise run check:coverage
+      - &upload-coverage
+        name: upload coverage
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.lcov
+          flags: enforcing
+          fail_ci_if_error: true
+          disable_search: true
+
+  ci-image-ref:
+    name: resolve the CI image reference
+    runs-on: *linux
+    permissions: *image-read-permissions
+    outputs:
+      ref: ${{ steps.lookup.outputs.found == 'true' && format('ghcr.io/gandr-lang/domhringr-ci:{0}', steps.pin_tag.outputs.tag) || '' }}
+    steps:
+      - *git-checkout
+      - *pin-tag
+      - *registry-login
+      - *lookup-image
+
+  coverage:
+    name: measure and upload coverage
+    needs: ci-image-ref
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: *linux
+    permissions: *image-read-permissions
+    container: ${{ needs.ci-image-ref.outputs.ref }} # zizmor: ignore[unpinned-images]
+    timeout-minutes: 45
+    steps:
+      - *git-checkout
+      - *trust-workspace
+      - *install-policy-tools
+      - *read-sibling-pins
+      - *checkout-gandr
+      - *setup-rust
+      - *measure-coverage
+      - *upload-coverage
