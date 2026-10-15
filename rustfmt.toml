@@ -17,7 +17,10 @@ imports_granularity = "Item"
 imports_indent = "Block"
 imports_layout = "Vertical"
 # indent_style = "Visual"
-match_arm_leading_pipes = "Always"
+# A leading `|` lowers an arm to a one-alternative or-pattern, which
+# Clippy's wildcard lints do not look inside: the pipe would hide every
+# wildcard arm from the wall.
+match_arm_leading_pipes = "Never"
 match_block_trailing_comma = true
 newline_style = "Unix"
 normalize_comments = true

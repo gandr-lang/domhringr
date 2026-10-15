@@ -1693,23 +1693,23 @@ impl CanonicalValue for Receipt
         sink.bytes(TokenBytes::from(self.tree.key().as_bytes().as_slice()))?;
         sink.bytes(TokenBytes::from(self.operation.0.as_slice()))?;
         match self.kind {
-            | Kind::Indexed { index } => {
+            Kind::Indexed { index } => {
                 sink.open(ConstructorTag::from(INDEXED))?;
                 sink.bytes(TokenBytes::from(index.as_ref()))?;
             },
-            | Kind::Open { proof } => {
+            Kind::Open { proof } => {
                 sink.open(ConstructorTag::from(OPEN))?;
                 sink.bytes(TokenBytes::from(proof.0.to_bytes().as_slice()))?;
             },
-            | Kind::Grant { to } => {
+            Kind::Grant { to } => {
                 sink.open(ConstructorTag::from(GRANT))?;
                 sink.bytes(TokenBytes::from(to.peer_id().as_bytes().as_slice()))?;
             },
-            | Kind::Note { ref text } => {
+            Kind::Note { ref text } => {
                 sink.open(ConstructorTag::from(NOTE))?;
                 sink.bytes(TokenBytes::from(text.as_bytes()))?;
             },
-            | Kind::Bind {
+            Kind::Bind {
                 ref path,
                 ref target,
             } => {
@@ -1718,18 +1718,18 @@ impl CanonicalValue for Receipt
                 sink.bytes(TokenBytes::from(path.as_bytes()))?;
                 target.emit_tokens(sink)?;
             },
-            | Kind::Claim { ref domain } => {
+            Kind::Claim { ref domain } => {
                 sink.open(ConstructorTag::from(CLAIM))?;
                 let domain: &str = domain.as_ref();
                 sink.bytes(TokenBytes::from(domain.as_bytes()))?;
             },
-            | Kind::Introduce { tree, ref label } => {
+            Kind::Introduce { tree, ref label } => {
                 sink.open(ConstructorTag::from(INTRODUCE))?;
                 sink.bytes(TokenBytes::from(tree.key().as_bytes().as_slice()))?;
                 let label: &str = label.as_ref();
                 sink.bytes(TokenBytes::from(label.as_bytes()))?;
             },
-            | Kind::Present {
+            Kind::Present {
                 ref endpoint,
                 proof,
             } => {
@@ -1737,11 +1737,11 @@ impl CanonicalValue for Receipt
                 endpoint.emit_tokens(sink)?;
                 sink.bytes(TokenBytes::from(proof.0.to_bytes().as_slice()))?;
             },
-            | Kind::Withdraw { of } => {
+            Kind::Withdraw { of } => {
                 sink.open(ConstructorTag::from(WITHDRAW))?;
                 sink.bytes(TokenBytes::from(of.peer_id().as_bytes().as_slice()))?;
             },
-            | Kind::Dispatch {
+            Kind::Dispatch {
                 seat,
                 edition,
                 ref brief,
@@ -1751,7 +1751,7 @@ impl CanonicalValue for Receipt
                 brief.emit_tokens(sink)?;
                 sink.word(CanonicalWord::from(u64::from(edition)))?;
             },
-            | Kind::Report {
+            Kind::Report {
                 dispatch,
                 content,
                 ref summary,
@@ -1762,20 +1762,20 @@ impl CanonicalValue for Receipt
                 let summary: &str = summary.as_ref();
                 sink.bytes(TokenBytes::from(summary.as_bytes()))?;
             },
-            | Kind::Handoff { dispatch, to } => {
+            Kind::Handoff { dispatch, to } => {
                 sink.open(ConstructorTag::from(HANDOFF))?;
                 sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
                 sink.bytes(TokenBytes::from(to.peer_id().as_bytes().as_slice()))?;
             },
-            | Kind::Retire { dispatch } => {
+            Kind::Retire { dispatch } => {
                 sink.open(ConstructorTag::from(RETIRE))?;
                 sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
             },
-            | Kind::Pause { dispatch } => {
+            Kind::Pause { dispatch } => {
                 sink.open(ConstructorTag::from(PAUSE))?;
                 sink.bytes(TokenBytes::from(dispatch.as_bytes().as_slice()))?;
             },
-            | Kind::Verdict {
+            Kind::Verdict {
                 dispatch,
                 judge,
                 rubric,
@@ -1798,7 +1798,7 @@ impl CanonicalValue for Receipt
                     ruling.emit_tokens(sink)?;
                 }
             },
-            | Kind::Verified {
+            Kind::Verified {
                 dispatch,
                 runner,
                 playbook,
@@ -1814,7 +1814,7 @@ impl CanonicalValue for Receipt
                 sink.bytes(TokenBytes::from(output.as_ref()))?;
                 status.emit_tokens(sink)?;
             },
-            | Kind::Graded {
+            Kind::Graded {
                 verdict,
                 ref grades,
                 composed,
@@ -1832,7 +1832,7 @@ impl CanonicalValue for Receipt
                 }
                 composed.emit_tokens(sink)?;
             },
-            | Kind::Decide {
+            Kind::Decide {
                 dispatch,
                 operator,
                 ref decision,
@@ -1842,7 +1842,7 @@ impl CanonicalValue for Receipt
                 sink.bytes(TokenBytes::from(operator.peer_id().as_bytes().as_slice()))?;
                 decision.emit_tokens(sink)?;
             },
-            | Kind::Landed { decided, merge } => {
+            Kind::Landed { decided, merge } => {
                 sink.open(ConstructorTag::from(LANDED))?;
                 sink.bytes(TokenBytes::from(decided.as_bytes().as_slice()))?;
                 sink.bytes(TokenBytes::from(merge.as_ref()))?;
@@ -1903,7 +1903,7 @@ impl CanonicalValue for Receipt
             <[u8; 16]>::try_from(operation).map_err(|_wrong_length| receipt.refused())?;
         let opened = Opened::read(reader)?;
         let kind = match u8::from(opened.tag) {
-            | INDEXED => {
+            INDEXED => {
                 let bytes = reader.read_bytes()?;
                 let bytes = <[u8; 32]>::try_from(<&[u8]>::from(bytes))
                     .map_err(|_wrong_length| opened.refused())?;
@@ -1911,7 +1911,7 @@ impl CanonicalValue for Receipt
                     index: IndexDigest::from(bytes),
                 }
             },
-            | OPEN => {
+            OPEN => {
                 let proof = <&[u8]>::from(reader.read_bytes()?);
                 let proof =
                     <[u8; 64]>::try_from(proof).map_err(|_wrong_length| opened.refused())?;
@@ -1919,28 +1919,28 @@ impl CanonicalValue for Receipt
                     proof: OpenProof(iroh::Signature::from_bytes(&proof)),
                 }
             },
-            | GRANT => {
+            GRANT => {
                 let to = <&[u8]>::from(reader.read_bytes()?);
                 let to = <[u8; 32]>::try_from(to).map_err(|_wrong_length| opened.refused())?;
                 Kind::Grant {
                     to: PeerKey::new(PeerId::new(to)),
                 }
             },
-            | NOTE => {
+            NOTE => {
                 let text = <&[u8]>::from(reader.read_bytes()?);
                 let text = core::str::from_utf8(text).map_err(|_not_utf8| opened.refused())?;
                 Kind::Note { text: text.into() }
             },
-            | BIND => {
+            BIND => {
                 let path = opened.path(reader)?;
                 let target = Target::decode_tokens(reader)?;
                 Kind::Bind { path, target }
             },
-            | CLAIM => {
+            CLAIM => {
                 let domain = opened.domain(reader)?;
                 Kind::Claim { domain }
             },
-            | INTRODUCE => {
+            INTRODUCE => {
                 let tree = opened.key(reader)?;
                 let label = opened.label(reader)?;
                 Kind::Introduce {
@@ -1948,7 +1948,7 @@ impl CanonicalValue for Receipt
                     label,
                 }
             },
-            | PRESENT => {
+            PRESENT => {
                 let endpoint = Endpoint::decode_tokens(reader)?;
                 let proof = <&[u8]>::from(reader.read_bytes()?);
                 let proof =
@@ -1958,25 +1958,25 @@ impl CanonicalValue for Receipt
                     proof: EndpointProof(iroh::Signature::from_bytes(&proof)),
                 }
             },
-            | WITHDRAW => {
+            WITHDRAW => {
                 let of = <&[u8]>::from(reader.read_bytes()?);
                 let of = <[u8; 32]>::try_from(of).map_err(|_wrong_length| opened.refused())?;
                 Kind::Withdraw {
                     of: PeerKey::new(PeerId::new(of)),
                 }
             },
-            | DISPATCH => {
+            DISPATCH => {
                 let seat = opened.peer(reader)?;
                 let brief = Brief::decode_tokens(reader)?;
                 // Only an absent field denotes edition 1; malformed fields fail.
                 let edition = match reader.read_word() {
-                    | Ok(word) => Edition::from(u64::from(word)),
-                    | Err(ValueError::UnexpectedToken {
+                    Ok(word) => Edition::from(u64::from(word)),
+                    Err(ValueError::UnexpectedToken {
                         expected: gandr_storage_values::TokenKind::Word,
                         found: gandr_storage_values::TokenKind::Close,
                         ..
                     }) => Edition::ONE,
-                    | Err(error) => return Err(error),
+                    Err(error) => return Err(error),
                 };
                 Kind::Dispatch {
                     seat,
@@ -1984,7 +1984,7 @@ impl CanonicalValue for Receipt
                     brief,
                 }
             },
-            | REPORT => {
+            REPORT => {
                 let dispatch = opened.commit(reader)?;
                 let content = opened.manifest(reader)?;
                 let summary = opened.summary(reader)?;
@@ -1994,20 +1994,20 @@ impl CanonicalValue for Receipt
                     summary,
                 }
             },
-            | HANDOFF => {
+            HANDOFF => {
                 let dispatch = opened.commit(reader)?;
                 let to = opened.peer(reader)?;
                 Kind::Handoff { dispatch, to }
             },
-            | RETIRE => {
+            RETIRE => {
                 let dispatch = opened.commit(reader)?;
                 Kind::Retire { dispatch }
             },
-            | PAUSE => {
+            PAUSE => {
                 let dispatch = opened.commit(reader)?;
                 Kind::Pause { dispatch }
             },
-            | VERDICT => {
+            VERDICT => {
                 let dispatch = opened.commit(reader)?;
                 let judge = opened.peer(reader)?;
                 let rubric = opened.content(reader)?;
@@ -2027,7 +2027,7 @@ impl CanonicalValue for Receipt
                     answers,
                 }
             },
-            | VERIFIED => {
+            VERIFIED => {
                 let dispatch = opened.commit(reader)?;
                 let runner = opened.peer(reader)?;
                 let playbook = opened.content(reader)?;
@@ -2043,7 +2043,7 @@ impl CanonicalValue for Receipt
                     status,
                 }
             },
-            | GRADED => {
+            GRADED => {
                 let verdict = opened.commit(reader)?;
                 let count = u64::from(reader.read_word()?);
                 let mut grades = Vec::new();
@@ -2057,7 +2057,7 @@ impl CanonicalValue for Receipt
                     composed,
                 }
             },
-            | DECIDE => {
+            DECIDE => {
                 let dispatch = opened.commit(reader)?;
                 let operator = opened.peer(reader)?;
                 let decision = Decision::decode_tokens(reader)?;
@@ -2067,12 +2067,12 @@ impl CanonicalValue for Receipt
                     decision,
                 }
             },
-            | LANDED => {
+            LANDED => {
                 let decided = opened.commit(reader)?;
                 let merge = opened.revision(reader)?;
                 Kind::Landed { decided, merge }
             },
-            | _unknown => return Err(opened.refused()),
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         reader.read_close()?;
@@ -2111,17 +2111,17 @@ impl CanonicalValue for Target
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Anchor(ref anchor) => {
+            Self::Anchor(ref anchor) => {
                 sink.open(ConstructorTag::from(ANCHOR))?;
                 anchor.emit_tokens(sink)?;
             },
-            | Self::Endpoint(endpoint) => {
+            Self::Endpoint(endpoint) => {
                 sink.open(ConstructorTag::from(ENDPOINT))?;
                 sink.bytes(TokenBytes::from(
                     endpoint.endpoint_id().as_bytes().as_slice(),
                 ))?;
             },
-            | Self::Datum(ref datum) => {
+            Self::Datum(ref datum) => {
                 sink.open(ConstructorTag::from(DATUM))?;
                 sink.bytes(TokenBytes::from(datum.as_bytes()))?;
             },
@@ -2157,20 +2157,20 @@ impl CanonicalValue for Target
     {
         let opened = Opened::read(reader)?;
         let target = match u8::from(opened.tag) {
-            | ANCHOR => {
+            ANCHOR => {
                 let anchor = Anchor::decode_tokens(reader)?;
                 Self::Anchor(anchor)
             },
-            | ENDPOINT => {
+            ENDPOINT => {
                 let key = opened.key(reader)?;
                 Self::Endpoint(EndpointKey::new(key))
             },
-            | DATUM => {
+            DATUM => {
                 let datum = <&[u8]>::from(reader.read_bytes()?);
                 let datum = core::str::from_utf8(datum).map_err(|_not_utf8| opened.refused())?;
                 Self::Datum(datum.into())
             },
-            | _unknown => return Err(opened.refused()),
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(target)
@@ -2207,11 +2207,11 @@ impl CanonicalValue for Brief
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Anchor(ref anchor) => {
+            Self::Anchor(ref anchor) => {
                 sink.open(ConstructorTag::from(BRIEF_ANCHOR))?;
                 anchor.emit_tokens(sink)?;
             },
-            | Self::Content(content) => {
+            Self::Content(content) => {
                 sink.open(ConstructorTag::from(BRIEF_CONTENT))?;
                 sink.bytes(TokenBytes::from(content.digest().as_bytes().as_slice()))?;
             },
@@ -2246,15 +2246,15 @@ impl CanonicalValue for Brief
     {
         let opened = Opened::read(reader)?;
         let brief = match u8::from(opened.tag) {
-            | BRIEF_ANCHOR => {
+            BRIEF_ANCHOR => {
                 let anchor = Anchor::decode_tokens(reader)?;
                 Self::Anchor(anchor)
             },
-            | BRIEF_CONTENT => {
+            BRIEF_CONTENT => {
                 let content = opened.content(reader)?;
                 Self::Content(content)
             },
-            | _unknown => return Err(opened.refused()),
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(brief)
@@ -2292,11 +2292,11 @@ impl CanonicalValue for Anchor
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Tree(ref authority) => {
+            Self::Tree(ref authority) => {
                 sink.open(ConstructorTag::from(TREE))?;
                 authority.emit_tokens(sink)?;
             },
-            | Self::Path {
+            Self::Path {
                 ref authority,
                 ref path,
             } => {
@@ -2305,7 +2305,7 @@ impl CanonicalValue for Anchor
                 let path: &str = path.as_ref();
                 sink.bytes(TokenBytes::from(path.as_bytes()))?;
             },
-            | Self::Commit {
+            Self::Commit {
                 ref authority,
                 commit,
             } => {
@@ -2347,21 +2347,21 @@ impl CanonicalValue for Anchor
     {
         let opened = Opened::read(reader)?;
         let anchor = match u8::from(opened.tag) {
-            | TREE => {
+            TREE => {
                 let authority = Authority::decode_tokens(reader)?;
                 Self::Tree(authority)
             },
-            | PATH => {
+            PATH => {
                 let authority = Authority::decode_tokens(reader)?;
                 let path = opened.path(reader)?;
                 Self::Path { authority, path }
             },
-            | COMMIT => {
+            COMMIT => {
                 let authority = Authority::decode_tokens(reader)?;
                 let commit = opened.commit(reader)?;
                 Self::Commit { authority, commit }
             },
-            | _unknown => return Err(opened.refused()),
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(anchor)
@@ -2399,16 +2399,16 @@ impl CanonicalValue for Authority
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Key(tree) => {
+            Self::Key(tree) => {
                 sink.open(ConstructorTag::from(KEY))?;
                 sink.bytes(TokenBytes::from(tree.key().as_bytes().as_slice()))?;
             },
-            | Self::Domain(ref domain) => {
+            Self::Domain(ref domain) => {
                 sink.open(ConstructorTag::from(DOMAIN))?;
                 let domain: &str = domain.as_ref();
                 sink.bytes(TokenBytes::from(domain.as_bytes()))?;
             },
-            | Self::Label(ref label) => {
+            Self::Label(ref label) => {
                 sink.open(ConstructorTag::from(LABEL))?;
                 let label: &str = label.as_ref();
                 sink.bytes(TokenBytes::from(label.as_bytes()))?;
@@ -2445,19 +2445,19 @@ impl CanonicalValue for Authority
     {
         let opened = Opened::read(reader)?;
         let authority = match u8::from(opened.tag) {
-            | KEY => {
+            KEY => {
                 let key = opened.key(reader)?;
                 Self::Key(TreeId::new(key))
             },
-            | DOMAIN => {
+            DOMAIN => {
                 let domain = opened.domain(reader)?;
                 Self::Domain(domain)
             },
-            | LABEL => {
+            LABEL => {
                 let label = opened.label(reader)?;
                 Self::Label(label)
             },
-            | _unknown => return Err(opened.refused()),
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(authority)
@@ -2589,15 +2589,15 @@ impl CanonicalValue for Address
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Direct(direct) => {
+            Self::Direct(direct) => {
                 sink.open(ConstructorTag::from(DIRECT))?;
                 match direct.ip() {
-                    | IpAddr::V4(ip) => sink.bytes(TokenBytes::from(ip.octets().as_slice()))?,
-                    | IpAddr::V6(ip) => sink.bytes(TokenBytes::from(ip.octets().as_slice()))?,
+                    IpAddr::V4(ip) => sink.bytes(TokenBytes::from(ip.octets().as_slice()))?,
+                    IpAddr::V6(ip) => sink.bytes(TokenBytes::from(ip.octets().as_slice()))?,
                 }
                 sink.word(CanonicalWord::from(u64::from(direct.port())))?;
             },
-            | Self::Relay(ref url) => {
+            Self::Relay(ref url) => {
                 sink.open(ConstructorTag::from(RELAY))?;
                 sink.bytes(TokenBytes::from(url.as_str().as_bytes()))?;
             },
@@ -2634,7 +2634,7 @@ impl CanonicalValue for Address
     {
         let opened = Opened::read(reader)?;
         let address = match u8::from(opened.tag) {
-            | DIRECT => {
+            DIRECT => {
                 let ip = <&[u8]>::from(reader.read_bytes()?);
                 let ip = if let Ok(v4) = <[u8; 4]>::try_from(ip) {
                     IpAddr::V4(Ipv4Addr::from(v4))
@@ -2647,7 +2647,7 @@ impl CanonicalValue for Address
                 let port = u16::try_from(port).map_err(|_beyond_a_port| opened.refused())?;
                 Self::Direct(SocketAddr::new(ip, port))
             },
-            | RELAY => {
+            RELAY => {
                 let text = <&[u8]>::from(reader.read_bytes()?);
                 let text = core::str::from_utf8(text).map_err(|_not_utf8| opened.refused())?;
                 let url = text
@@ -2658,7 +2658,7 @@ impl CanonicalValue for Address
                 }
                 Self::relay(url).map_err(|_not_a_relay| opened.refused())?
             },
-            | _unknown => return Err(opened.refused()),
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(address)
@@ -2698,7 +2698,7 @@ impl CanonicalValue for Ruling
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Read(ref readout) => {
+            Self::Read(ref readout) => {
                 sink.open(ConstructorTag::from(READ))?;
                 let count =
                     u64::try_from(readout.probabilities().count()).map_err(|_too_many| {
@@ -2712,14 +2712,14 @@ impl CanonicalValue for Ruling
                 }
                 sink.word(CanonicalWord::from(f64::from(readout.outside()).to_bits()))?;
             },
-            | Self::Unread(reason) => {
+            Self::Unread(reason) => {
                 sink.open(ConstructorTag::from(UNREAD))?;
                 sink.open(ConstructorTag::from(match reason {
-                    | Unread::NoLetter => NO_LETTER,
-                    | Unread::Outside => OUTSIDE,
-                    | Unread::Tied => TIED,
-                    | Unread::Endpoint => FAILED,
-                    | Unread::Malformed => MALFORMED,
+                    Unread::NoLetter => NO_LETTER,
+                    Unread::Outside => OUTSIDE,
+                    Unread::Tied => TIED,
+                    Unread::Endpoint => FAILED,
+                    Unread::Malformed => MALFORMED,
                 }))?;
                 sink.close()?;
             },
@@ -2758,7 +2758,7 @@ impl CanonicalValue for Ruling
     {
         let opened = Opened::read(reader)?;
         let ruling = match u8::from(opened.tag) {
-            | READ => {
+            READ => {
                 let count = u64::from(reader.read_word()?);
                 let mut probabilities = Vec::new();
                 for _place in 0 .. count {
@@ -2769,20 +2769,20 @@ impl CanonicalValue for Ruling
                     Readout::new(probabilities, outside).map_err(|_no_readout| opened.refused())?;
                 Self::Read(readout)
             },
-            | UNREAD => {
+            UNREAD => {
                 let reason = Opened::read(reader)?;
                 let unread = match u8::from(reason.tag) {
-                    | NO_LETTER => Unread::NoLetter,
-                    | OUTSIDE => Unread::Outside,
-                    | TIED => Unread::Tied,
-                    | FAILED => Unread::Endpoint,
-                    | MALFORMED => Unread::Malformed,
-                    | _unknown => return Err(reason.refused()),
+                    NO_LETTER => Unread::NoLetter,
+                    OUTSIDE => Unread::Outside,
+                    TIED => Unread::Tied,
+                    FAILED => Unread::Endpoint,
+                    MALFORMED => Unread::Malformed,
+                    _unknown => return Err(reason.refused()),
                 };
                 reader.read_close()?;
                 Self::Unread(unread)
             },
-            | _unknown => return Err(opened.refused()),
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(ruling)
@@ -2820,8 +2820,8 @@ impl CanonicalValue for Status
         Sink: TokenSink + ?Sized,
     {
         let (tag, number) = match *self {
-            | Self::Exited(code) => (EXITED, i32::from(code)),
-            | Self::Signalled(signal) => (SIGNALLED, i32::from(signal)),
+            Self::Exited(code) => (EXITED, i32::from(code)),
+            Self::Signalled(signal) => (SIGNALLED, i32::from(signal)),
         };
         sink.open(ConstructorTag::from(tag))?;
         let bits = u32::from_le_bytes(number.to_le_bytes());
@@ -2855,9 +2855,9 @@ impl CanonicalValue for Status
     {
         let opened = Opened::read(reader)?;
         let status: fn(i32) -> Self = match u8::from(opened.tag) {
-            | EXITED => |number| Self::Exited(Code::from(number)),
-            | SIGNALLED => |number| Self::Signalled(Signal::from(number)),
-            | _unknown => return Err(opened.refused()),
+            EXITED => |number| Self::Exited(Code::from(number)),
+            SIGNALLED => |number| Self::Signalled(Signal::from(number)),
+            _unknown => return Err(opened.refused()),
         };
         let word = u64::from(reader.read_word()?);
         let bits = u32::try_from(word).map_err(|_beyond| opened.refused())?;
@@ -2895,10 +2895,10 @@ impl CanonicalValue for Grade
         Sink: TokenSink + ?Sized,
     {
         sink.open(ConstructorTag::from(match *self {
-            | Self::Met => MET,
-            | Self::Unmet => UNMET,
-            | Self::Undecided => UNDECIDED,
-            | Self::Refused => REFUSED,
+            Self::Met => MET,
+            Self::Unmet => UNMET,
+            Self::Undecided => UNDECIDED,
+            Self::Refused => REFUSED,
         }))?;
         sink.close()
     }
@@ -2928,11 +2928,11 @@ impl CanonicalValue for Grade
     {
         let opened = Opened::read(reader)?;
         let grade = match u8::from(opened.tag) {
-            | MET => Self::Met,
-            | UNMET => Self::Unmet,
-            | UNDECIDED => Self::Undecided,
-            | REFUSED => Self::Refused,
-            | _unknown => return Err(opened.refused()),
+            MET => Self::Met,
+            UNMET => Self::Unmet,
+            UNDECIDED => Self::Undecided,
+            REFUSED => Self::Refused,
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(grade)
@@ -2968,13 +2968,13 @@ impl CanonicalValue for Decision
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Land => sink.open(ConstructorTag::from(LAND))?,
-            | Self::Rework { ref reason } => {
+            Self::Land => sink.open(ConstructorTag::from(LAND))?,
+            Self::Rework { ref reason } => {
                 sink.open(ConstructorTag::from(REWORK))?;
                 let reason: &str = reason.as_ref();
                 sink.bytes(TokenBytes::from(reason.as_bytes()))?;
             },
-            | Self::Abandon => sink.open(ConstructorTag::from(ABANDON))?,
+            Self::Abandon => sink.open(ConstructorTag::from(ABANDON))?,
         }
         sink.close()
     }
@@ -3006,13 +3006,13 @@ impl CanonicalValue for Decision
     {
         let opened = Opened::read(reader)?;
         let decision = match u8::from(opened.tag) {
-            | LAND => Self::Land,
-            | REWORK => {
+            LAND => Self::Land,
+            REWORK => {
                 let reason = opened.summary(reader)?;
                 Self::Rework { reason }
             },
-            | ABANDON => Self::Abandon,
-            | _unknown => return Err(opened.refused()),
+            ABANDON => Self::Abandon,
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(decision)

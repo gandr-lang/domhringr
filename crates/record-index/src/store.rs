@@ -195,19 +195,19 @@ impl Store
     {
         let path = self.0.join("manifests").join(digest.to_string());
         let bytes = match std::fs::read(&path) {
-            | Ok(bytes) => bytes,
-            | Err(failure) if failure.kind() == io::ErrorKind::NotFound => {
+            Ok(bytes) => bytes,
+            Err(failure) if failure.kind() == io::ErrorKind::NotFound => {
                 return Err(StoreError::Unheld(digest));
             },
-            | Err(source) => return Err(failed(&path)(source)),
+            Err(source) => return Err(failed(&path)(source)),
         };
         let image = WireImage(bytes);
         let kind = match image.as_ref().get(27) {
-            | Some(&1) => IndexKind::Dialogue,
-            | Some(&2) => IndexKind::Project,
-            | Some(&3) => IndexKind::Provenance,
-            | Some(_) => return Err(ManifestError::Kind.into()),
-            | None => return Err(WireError::Truncated.into()),
+            Some(&1) => IndexKind::Dialogue,
+            Some(&2) => IndexKind::Project,
+            Some(&3) => IndexKind::Provenance,
+            Some(_) => return Err(ManifestError::Kind.into()),
+            None => return Err(WireError::Truncated.into()),
         };
         let manifest = Manifest::decode(&image, kind)?;
         let actual = manifest.identity()?;
@@ -250,13 +250,13 @@ impl Store
         let root = self.node(manifest.node(), &mut store, &mut work)?;
         let mut leaves = Vec::new();
         match root {
-            | DecodedNode::Leaf(leaf) => leaves.push(leaf),
-            | DecodedNode::Internal(internal) => {
+            DecodedNode::Leaf(leaf) => leaves.push(leaf),
+            DecodedNode::Internal(internal) => {
                 for child in internal.children() {
                     let node = self.node(child.identity(), &mut store, &mut work)?;
                     match node {
-                        | DecodedNode::Leaf(leaf) => leaves.push(leaf),
-                        | DecodedNode::Internal(_) => {
+                        DecodedNode::Leaf(leaf) => leaves.push(leaf),
+                        DecodedNode::Internal(_) => {
                             return Err(RecordTreeError::InvalidProofShape {
                                 context: "an index child must be a leaf".into(),
                             }
@@ -304,11 +304,11 @@ impl Store
     {
         let path = self.0.join("projects").join(project.to_string());
         let bytes = match std::fs::read(&path) {
-            | Ok(bytes) => bytes,
-            | Err(failure) if failure.kind() == io::ErrorKind::NotFound => {
+            Ok(bytes) => bytes,
+            Err(failure) if failure.kind() == io::ErrorKind::NotFound => {
                 return Ok(Cached::Absent);
             },
-            | Err(source) => return Err(failed(&path)(source)),
+            Err(source) => return Err(failed(&path)(source)),
         };
         let bytes: [u8; 32] = bytes.try_into().map_err(|_bytes| {
             failed(&path)(io::Error::new(
@@ -408,7 +408,7 @@ fn put(
 ) -> Result<(), StoreError>
 {
     match std::fs::File::open(path) {
-        | Ok(mut existing) => {
+        Ok(mut existing) => {
             let mut remaining = bytes.0;
             let mut buffer = [0_u8; 8192];
             loop {
@@ -429,8 +429,8 @@ fn put(
                 remaining = rest;
             }
         },
-        | Err(failure) if failure.kind() == io::ErrorKind::NotFound => {},
-        | Err(failure) => return Err(failed(path)(failure)),
+        Err(failure) if failure.kind() == io::ErrorKind::NotFound => {},
+        Err(failure) => return Err(failed(path)(failure)),
     }
     let mut temporary = tempfile::NamedTempFile::new_in(directory).map_err(failed(path))?;
     temporary.write_all(bytes.0).map_err(failed(path))?;

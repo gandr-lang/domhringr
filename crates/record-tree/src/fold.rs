@@ -234,8 +234,8 @@ impl View
     ) -> Resolution
     {
         match self.bindings.get(path) {
-            | Some(&(author, ref target)) => Resolution::Bound(author, target.clone()),
-            | None => Resolution::Unbound,
+            Some(&(author, ref target)) => Resolution::Bound(author, target.clone()),
+            None => Resolution::Unbound,
         }
     }
 
@@ -270,11 +270,11 @@ impl View
             };
         }
         match self.refused.iter().find(|&&(refused, _)| refused == commit) {
-            | Some(&(_, ref refusal)) => Resolution::Commit {
+            Some(&(_, ref refusal)) => Resolution::Commit {
                 id: commit,
                 verdict: Verdict::Refused(refusal.clone()),
             },
-            | None => Resolution::Unknown,
+            None => Resolution::Unknown,
         }
     }
 
@@ -612,24 +612,24 @@ impl fmt::Display for Refusal
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Protocol(ref reason) => return write!(f, "protocol {reason}"),
-            | Self::Arena(ref reason) => return write!(f, "arena {reason}"),
-            | Self::Undecodable(_) => "undecodable",
-            | Self::WrongTree { .. } => "wrong tree",
-            | Self::Duplicate { .. } => "duplicate operation",
-            | Self::NoAuthority => "no authority",
-            | Self::BadProof => "bad proof",
-            | Self::NotOwner => "not owner",
-            | Self::SecondOpen => "second open",
-            | Self::ForeignEndpoint => "foreign endpoint",
-            | Self::ForeignPresence => "foreign presence",
-            | Self::NotCurrent => "not current",
-            | Self::NotHolder => "not holder",
-            | Self::NotJudge => "not judge",
-            | Self::NotRunner => "not runner",
-            | Self::Misgraded => "misgraded",
-            | Self::Miscomposed => "miscomposed",
-            | Self::NotOperator => "not operator",
+            Self::Protocol(ref reason) => return write!(f, "protocol {reason}"),
+            Self::Arena(ref reason) => return write!(f, "arena {reason}"),
+            Self::Undecodable(_) => "undecodable",
+            Self::WrongTree { .. } => "wrong tree",
+            Self::Duplicate { .. } => "duplicate operation",
+            Self::NoAuthority => "no authority",
+            Self::BadProof => "bad proof",
+            Self::NotOwner => "not owner",
+            Self::SecondOpen => "second open",
+            Self::ForeignEndpoint => "foreign endpoint",
+            Self::ForeignPresence => "foreign presence",
+            Self::NotCurrent => "not current",
+            Self::NotHolder => "not holder",
+            Self::NotJudge => "not judge",
+            Self::NotRunner => "not runner",
+            Self::Misgraded => "misgraded",
+            Self::Miscomposed => "miscomposed",
+            Self::NotOperator => "not operator",
         })
     }
 }
@@ -658,8 +658,8 @@ impl fmt::Display for Verdict
     ) -> fmt::Result
     {
         match *self {
-            | Self::Admitted => f.write_str("admitted"),
-            | Self::Refused(ref refusal) => write!(f, "refused {refusal}"),
+            Self::Admitted => f.write_str("admitted"),
+            Self::Refused(ref refusal) => write!(f, "refused {refusal}"),
         }
     }
 }
@@ -744,15 +744,15 @@ impl Course
     ) -> Result<(), Refusal>
     {
         match self {
-            | Self::Dispatched {
+            Self::Dispatched {
                 dispatch: current,
                 holder,
                 ..
             } if current == dispatch => match holder {
-                | Holder::Seat(seat) if seat == author => Ok(()),
-                | Holder::Seat(_) | Holder::Vacant => Err(Refusal::NotHolder),
+                Holder::Seat(seat) if seat == author => Ok(()),
+                Holder::Seat(_) | Holder::Vacant => Err(Refusal::NotHolder),
             },
-            | Self::Dispatched { .. } | Self::Undispatched => Err(Refusal::NotCurrent),
+            Self::Dispatched { .. } | Self::Undispatched => Err(Refusal::NotCurrent),
         }
     }
 
@@ -780,10 +780,10 @@ impl Course
     ) -> Result<(), Refusal>
     {
         match self {
-            | Self::Dispatched {
+            Self::Dispatched {
                 dispatch: current, ..
             } if current == dispatch => Ok(()),
-            | Self::Dispatched { .. } | Self::Undispatched => Err(Refusal::NotCurrent),
+            Self::Dispatched { .. } | Self::Undispatched => Err(Refusal::NotCurrent),
         }
     }
 
@@ -808,7 +808,7 @@ impl Course
     ) -> Self
     {
         match self {
-            | Self::Dispatched {
+            Self::Dispatched {
                 placed, dispatch, ..
             } => Self::Dispatched {
                 placed,
@@ -816,7 +816,7 @@ impl Course
                 moved,
                 holder,
             },
-            | Self::Undispatched => self,
+            Self::Undispatched => self,
         }
     }
 }
@@ -967,7 +967,7 @@ fn unstarted(
 ) -> Result<(), Refusal>
 {
     match course {
-        | Course::Dispatched { dispatch, .. } => advance(
+        Course::Dispatched { dispatch, .. } => advance(
             plays,
             course,
             dispatch,
@@ -975,7 +975,7 @@ fn unstarted(
             movement,
             commit,
         ),
-        | Course::Undispatched => Err(Refusal::NotCurrent),
+        Course::Undispatched => Err(Refusal::NotCurrent),
     }
 }
 
@@ -1245,9 +1245,9 @@ pub fn fold(
         };
         let (commit, blob) = commit.into_parts();
         let proof = match receipt {
-            | Ok(ref receipt) if receipt.tree() == tree => match *receipt.kind() {
-                | Kind::Open { proof } => Some(proof.verify(tree, author)),
-                | Kind::Grant { .. }
+            Ok(ref receipt) if receipt.tree() == tree => match *receipt.kind() {
+                Kind::Open { proof } => Some(proof.verify(tree, author)),
+                Kind::Grant { .. }
                 | Kind::Note { .. }
                 | Kind::Indexed { .. }
                 | Kind::Bind { .. }
@@ -1266,16 +1266,16 @@ pub fn fold(
                 | Kind::Decide { .. }
                 | Kind::Landed { .. } => None,
             },
-            | Ok(_) | Err(_) => None,
+            Ok(_) | Err(_) => None,
         };
         match proof {
-            | Some(Ok(())) if open.is_none() && commit.payload().parents().is_empty() => {
+            Some(Ok(())) if open.is_none() && commit.payload().parents().is_empty() => {
                 open = Some((position, author));
             },
-            | Some(Err(_forged)) => {
+            Some(Err(_forged)) => {
                 let _first_seen = bad_proofs.insert(position);
             },
-            | Some(Ok(())) | None => {},
+            Some(Ok(())) | None => {},
         }
         let node = Node {
             commit: commit.payload().head(),
@@ -1338,8 +1338,8 @@ pub fn fold(
         }
         let mut past = inherit(&mut carries, &node.parents, position);
         let refusal = match node.receipt {
-            | Err(failure) => Some(Refusal::Undecodable(failure)),
-            | Ok(receipt) => {
+            Err(failure) => Some(Refusal::Undecodable(failure)),
+            Ok(receipt) => {
                 let (named, operation, kind) = receipt.into_parts();
                 let authorized = node.author == owner || past.grantees.contains(&node.author);
                 let present = authorized || past.seats.contains(&node.author);
@@ -1351,7 +1351,7 @@ pub fn fold(
                 }
                 else {
                     let protocol = match kind {
-                        | Kind::Dispatch { edition, .. } if authorized => {
+                        Kind::Dispatch { edition, .. } if authorized => {
                             let mut play = Play::default();
                             let result =
                                 record_move(&mut play, edition, Movement::Dispatch, node.commit);
@@ -1359,55 +1359,67 @@ pub fn fold(
                             drop(plays.insert(node.commit, (edition, play)));
                             result
                         },
-                        | Kind::Report { dispatch, .. } => admit_move(
+                        Kind::Report { dispatch, .. } => admit_move(
                             &mut plays,
                             dispatch,
                             past.course.answerable(dispatch, node.author),
                             Movement::Report,
                             node.commit,
                         ),
-                        | Kind::Handoff { dispatch, .. } => admit_move(
+                        Kind::Handoff { dispatch, .. } => admit_move(
                             &mut plays,
                             dispatch,
                             past.course.answerable(dispatch, node.author),
                             Movement::Handoff,
                             node.commit,
                         ),
-                        | Kind::Retire { dispatch, .. } => admit_move(
+                        Kind::Retire { dispatch, .. } => admit_move(
                             &mut plays,
                             dispatch,
                             past.course.answerable(dispatch, node.author),
                             Movement::Retire,
                             node.commit,
                         ),
-                        | Kind::Pause { dispatch, .. } => admit_move(
+                        Kind::Pause { dispatch, .. } => admit_move(
                             &mut plays,
                             dispatch,
                             past.course.answerable(dispatch, node.author),
                             Movement::Pause,
                             node.commit,
                         ),
-                        | _ => Ok(()),
+                        Kind::Indexed { .. }
+                        | Kind::Open { .. }
+                        | Kind::Grant { .. }
+                        | Kind::Note { .. }
+                        | Kind::Bind { .. }
+                        | Kind::Claim { .. }
+                        | Kind::Introduce { .. }
+                        | Kind::Present { .. }
+                        | Kind::Withdraw { .. }
+                        | Kind::Dispatch { .. }
+                        | Kind::Verdict { .. }
+                        | Kind::Verified { .. }
+                        | Kind::Graded { .. }
+                        | Kind::Decide { .. }
+                        | Kind::Landed { .. } => Ok(()),
                     };
                     let refusal = match protocol {
-                        | Err(refusal) => Some(refusal),
-                        | Ok(()) => match kind {
-                            | Kind::Open { .. } if bad_proofs.contains(&position) => {
+                        Err(refusal) => Some(refusal),
+                        Ok(()) => match kind {
+                            Kind::Open { .. } if bad_proofs.contains(&position) => {
                                 Some(Refusal::BadProof)
                             },
-                            | Kind::Open { .. } => {
-                                (position != open).then_some(Refusal::SecondOpen)
-                            },
-                            | Kind::Grant { to } if authorized => {
+                            Kind::Open { .. } => (position != open).then_some(Refusal::SecondOpen),
+                            Kind::Grant { to } if authorized => {
                                 let _was_member = view.members.insert(to);
                                 let _was_granted = past.grantees.insert(to);
                                 None
                             },
-                            | Kind::Note { text } if authorized => {
+                            Kind::Note { text } if authorized => {
                                 view.notes.push((node.author, text));
                                 None
                             },
-                            | Kind::Indexed { index } if authorized => {
+                            Kind::Indexed { index } if authorized => {
                                 let attestation = IndexAttestation {
                                     index,
                                     commit: node.commit,
@@ -1418,16 +1430,16 @@ pub fn fold(
                                 drop(view.indexes.insert(node.author, attestation));
                                 None
                             },
-                            | Kind::Bind { path, target } if authorized => {
+                            Kind::Bind { path, target } if authorized => {
                                 let _rebound = view.bindings.insert(path, (node.author, target));
                                 None
                             },
-                            | Kind::Claim { domain } if node.author == owner => {
+                            Kind::Claim { domain } if node.author == owner => {
                                 let _claimed_before = view.claims.insert(domain);
                                 None
                             },
-                            | Kind::Claim { .. } => Some(Refusal::NotOwner),
-                            | Kind::Introduce {
+                            Kind::Claim { .. } => Some(Refusal::NotOwner),
+                            Kind::Introduce {
                                 tree: introduced,
                                 label,
                             } if authorized => {
@@ -1435,24 +1447,24 @@ pub fn fold(
                                     view.introductions.insert(label, (node.author, introduced));
                                 None
                             },
-                            | Kind::Present { endpoint, proof } if present => {
+                            Kind::Present { endpoint, proof } if present => {
                                 match proof.verify(endpoint.key(), node.author) {
-                                    | Ok(()) => {
+                                    Ok(()) => {
                                         let presence = Presence::new(endpoint, node.commit);
                                         let _superseded = view.book.insert(node.author, presence);
                                         None
                                     },
-                                    | Err(_foreign) => Some(Refusal::ForeignEndpoint),
+                                    Err(_foreign) => Some(Refusal::ForeignEndpoint),
                                 }
                             },
-                            | Kind::Withdraw { of }
+                            Kind::Withdraw { of }
                                 if node.author == owner || (present && of == node.author) =>
                             {
                                 let _withdrawn = view.book.remove(&of);
                                 None
                             },
-                            | Kind::Withdraw { .. } if present => Some(Refusal::ForeignPresence),
-                            | Kind::Dispatch {
+                            Kind::Withdraw { .. } if present => Some(Refusal::ForeignPresence),
+                            Kind::Dispatch {
                                 seat,
                                 edition,
                                 brief,
@@ -1467,7 +1479,7 @@ pub fn fold(
                                 view.task.dispatch(node.commit, seat, edition, brief);
                                 None
                             },
-                            | Kind::Report {
+                            Kind::Report {
                                 dispatch,
                                 content,
                                 summary,
@@ -1480,7 +1492,7 @@ pub fn fold(
                                 });
                                 None
                             },
-                            | Kind::Handoff { dispatch, to } => {
+                            Kind::Handoff { dispatch, to } => {
                                 past.course = past.course.moved(placed, Holder::Seat(to));
                                 let _seated_before = past.seats.insert(to);
                                 view.task.answer(node.commit, Step::Handoff {
@@ -1490,7 +1502,7 @@ pub fn fold(
                                 });
                                 None
                             },
-                            | Kind::Retire { dispatch } => {
+                            Kind::Retire { dispatch } => {
                                 past.course = past.course.moved(placed, Holder::Vacant);
                                 view.task.answer(node.commit, Step::Retire {
                                     dispatch,
@@ -1498,17 +1510,17 @@ pub fn fold(
                                 });
                                 None
                             },
-                            | Kind::Pause { dispatch } => {
+                            Kind::Pause { dispatch } => {
                                 view.task.answer(node.commit, Step::Pause {
                                     dispatch,
                                     author: node.author,
                                 });
                                 None
                             },
-                            | Kind::Verdict { judge, .. } if node.author != judge => {
+                            Kind::Verdict { judge, .. } if node.author != judge => {
                                 Some(Refusal::NotJudge)
                             },
-                            | Kind::Verdict {
+                            Kind::Verdict {
                                 dispatch,
                                 judge,
                                 rubric,
@@ -1524,13 +1536,13 @@ pub fn fold(
                                     Movement::Verdict,
                                     node.commit,
                                 ) {
-                                    | Ok(()) => {
+                                    Ok(()) => {
                                         let questions = answers
                                             .iter()
                                             .map(|&(question, ref ruling)| {
                                                 (question, match *ruling {
-                                                    | Ruling::Read(_) => Reading::Read,
-                                                    | Ruling::Unread(_) => Reading::Unread,
+                                                    Ruling::Read(_) => Reading::Read,
+                                                    Ruling::Unread(_) => Reading::Unread,
                                                 })
                                             })
                                             .collect();
@@ -1551,13 +1563,13 @@ pub fn fold(
                                         });
                                         None
                                     },
-                                    | Err(refusal) => Some(refusal),
+                                    Err(refusal) => Some(refusal),
                                 }
                             },
-                            | Kind::Verified { runner, .. } if node.author != runner => {
+                            Kind::Verified { runner, .. } if node.author != runner => {
                                 Some(Refusal::NotRunner)
                             },
-                            | Kind::Verified {
+                            Kind::Verified {
                                 dispatch,
                                 runner,
                                 playbook,
@@ -1574,7 +1586,7 @@ pub fn fold(
                                 Movement::Verified,
                                 node.commit,
                             ) {
-                                | Ok(()) => {
+                                Ok(()) => {
                                     view.task.answer(node.commit, Step::Verified {
                                         dispatch,
                                         runner,
@@ -1585,9 +1597,9 @@ pub fn fold(
                                     });
                                     None
                                 },
-                                | Err(refusal) => Some(refusal),
+                                Err(refusal) => Some(refusal),
                             },
-                            | Kind::Graded {
+                            Kind::Graded {
                                 verdict,
                                 grades,
                                 composed,
@@ -1595,7 +1607,7 @@ pub fn fold(
                                 .get_mut(&verdict)
                                 .filter(|_ruling| past.verdicts.contains(&verdict))
                             {
-                                | Some(ruling) => {
+                                Some(ruling) => {
                                     match grading(ruling, node.author, &grades, composed).and_then(
                                         |()| {
                                             advance(
@@ -1608,7 +1620,7 @@ pub fn fold(
                                             )
                                         },
                                     ) {
-                                        | Ok(()) => {
+                                        Ok(()) => {
                                             let grades = ruling
                                                 .questions
                                                 .iter()
@@ -1624,10 +1636,10 @@ pub fn fold(
                                             });
                                             None
                                         },
-                                        | Err(refusal) => Some(refusal),
+                                        Err(refusal) => Some(refusal),
                                     }
                                 },
-                                | None => unstarted(
+                                None => unstarted(
                                     &plays,
                                     past.course,
                                     Channel::Judge,
@@ -1636,20 +1648,20 @@ pub fn fold(
                                 )
                                 .err(),
                             },
-                            | Kind::Decide { operator, .. }
+                            Kind::Decide { operator, .. }
                                 if authorized && node.author != operator =>
                             {
                                 Some(Refusal::NotOperator)
                             },
-                            | Kind::Decide {
+                            Kind::Decide {
                                 dispatch,
                                 operator,
                                 decision,
                             } if authorized => {
                                 let choice = match decision {
-                                    | Decision::Land => Choice::Land,
-                                    | Decision::Rework { .. } => Choice::Rework,
-                                    | Decision::Abandon => Choice::Abandon,
+                                    Decision::Land => Choice::Land,
+                                    Decision::Rework { .. } => Choice::Rework,
+                                    Decision::Abandon => Choice::Abandon,
                                 };
                                 match advance(
                                     &plays,
@@ -1661,7 +1673,7 @@ pub fn fold(
                                     Movement::Decide(choice),
                                     node.commit,
                                 ) {
-                                    | Ok(()) => {
+                                    Ok(()) => {
                                         let _decided_before = decisions
                                             .insert(node.commit, Decided { dispatch, operator });
                                         let _decision_before = past.decisions.insert(node.commit);
@@ -1672,16 +1684,16 @@ pub fn fold(
                                         });
                                         None
                                     },
-                                    | Err(refusal) => Some(refusal),
+                                    Err(refusal) => Some(refusal),
                                 }
                             },
-                            | Kind::Landed { decided, merge } => {
+                            Kind::Landed { decided, merge } => {
                                 match decisions
                                     .get(&decided)
                                     .filter(|_decision| past.decisions.contains(&decided))
                                 {
-                                    | Some(decision) => match landing(decision, node.author)
-                                        .and_then(|()| {
+                                    Some(decision) => {
+                                        match landing(decision, node.author).and_then(|()| {
                                             advance(
                                                 &plays,
                                                 past.course,
@@ -1695,18 +1707,19 @@ pub fn fold(
                                                 node.commit,
                                             )
                                         }) {
-                                        | Ok(()) => {
-                                            view.task.answer(node.commit, Step::Landed {
-                                                dispatch: decision.dispatch,
-                                                decided,
-                                                operator: node.author,
-                                                merge,
-                                            });
-                                            None
-                                        },
-                                        | Err(refusal) => Some(refusal),
+                                            Ok(()) => {
+                                                view.task.answer(node.commit, Step::Landed {
+                                                    dispatch: decision.dispatch,
+                                                    decided,
+                                                    operator: node.author,
+                                                    merge,
+                                                });
+                                                None
+                                            },
+                                            Err(refusal) => Some(refusal),
+                                        }
                                     },
-                                    | None => unstarted(
+                                    None => unstarted(
                                         &plays,
                                         past.course,
                                         Channel::Decision,
@@ -1716,7 +1729,7 @@ pub fn fold(
                                     .err(),
                                 }
                             },
-                            | Kind::Grant { .. }
+                            Kind::Grant { .. }
                             | Kind::Note { .. }
                             | Kind::Indexed { .. }
                             | Kind::Bind { .. }
@@ -1734,23 +1747,23 @@ pub fn fold(
                 }
             },
         };
-        match refusal {
-            | Some(refusal) => view.refused.push((node.commit, refusal)),
-            | None => {
-                let _first_admission = view.admitted.insert(node.commit);
-                if view
-                    .task
-                    .steps()
-                    .last()
-                    .is_some_and(|&(commit, _)| commit == node.commit)
-                {
-                    view.task.record_source(crate::task::MoveSource {
-                        commit: node.commit,
-                        author: node.author,
-                        blob: node.blob,
-                    });
-                }
-            },
+        if let Some(refusal) = refusal {
+            view.refused.push((node.commit, refusal));
+        }
+        else {
+            let _first_admission = view.admitted.insert(node.commit);
+            if view
+                .task
+                .steps()
+                .last()
+                .is_some_and(|&(commit, _)| commit == node.commit)
+            {
+                view.task.record_source(crate::task::MoveSource {
+                    commit: node.commit,
+                    author: node.author,
+                    blob: node.blob,
+                });
+            }
         }
         let readers: BTreeSet<Position> = node
             .children
@@ -2317,8 +2330,8 @@ mod tests
     fn attempt(view: &View) -> &Attempt
     {
         match *view.task().current() {
-            | Current::Attempt(ref attempt) => attempt,
-            | Current::Undispatched => panic!("the task is undispatched"),
+            Current::Attempt(ref attempt) => attempt,
+            Current::Undispatched => panic!("the task is undispatched"),
         }
     }
 

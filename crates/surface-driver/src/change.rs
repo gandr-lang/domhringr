@@ -207,13 +207,13 @@ pub fn reported(view: &View) -> Result<Reported, RunError>
         .steps()
         .iter()
         .find_map(|&(commit, ref step)| match *step {
-            | Step::Report {
+            Step::Report {
                 author,
                 content,
                 ref summary,
                 ..
             } if commit == report => Some((author, content, summary)),
-            | Step::Report { .. }
+            Step::Report { .. }
             | Step::Dispatch { .. }
             | Step::Handoff { .. }
             | Step::Retire { .. }
@@ -303,16 +303,16 @@ impl fmt::Display for GitAction
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Branch => "read the branch HEAD names",
-            | Self::Status => "read the working tree's status",
-            | Self::Find => "find the change's commit",
-            | Self::CheckOut => "check the change out",
-            | Self::Remove => "remove the change's checkout",
-            | Self::Diff => "diff the change",
-            | Self::Log => "read the change's commits",
-            | Self::Merge => "merge the change",
-            | Self::Abort => "abort the merge",
-            | Self::Head => "read where HEAD stands",
+            Self::Branch => "read the branch HEAD names",
+            Self::Status => "read the working tree's status",
+            Self::Find => "find the change's commit",
+            Self::CheckOut => "check the change out",
+            Self::Remove => "remove the change's checkout",
+            Self::Diff => "diff the change",
+            Self::Log => "read the change's commits",
+            Self::Merge => "merge the change",
+            Self::Abort => "abort the merge",
+            Self::Head => "read where HEAD stands",
         })
     }
 }
@@ -642,9 +642,9 @@ fn merge(
         GitAction::Branch,
     )?;
     match branch.status.code() {
-        | Some(0_i32) => {},
-        | Some(1_i32) => return Err(RunError::Detached),
-        | Some(_) | None => return Err(refused(GitAction::Branch, &branch)),
+        Some(0_i32) => {},
+        Some(1_i32) => return Err(RunError::Detached),
+        Some(_) | None => return Err(refused(GitAction::Branch, &branch)),
     }
     let status = succeeded(
         git(repository).args(["status", "--porcelain", "--untracked-files=no"]),
@@ -722,15 +722,15 @@ pub async fn land(
         return Err(RunError::Undispatched);
     };
     let decided = match *attempt.progress() {
-        | Progress::Decided {
+        Progress::Decided {
             decide,
             decision: Decision::Land,
         } => decide,
-        | Progress::Decided { ref decision, .. } => {
+        Progress::Decided { ref decision, .. } => {
             return Err(RunError::NotLand(decision.clone()));
         },
-        | Progress::Landed { merge, .. } => return Err(RunError::Landed(merge)),
-        | Progress::Unchecked | Progress::Verified(_) | Progress::Graded { .. } => {
+        Progress::Landed { merge, .. } => return Err(RunError::Landed(merge)),
+        Progress::Unchecked | Progress::Verified(_) | Progress::Graded { .. } => {
             return Err(RunError::NoDecision);
         },
     };
@@ -739,8 +739,8 @@ pub async fn land(
         .steps()
         .iter()
         .find_map(|&(commit, ref step)| match *step {
-            | Step::Decide { operator, .. } if commit == decided => Some(operator),
-            | Step::Dispatch { .. }
+            Step::Decide { operator, .. } if commit == decided => Some(operator),
+            Step::Dispatch { .. }
             | Step::Report { .. }
             | Step::Handoff { .. }
             | Step::Retire { .. }

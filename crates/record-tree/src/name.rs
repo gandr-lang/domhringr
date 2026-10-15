@@ -93,9 +93,9 @@ impl FromStr for Domain
             }
             for byte in label.bytes() {
                 match byte {
-                    | b'a' ..= b'z' | b'0' ..= b'9' | b'-' => {},
-                    | b'A' ..= b'Z' => return Err(ParseDomainError::Uppercase),
-                    | _other => return Err(ParseDomainError::Character),
+                    b'a' ..= b'z' | b'0' ..= b'9' | b'-' => {},
+                    b'A' ..= b'Z' => return Err(ParseDomainError::Uppercase),
+                    _other => return Err(ParseDomainError::Character),
                 }
             }
             if label.starts_with('-') || label.ends_with('-') {
@@ -218,8 +218,8 @@ impl FromStr for Label
             return Err(ParseLabelError::Dot);
         }
         match text.parse::<TreeId>() {
-            | Err(ParseIdError::TreeLength | ParseIdError::TreeAlphabet) => Ok(Self(text.into())),
-            | Ok(_) | Err(_) => Err(ParseLabelError::TreeId),
+            Err(ParseIdError::TreeLength | ParseIdError::TreeAlphabet) => Ok(Self(text.into())),
+            Ok(_) | Err(_) => Err(ParseLabelError::TreeId),
         }
     }
 }

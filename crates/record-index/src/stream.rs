@@ -127,9 +127,9 @@ impl Cache
             return Ok(answer);
         }
         let index = match store.load(request.digest) {
-            | Ok(index) => index,
-            | Err(StoreError::Unheld(digest)) => return Err(StreamError::Unheld(digest)),
-            | Err(failure) => return Err(failure.into()),
+            Ok(index) => index,
+            Err(StoreError::Unheld(digest)) => return Err(StreamError::Unheld(digest)),
+            Err(failure) => return Err(failure.into()),
         };
         let answer = prove::answer(&index, &request.query)?;
         let payload = index
@@ -235,11 +235,11 @@ async fn read(recv: &mut iroh::endpoint::RecvStream) -> Result<WireImage, Stream
         .await
         .map_err(|_elapsed| StreamError::Silent)?;
     match result {
-        | Ok(bytes) => Ok(WireImage(bytes)),
-        | Err(iroh::endpoint::ReadToEndError::TooLong) => Err(StreamError::Oversize(ByteSize(
+        Ok(bytes) => Ok(WireImage(bytes)),
+        Err(iroh::endpoint::ReadToEndError::TooLong) => Err(StreamError::Oversize(ByteSize(
             u64::from(arith::saturating_add(Int::from(ANSWER_CAP.0), Int::from(1))),
         ))),
-        | Err(failure) => Err(failure.into()),
+        Err(failure) => Err(failure.into()),
     }
 }
 
@@ -310,17 +310,17 @@ pub async fn answer(
             stream = tokio::time::timeout(LINGER, connection.accept_bi()) => stream,
         };
         let (mut send, mut recv) = match stream {
-            | Ok(stream) => stream?,
-            | Err(_idle) => return Ok(served),
+            Ok(stream) => stream?,
+            Err(_idle) => return Ok(served),
         };
         let image = read(&mut recv).await?;
         let request = codec::read_request(&image)?;
         let image = {
             let answer = cache.lock().await.answer(store, &request);
             match answer {
-                | Ok(answer) => codec::encode(&answer)?,
-                | Err(StreamError::Unheld(_digest)) => WireImage(vec![0]),
-                | Err(failure) => return Err(failure),
+                Ok(answer) => codec::encode(&answer)?,
+                Err(StreamError::Unheld(_digest)) => WireImage(vec![0]),
+                Err(failure) => return Err(failure),
             }
         };
         send.write_all(image.as_ref()).await?;

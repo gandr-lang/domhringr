@@ -112,7 +112,7 @@ impl fmt::Display for Field
     {
         for (place, segment) in self.0.iter().enumerate() {
             match *segment {
-                | Segment::Key(ref key) => {
+                Segment::Key(ref key) => {
                     if place != 0 {
                         f.write_str(".")?;
                     }
@@ -127,17 +127,17 @@ impl fmt::Display for Field
                         f.write_char('"')?;
                         for character in key.chars() {
                             match character {
-                                | '"' | '\\' => write!(f, "\\{character}")?,
-                                | _ if character.is_control() => {
+                                '"' | '\\' => write!(f, "\\{character}")?,
+                                _ if character.is_control() => {
                                     write!(f, "\\u{:04X}", u32::from(character))?;
                                 },
-                                | _ => f.write_char(character)?,
+                                _ => f.write_char(character)?,
                             }
                         }
                         f.write_char('"')?;
                     }
                 },
-                | Segment::Index(Index(index)) => write!(f, "[{index}]")?,
+                Segment::Index(Index(index)) => write!(f, "[{index}]")?,
             }
         }
         Ok(())
@@ -377,10 +377,10 @@ impl fmt::Display for Expected
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::String => "a string",
-            | Self::Float => "a float",
-            | Self::Array => "an array",
-            | Self::Table => "a table",
+            Self::String => "a string",
+            Self::Float => "a float",
+            Self::Array => "an array",
+            Self::Table => "a table",
         })
     }
 }
@@ -483,11 +483,11 @@ impl<'input> TryFrom<&'input str> for Value<'input>
     fn try_from(text: &'input str) -> Result<Self, Self::Error>
     {
         match DeTable::parse(text) {
-            | Ok(root) => Ok(Self {
+            Ok(root) => Ok(Self {
                 field: Field::default(),
                 value: DeValue::Table(root.into_inner()),
             }),
-            | Err(error) => {
+            Err(error) => {
                 let start = error.span().map_or(0, |span| span.start);
                 let before = text.get(.. start).unwrap_or(text);
                 // The lines before the error and its own, counted from one;
@@ -599,8 +599,8 @@ impl<'input> Value<'input>
         for (key, value) in entries {
             let field = self.field.then(Segment::from(key.get_ref().as_ref()));
             let name = match key.get_ref().parse::<Named>() {
-                | Ok(name) => name,
-                | Err(error) => return Err(field.refused(refused(error))),
+                Ok(name) => name,
+                Err(error) => return Err(field.refused(refused(error))),
             };
             named.push((name, Self {
                 field,
@@ -665,8 +665,8 @@ impl<'input> Value<'input>
     pub(crate) fn text(self) -> Result<String, Refusal>
     {
         match self.value {
-            | DeValue::String(text) => Ok(text.into_owned()),
-            | DeValue::Integer(_)
+            DeValue::String(text) => Ok(text.into_owned()),
+            DeValue::Integer(_)
             | DeValue::Float(_)
             | DeValue::Boolean(_)
             | DeValue::Datetime(_)
@@ -802,11 +802,11 @@ impl<'input> Table<'input>
     ) -> Slot<'input>
     {
         match self.entries.remove(key.0) {
-            | Some(value) => Slot::Given(Value {
+            Some(value) => Slot::Given(Value {
                 field: self.field.then(Segment::from(key.0)),
                 value: value.into_inner(),
             }),
-            | None => Slot::Absent,
+            None => Slot::Absent,
         }
     }
 
@@ -833,8 +833,8 @@ impl<'input> Table<'input>
     ) -> Result<Value<'input>, Refusal>
     {
         match self.take(key) {
-            | Slot::Given(value) => Ok(value),
-            | Slot::Absent => Err(self
+            Slot::Given(value) => Ok(value),
+            Slot::Absent => Err(self
                 .field
                 .then(Segment::from(key.0))
                 .refused(Reason::Missing)),

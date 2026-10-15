@@ -485,31 +485,31 @@ impl Peer
     {
         let locus = reference.locus();
         match *reference.authority() {
-            | Authority::Key(tree) => {
+            Authority::Key(tree) => {
                 let view = self.folded(tree).await?;
                 match locus {
-                    | Locus::Tree => Ok(Resolution::Unbound),
-                    | Locus::Within(within) => inside(&view, within),
+                    Locus::Tree => Ok(Resolution::Unbound),
+                    Locus::Within(within) => inside(&view, within),
                 }
             },
-            | Authority::Domain(ref domain) => {
+            Authority::Domain(ref domain) => {
                 let (tree, view) = self.claimant(domain, witness).await?;
                 match locus {
-                    | Locus::Tree => {
+                    Locus::Tree => {
                         let named = Target::Anchor(Anchor::key(tree));
                         Ok(Resolution::Bound(view.owner(), named))
                     },
-                    | Locus::Within(within) => inside(&view, within),
+                    Locus::Within(within) => inside(&view, within),
                 }
             },
-            | Authority::Label(ref label) => {
+            Authority::Label(ref label) => {
                 let (introducer, tree) = self.introduced(label, scope).await?;
                 match locus {
-                    | Locus::Tree => {
+                    Locus::Tree => {
                         let named = Target::Anchor(Anchor::key(tree));
                         Ok(Resolution::Bound(introducer, named))
                     },
-                    | Locus::Within(within) => {
+                    Locus::Within(within) => {
                         let view = self.folded(tree).await?;
                         inside(&view, within)
                     },
@@ -564,8 +564,8 @@ impl Peer
         W: Witness + Sync,
     {
         match *reference.authority() {
-            | Authority::Key(tree) => Ok(BTreeSet::from([tree])),
-            | Authority::Domain(ref domain) => {
+            Authority::Key(tree) => Ok(BTreeSet::from([tree])),
+            Authority::Domain(ref domain) => {
                 let candidates =
                     witness
                         .lookup(domain)
@@ -581,7 +581,7 @@ impl Peer
                 }
                 Ok(candidates)
             },
-            | Authority::Label(ref label) => {
+            Authority::Label(ref label) => {
                 let Scope::In(within) = scope
                 else {
                     return Err(WhenceError::Unscoped {
@@ -593,13 +593,13 @@ impl Peer
                     return Ok(trees);
                 }
                 match self.view(within).await {
-                    | Ok(view) => {
+                    Ok(view) => {
                         if let Some(&(_introducer, introduced)) = view.introductions().get(label) {
                             let _named_twice = trees.insert(introduced);
                         }
                     },
-                    | Err(ViewError::Unopened(_)) => {},
-                    | Err(source @ ViewError::Load(_)) => {
+                    Err(ViewError::Unopened(_)) => {},
+                    Err(source @ ViewError::Load(_)) => {
                         return Err(WhenceError::View {
                             tree: within,
                             source,
@@ -656,31 +656,33 @@ impl Peer
     ) -> Result<Route, RouteError>
     {
         let view = match self.view(tree).await {
-            | Ok(view) => Some(view),
-            | Err(ViewError::Unopened(_)) => None,
-            | Err(source @ ViewError::Load(_)) => return Err(RouteError::View { tree, source }),
+            Ok(view) => Some(view),
+            Err(ViewError::Unopened(_)) => None,
+            Err(source @ ViewError::Load(_)) => return Err(RouteError::View { tree, source }),
         };
         let peer = match (aim, view.as_ref()) {
-            | (Aim::Peer(peer), _) => peer,
-            | (Aim::Owner, Some(view)) => view.owner(),
-            | (Aim::Owner, None) => return Err(RouteError::Unheld { tree }),
+            (Aim::Peer(peer), _) => peer,
+            (Aim::Owner, Some(view)) => view.owner(),
+            (Aim::Owner, None) => return Err(RouteError::Unheld { tree }),
         };
         if peer == self.identity.peer_key() {
             return Ok(Route::Itself);
         }
         match at {
-            | At::Given(endpoint) => Ok(Route::Given {
+            At::Given(endpoint) => Ok(Route::Given {
                 remote: RemotePeer::new(endpoint, peer),
             }),
-            | At::Book => {
+            At::Book => {
                 let presence = view.as_ref().and_then(|view| view.book().get(&peer));
-                match presence {
-                    | Some(presence) => Ok(Route::Book {
-                        remote: RemotePeer::new(presence.endpoint().clone(), peer),
-                        since: presence.since(),
-                    }),
-                    | None => Err(RouteError::Unreachable { peer, tree }),
-                }
+                presence.map_or_else(
+                    || Err(RouteError::Unreachable { peer, tree }),
+                    |presence| {
+                        Ok(Route::Book {
+                            remote: RemotePeer::new(presence.endpoint().clone(), peer),
+                            since: presence.since(),
+                        })
+                    },
+                )
             },
         }
     }
@@ -762,11 +764,11 @@ impl Peer
         let mut claimants = BTreeMap::new();
         for tree in candidates {
             match self.view(tree).await {
-                | Ok(view) if view.claims().contains(domain) => {
+                Ok(view) if view.claims().contains(domain) => {
                     drop(claimants.insert(tree, view));
                 },
-                | Ok(_) | Err(ViewError::Unopened(_)) => {},
-                | Err(source @ ViewError::Load(_)) => {
+                Ok(_) | Err(ViewError::Unopened(_)) => {},
+                Err(source @ ViewError::Load(_)) => {
                     return Err(WhenceError::View { tree, source });
                 },
             }
@@ -830,8 +832,8 @@ impl Peer
         };
         let view = self.folded(within).await?;
         match view.introductions().get(label) {
-            | Some(&(introducer, tree)) => Ok((introducer, tree)),
-            | None => Err(WhenceError::Unintroduced {
+            Some(&(introducer, tree)) => Ok((introducer, tree)),
+            None => Err(WhenceError::Unintroduced {
                 label: label.clone(),
                 within,
             }),
@@ -934,14 +936,14 @@ fn inside(
 ) -> Result<Resolution, WhenceError>
 {
     match within {
-        | Within::Path(path) => Ok(view.resolve(path)),
-        | Within::Commit(commit) => Ok(view.locate(commit)),
-        | Within::Prefix(prefix) => {
+        Within::Path(path) => Ok(view.resolve(path)),
+        Within::Commit(commit) => Ok(view.locate(commit)),
+        Within::Prefix(prefix) => {
             let mut matches = view.expand(prefix).into_iter();
             match (matches.next(), matches.next()) {
-                | (None, _) => Ok(Resolution::Unknown),
-                | (Some(commit), None) => Ok(view.locate(commit)),
-                | (Some(first), Some(second)) => Err(WhenceError::AmbiguousCommit {
+                (None, _) => Ok(Resolution::Unknown),
+                (Some(commit), None) => Ok(view.locate(commit)),
+                (Some(first), Some(second)) => Err(WhenceError::AmbiguousCommit {
                     prefix: prefix.clone(),
                     commits: [first, second].into_iter().chain(matches).collect(),
                 }),

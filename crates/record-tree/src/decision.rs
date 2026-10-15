@@ -73,12 +73,12 @@ impl fmt::Display for Decision
     ) -> fmt::Result
     {
         match *self {
-            | Self::Land => f.write_str("land"),
-            | Self::Rework { ref reason } => {
+            Self::Land => f.write_str("land"),
+            Self::Rework { ref reason } => {
                 f.write_str("rework ")?;
                 OneLine::new(f, Field::Last).write_str(reason.as_ref())
             },
-            | Self::Abandon => f.write_str("abandon"),
+            Self::Abandon => f.write_str("abandon"),
         }
     }
 }
@@ -105,8 +105,8 @@ impl AsRef<[u8]> for Revision
     fn as_ref(&self) -> &[u8]
     {
         match *self {
-            | Self::Sha1(ref bytes) => bytes,
-            | Self::Sha256(ref bytes) => bytes,
+            Self::Sha1(ref bytes) => bytes,
+            Self::Sha256(ref bytes) => bytes,
         }
     }
 }

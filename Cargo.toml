@@ -503,6 +503,11 @@ mod_module_files = "deny"
 multiple_unsafe_ops_per_block = "deny"
 mutex_atomic = "deny"
 mutex_integer = "deny"
+# The explicit-binding ruling: `needless_borrowed_reference` would turn
+# `Some(&Value::Record(ref fields))` into `Some(Value::Record(fields))`, which
+# the denied `pattern_type_mismatch` refuses. The wall keeps binding modes
+# explicit, so the complexity lint yields.
+needless_borrowed_reference = "allow"
 non_zero_suggestions = "deny"
 panic = "deny"
 pathbuf_init_then_push = "deny"

@@ -133,8 +133,8 @@ pub fn validate_playbook(file: &Path) -> Result<(), RunError>
     ))?;
     for step in playbook.document().steps() {
         match *step.bound() {
-            | Bound::Verifier(_) => emit(&format_args!("step {} verifier\n", step.id()))?,
-            | Bound::Question {
+            Bound::Verifier(_) => emit(&format_args!("step {} verifier\n", step.id()))?,
+            Bound::Question {
                 ref rubric,
                 ref question,
             } => {

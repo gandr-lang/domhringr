@@ -166,8 +166,8 @@ impl Plan
                 continue;
             };
             let loaded = match rubrics.entry(rubric.clone()) {
-                | Entry::Occupied(entry) => entry.into_mut(),
-                | Entry::Vacant(entry) => {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
                     entry.insert(Loaded::<Rubric>::read(&rubric.beside(directory))?)
                 },
             };
@@ -248,12 +248,12 @@ impl Plan
             };
             let grading = gradings.iter_mut().find(|grading| grading.file == rubric);
             match grading {
-                | Some(grading) => {
+                Some(grading) => {
                     if !grading.questions.iter().any(|&(named, _)| named == name) {
                         grading.questions.push((name, asked));
                     }
                 },
-                | None => {
+                None => {
                     if let Some(loaded) = self.rubrics.get(rubric) {
                         gradings.push(Grading {
                             file: rubric,
@@ -509,10 +509,10 @@ question = { rubric = "r.toml", question = "two" }
             .steps()
             .iter()
             .map(|step| match *step.bound() {
-                | Bound::Verifier(ref verifier) => {
+                Bound::Verifier(ref verifier) => {
                     format!("{} verifier {}", step.id(), verifier.command())
                 },
-                | Bound::Question { ref question, .. } => {
+                Bound::Question { ref question, .. } => {
                     format!("{} question {question}", step.id())
                 },
             })

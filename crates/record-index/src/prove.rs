@@ -174,8 +174,8 @@ pub fn answer(
     query: &Query,
 ) -> Result<Answer, ProveError>
 {
-    let proof = match query {
-        | &Query::Key(ref key) => {
+    let proof = match *query {
+        Query::Key(ref key) => {
             if index.tree.lookup(key.as_borrowed()).is_some() {
                 let proof = index.tree.prove_membership(key.as_borrowed())?;
                 Proof::Present(proof)
@@ -185,7 +185,7 @@ pub fn answer(
                 Proof::Absent(proof)
             }
         },
-        | &Query::Range(ref range) => {
+        Query::Range(ref range) => {
             let range = range.as_range()?;
             let proof = index.tree.prove_range(range)?;
             Proof::Range(proof)
@@ -235,20 +235,20 @@ impl Answer
         }
         let root = self.manifest.root()?;
         match (&self.proof, query) {
-            | (&Proof::Present(ref proof), &Query::Key(ref key)) => {
+            (&Proof::Present(ref proof), &Query::Key(ref key)) => {
                 proof.verify(&root, key.as_borrowed(), proof.value())?;
                 Ok(Verified::Present(proof.value()))
             },
-            | (&Proof::Absent(ref proof), &Query::Key(ref key)) => {
+            (&Proof::Absent(ref proof), &Query::Key(ref key)) => {
                 let evidence = proof.verify(&root, key.as_borrowed())?;
                 Ok(Verified::Absent(evidence))
             },
-            | (&Proof::Range(ref proof), &Query::Range(ref range)) => {
+            (&Proof::Range(ref proof), &Query::Range(ref range)) => {
                 let range = range.as_range()?;
                 let records = proof.verify(&root, range)?;
                 Ok(Verified::Range(records))
             },
-            | _different => Err(ProveError::Question),
+            _different => Err(ProveError::Question),
         }
     }
 }
@@ -362,16 +362,16 @@ pub fn later(
     verified: &Verified<'_>,
 ) -> Result<Later, ProveError>
 {
-    match verified {
-        | &Verified::Present(value) => {
+    match *verified {
+        Verified::Present(value) => {
             let step = read_move(tree, value)?;
             if !matches!(step.receipt.kind(), Kind::Dispatch { .. }) {
                 return Err(ProveError::MissingDispatch);
             }
             Ok(Later::Dispatch(step))
         },
-        | &Verified::Absent(ref evidence) if evidence.successor().is_none() => Ok(Later::None),
-        | &Verified::Absent(_) => Err(ProveError::MissingDispatch),
-        | &Verified::Range(_) => Err(ProveError::Question),
+        Verified::Absent(ref evidence) if evidence.successor().is_none() => Ok(Later::None),
+        Verified::Absent(_) => Err(ProveError::MissingDispatch),
+        Verified::Range(_) => Err(ProveError::Question),
     }
 }

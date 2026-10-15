@@ -516,12 +516,12 @@ impl Evidence
         let manifest = self.manifest(digest)?;
         let mut chunks = self.indexed(digest)?;
         match self.complete(digest, &manifest, &mut chunks) {
-            | Ok(_)
+            Ok(_)
             | Err(EvidenceError::Refused {
                 refusal: ValueError::UnknownChunk { .. },
                 ..
             }) => {},
-            | Err(failure) => return Err(failure),
+            Err(failure) => return Err(failure),
         }
         Ok(Held {
             manifest: manifest.encode(),
@@ -596,8 +596,8 @@ impl Evidence
         let path = self.0.join(MANIFESTS).join(digest.to_string());
         let image = found::<ManifestImageBuf>(&path)?;
         let image = match image {
-            | Found::Held(image) => image,
-            | Found::Absent => return Err(EvidenceError::Unheld(digest)),
+            Found::Held(image) => image,
+            Found::Absent => return Err(EvidenceError::Unheld(digest)),
         };
         let manifest = ValueManifest::decode(image.as_image())
             .map_err(|refusal| EvidenceError::Refused { digest, refusal })?;
@@ -639,8 +639,8 @@ impl Evidence
         let path = self.0.join(CLOSURES).join(digest.to_string());
         let index = found::<Index>(&path)?;
         let index = match index {
-            | Found::Held(index) => index,
-            | Found::Absent => return Ok(chunks),
+            Found::Held(index) => index,
+            Found::Absent => return Ok(chunks),
         };
         for listed in index.digests() {
             let image = self.chunk(listed)?;
@@ -685,16 +685,16 @@ impl Evidence
         let refused = |refusal| EvidenceError::Refused { digest, refusal };
         loop {
             let missing = match manifest.closure(&*chunks) {
-                | Ok(closure) => return Ok(closure),
-                | Err(ValueError::UnknownChunk { digest: missing }) => missing,
-                | Err(refusal) => return Err(refused(refusal)),
+                Ok(closure) => return Ok(closure),
+                Err(ValueError::UnknownChunk { digest: missing }) => missing,
+                Err(refusal) => return Err(refused(refusal)),
             };
             let image = self.chunk(missing)?;
             match image {
-                | Found::Held(image) => {
+                Found::Held(image) => {
                     chunks.admit(missing, image).map_err(refused)?;
                 },
-                | Found::Absent => {
+                Found::Absent => {
                     return Err(refused(ValueError::UnknownChunk { digest: missing }));
                 },
             }
@@ -786,9 +786,9 @@ where
     Bytes: From<Box<[u8]>>,
 {
     match std::fs::read(path) {
-        | Ok(bytes) => Ok(Found::Held(Bytes::from(bytes.into_boxed_slice()))),
-        | Err(failure) if failure.kind() == io::ErrorKind::NotFound => Ok(Found::Absent),
-        | Err(failure) => Err(failed(StoreAction::Read, path)(failure)),
+        Ok(bytes) => Ok(Found::Held(Bytes::from(bytes.into_boxed_slice()))),
+        Err(failure) if failure.kind() == io::ErrorKind::NotFound => Ok(Found::Absent),
+        Err(failure) => Err(failed(StoreAction::Read, path)(failure)),
     }
 }
 
@@ -872,9 +872,9 @@ impl fmt::Display for StoreAction
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Create => "create",
-            | Self::Read => "read",
-            | Self::Write => "write",
+            Self::Create => "create",
+            Self::Read => "read",
+            Self::Write => "write",
         })
     }
 }

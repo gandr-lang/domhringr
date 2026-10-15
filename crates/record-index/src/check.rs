@@ -66,11 +66,11 @@ impl fmt::Display for Field
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Binding => "binding",
-            | Self::Current => "current",
-            | Self::Attempts => "attempts",
-            | Self::Dialogue => "dialogue",
-            | Self::Refusals => "refusals",
+            Self::Binding => "binding",
+            Self::Current => "current",
+            Self::Attempts => "attempts",
+            Self::Dialogue => "dialogue",
+            Self::Refusals => "refusals",
         })
     }
 }
@@ -107,9 +107,9 @@ impl fmt::Display for Finding
     ) -> fmt::Result
     {
         match *self {
-            | Self::Disagrees { ref task, field } => write!(f, "disagrees {task} {field}"),
-            | Self::Unchecked(ref task) => write!(f, "unchecked {task}"),
-            | Self::Project => f.write_str("disagrees project manifest"),
+            Self::Disagrees { ref task, field } => write!(f, "disagrees {task} {field}"),
+            Self::Unchecked(ref task) => write!(f, "unchecked {task}"),
+            Self::Project => f.write_str("disagrees project manifest"),
         }
     }
 }
@@ -246,12 +246,12 @@ pub async fn check(
             continue;
         };
         let view = match peer.view_at(*tree, heads).await {
-            | Ok(view) => view,
-            | Err(ViewAtError::Missing(_) | ViewAtError::View(ViewError::Unopened(_))) => {
+            Ok(view) => view,
+            Err(ViewAtError::Missing(_) | ViewAtError::View(ViewError::Unopened(_))) => {
                 report.0.push(Finding::Unchecked(name));
                 continue;
             },
-            | Err(failure) => return Err(failure.into()),
+            Err(failure) => return Err(failure.into()),
         };
         let derived = dialogue::derive(view.task())?;
         let identity = derived.index.manifest.identity()?;

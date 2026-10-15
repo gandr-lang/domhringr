@@ -114,8 +114,8 @@ impl FromStr for Letter
     {
         let mut characters = text.chars();
         match (characters.next(), characters.next()) {
-            | (Some(character), None) => Self::try_from(character),
-            | (None, _) | (Some(_), Some(_)) => Err(ParseLetterError),
+            (Some(character), None) => Self::try_from(character),
+            (None, _) | (Some(_), Some(_)) => Err(ParseLetterError),
         }
     }
 }
@@ -412,21 +412,21 @@ impl Readout
         let mut tied = false;
         for (letter, probability) in Letter::sequence().zip(probabilities.iter().copied()) {
             match best {
-                | Some((_, most)) if probability < most => {},
-                | Some((_, most)) if probability == most => tied = true,
-                | Some(_) | None => {
+                Some((_, most)) if probability < most => {},
+                Some((_, most)) if probability == most => tied = true,
+                Some(_) | None => {
                     best = Some((letter, probability));
                     tied = false;
                 },
             }
         }
         match (best, tied) {
-            | (Some((letter, _)), false) => Ok(Self {
+            (Some((letter, _)), false) => Ok(Self {
                 letter,
                 probabilities,
                 outside,
             }),
-            | (Some(_) | None, _) => Err(ReadoutError::Tied),
+            (Some(_) | None, _) => Err(ReadoutError::Tied),
         }
     }
 
@@ -624,12 +624,12 @@ impl FromStr for Unread
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
         match text {
-            | "no letter" => Ok(Self::NoLetter),
-            | "outside" => Ok(Self::Outside),
-            | "tied" => Ok(Self::Tied),
-            | "endpoint" => Ok(Self::Endpoint),
-            | "malformed" => Ok(Self::Malformed),
-            | _ => Err(ParseRulingError::Reason),
+            "no letter" => Ok(Self::NoLetter),
+            "outside" => Ok(Self::Outside),
+            "tied" => Ok(Self::Tied),
+            "endpoint" => Ok(Self::Endpoint),
+            "malformed" => Ok(Self::Malformed),
+            _ => Err(ParseRulingError::Reason),
         }
     }
 }
@@ -648,11 +648,11 @@ impl fmt::Display for Unread
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::NoLetter => "no letter",
-            | Self::Outside => "outside",
-            | Self::Tied => "tied",
-            | Self::Endpoint => "endpoint",
-            | Self::Malformed => "malformed",
+            Self::NoLetter => "no letter",
+            Self::Outside => "outside",
+            Self::Tied => "tied",
+            Self::Endpoint => "endpoint",
+            Self::Malformed => "malformed",
         })
     }
 }
@@ -727,8 +727,8 @@ impl fmt::Display for Ruling
     ) -> fmt::Result
     {
         match *self {
-            | Self::Read(ref readout) => write!(f, "read {readout}"),
-            | Self::Unread(reason) => write!(f, "unread {reason}"),
+            Self::Read(ref readout) => write!(f, "read {readout}"),
+            Self::Unread(reason) => write!(f, "unread {reason}"),
         }
     }
 }

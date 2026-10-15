@@ -497,11 +497,11 @@ impl Verb
     const fn flags(self) -> &'static [Flag]
     {
         match self {
-            | Self::Open => &[Flag::Project],
-            | Self::Dispatch => &[Flag::Project, Flag::Seat, Flag::Brief, Flag::At],
-            | Self::Verify => &[Flag::Project, Flag::Playbook, Flag::Repo],
-            | Self::Decide => &[Flag::Project, Flag::Rubric, Flag::Repo, Flag::Static],
-            | Self::Land => &[Flag::Project, Flag::Repo],
+            Self::Open => &[Flag::Project],
+            Self::Dispatch => &[Flag::Project, Flag::Seat, Flag::Brief, Flag::At],
+            Self::Verify => &[Flag::Project, Flag::Playbook, Flag::Repo],
+            Self::Decide => &[Flag::Project, Flag::Rubric, Flag::Repo, Flag::Static],
+            Self::Land => &[Flag::Project, Flag::Repo],
         }
     }
 }
@@ -518,19 +518,19 @@ impl fmt::Display for Verb
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Open => "domhringr open [--project <tree>]",
-            | Self::Dispatch => {
+            Self::Open => "domhringr open [--project <tree>]",
+            Self::Dispatch => {
                 "domhringr dispatch <task> --seat <peer-id> --brief <anchor|content-hash> [--at \
                  <endpoint>] [--project <tree>]"
             },
-            | Self::Verify => {
+            Self::Verify => {
                 "domhringr verify <task> --playbook <file> [--repo <dir>] [--project <tree>]"
             },
-            | Self::Decide => {
+            Self::Decide => {
                 "domhringr decide <task> --rubric <file>... [--repo <dir>] [--static <file>] \
                  [--project <tree>]"
             },
-            | Self::Land => "domhringr land <task> --repo <dir> [--project <tree>]",
+            Self::Land => "domhringr land <task> --repo <dir> [--project <tree>]",
         })
     }
 }
@@ -569,14 +569,14 @@ impl fmt::Display for Flag
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Project => "--project <tree>",
-            | Self::Seat => "--seat <peer-id>",
-            | Self::Brief => "--brief <anchor|content-hash>",
-            | Self::At => "--at <endpoint>",
-            | Self::Playbook => "--playbook <file>",
-            | Self::Repo => "--repo <dir>",
-            | Self::Rubric => "--rubric <file>",
-            | Self::Static => "--static <file>",
+            Self::Project => "--project <tree>",
+            Self::Seat => "--seat <peer-id>",
+            Self::Brief => "--brief <anchor|content-hash>",
+            Self::At => "--at <endpoint>",
+            Self::Playbook => "--playbook <file>",
+            Self::Repo => "--repo <dir>",
+            Self::Rubric => "--rubric <file>",
+            Self::Static => "--static <file>",
         })
     }
 }
@@ -617,14 +617,14 @@ impl Given
     ) -> &mut Vec<OsString>
     {
         match flag {
-            | Flag::Project => &mut self.project,
-            | Flag::Seat => &mut self.seat,
-            | Flag::Brief => &mut self.brief,
-            | Flag::At => &mut self.at,
-            | Flag::Playbook => &mut self.playbook,
-            | Flag::Repo => &mut self.repo,
-            | Flag::Rubric => &mut self.rubric,
-            | Flag::Static => &mut self.table,
+            Flag::Project => &mut self.project,
+            Flag::Seat => &mut self.seat,
+            Flag::Brief => &mut self.brief,
+            Flag::At => &mut self.at,
+            Flag::Playbook => &mut self.playbook,
+            Flag::Repo => &mut self.repo,
+            Flag::Rubric => &mut self.rubric,
+            Flag::Static => &mut self.table,
         }
     }
 }
@@ -903,53 +903,53 @@ enum Completion
 fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
 {
     let verb = match arguments.next()? {
-        | Some(lexopt::Arg::Value(word)) => verb(word)?,
-        | Some(other) => return Err(UsageError::from(other.unexpected())),
-        | None => return Err(UsageError::NoCommand),
+        Some(lexopt::Arg::Value(word)) => verb(word)?,
+        Some(other) => return Err(UsageError::from(other.unexpected())),
+        None => return Err(UsageError::NoCommand),
     };
     let mut given = Given::default();
     while let Some(argument) = arguments.next()? {
         let flag = match argument {
-            | lexopt::Arg::Value(operand) => {
+            lexopt::Arg::Value(operand) => {
                 given.operands.push(operand);
                 continue;
             },
-            | lexopt::Arg::Long(name) => {
+            lexopt::Arg::Long(name) => {
                 let flag = match name {
-                    | "project" => Flag::Project,
-                    | "seat" => Flag::Seat,
-                    | "brief" => Flag::Brief,
-                    | "at" => Flag::At,
-                    | "playbook" => Flag::Playbook,
-                    | "repo" => Flag::Repo,
-                    | "rubric" => Flag::Rubric,
-                    | "static" => Flag::Static,
-                    | _ => return Err(UsageError::from(lexopt::Arg::Long(name).unexpected())),
+                    "project" => Flag::Project,
+                    "seat" => Flag::Seat,
+                    "brief" => Flag::Brief,
+                    "at" => Flag::At,
+                    "playbook" => Flag::Playbook,
+                    "repo" => Flag::Repo,
+                    "rubric" => Flag::Rubric,
+                    "static" => Flag::Static,
+                    _ => return Err(UsageError::from(lexopt::Arg::Long(name).unexpected())),
                 };
                 if !verb.flags().contains(&flag) {
                     return Err(UsageError::from(lexopt::Arg::Long(name).unexpected()));
                 }
                 flag
             },
-            | other @ lexopt::Arg::Short(_) => return Err(UsageError::from(other.unexpected())),
+            other @ lexopt::Arg::Short(_) => return Err(UsageError::from(other.unexpected())),
         };
         let value = arguments.value()?;
         given.values(flag).push(value);
     }
     let project = match given.project.pop() {
-        | Some(text) => Project::Named(read_project(&text).map_err(UsageError::Project)?),
-        | None => Project::Environment,
+        Some(text) => Project::Named(read_project(&text).map_err(UsageError::Project)?),
+        None => Project::Environment,
     };
     let mut operands = core::mem::take(&mut given.operands).into_iter();
     let task = match (verb, operands.next(), operands.next()) {
-        | (Verb::Open, None, None) => {
+        (Verb::Open, None, None) => {
             return Ok(Invocation {
                 project,
                 command: Command::Open,
             });
         },
-        | (Verb::Dispatch | Verb::Verify | Verb::Decide | Verb::Land, Some(task), None) => task,
-        | (..) => return Err(UsageError::Operands(verb)),
+        (Verb::Dispatch | Verb::Verify | Verb::Decide | Verb::Land, Some(task), None) => task,
+        (..) => return Err(UsageError::Operands(verb)),
     };
     let required =
         |values: &mut Vec<OsString>, flag| values.pop().ok_or(UsageError::Missing { verb, flag });
@@ -959,14 +959,14 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
             .map_or_else(|| PathBuf::from("."), PathBuf::from)
     };
     let command = match verb {
-        | Verb::Dispatch => {
+        Verb::Dispatch => {
             let seat = required(&mut given.seat, Flag::Seat)?;
             let brief = required(&mut given.brief, Flag::Brief)?;
             let task = read_task(&task)?;
             let seat = seat.to_string_lossy().parse().map_err(UsageError::Seat)?;
             let at = match given.at.pop() {
-                | Some(at) => At::Given(at.to_string_lossy().parse().map_err(UsageError::At)?),
-                | None => At::Book,
+                Some(at) => At::Given(at.to_string_lossy().parse().map_err(UsageError::At)?),
+                None => At::Book,
             };
             Command::Dispatch {
                 task,
@@ -975,7 +975,7 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
                 at,
             }
         },
-        | Verb::Verify => {
+        Verb::Verify => {
             let playbook = PathBuf::from(required(&mut given.playbook, Flag::Playbook)?);
             Command::Verify {
                 task: read_task(&task)?,
@@ -983,17 +983,16 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
                 repository: repository(&mut given.repo),
             }
         },
-        | Verb::Decide => {
+        Verb::Decide => {
             if given.rubric.is_empty() {
                 return Err(UsageError::Missing {
                     verb,
                     flag: Flag::Rubric,
                 });
             }
-            let judging = match given.table.pop() {
-                | Some(file) => Judging::Table(PathBuf::from(file)),
-                | None => Judging::Endpoint,
-            };
+            let judging = given.table.pop().map_or(Judging::Endpoint, |file| {
+                Judging::Table(PathBuf::from(file))
+            });
             Command::Decide {
                 task: read_task(&task)?,
                 rubrics: given.rubric.into_iter().map(PathBuf::from).collect(),
@@ -1001,14 +1000,14 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
                 judging,
             }
         },
-        | Verb::Land => {
+        Verb::Land => {
             let repository = PathBuf::from(required(&mut given.repo, Flag::Repo)?);
             Command::Land {
                 task: read_task(&task)?,
                 repository,
             }
         },
-        | Verb::Open => return Err(UsageError::Operands(verb)),
+        Verb::Open => return Err(UsageError::Operands(verb)),
     };
     Ok(Invocation { project, command })
 }
@@ -1033,12 +1032,12 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
 fn verb(word: OsString) -> Result<Verb, UsageError>
 {
     match word.to_str() {
-        | Some("open") => Ok(Verb::Open),
-        | Some("dispatch") => Ok(Verb::Dispatch),
-        | Some("verify") => Ok(Verb::Verify),
-        | Some("decide") => Ok(Verb::Decide),
-        | Some("land") => Ok(Verb::Land),
-        | Some(_) | None => Err(UsageError::Command(word)),
+        Some("open") => Ok(Verb::Open),
+        Some("dispatch") => Ok(Verb::Dispatch),
+        Some("verify") => Ok(Verb::Verify),
+        Some("decide") => Ok(Verb::Decide),
+        Some("land") => Ok(Verb::Land),
+        Some(_) | None => Err(UsageError::Command(word)),
     }
 }
 
@@ -1086,8 +1085,8 @@ fn read_task(text: &OsString) -> Result<TaskName, UsageError>
 fn read_project(text: &OsStr) -> Result<TreeId, ParseProjectError>
 {
     match text.to_string_lossy().parse::<Anchor>()? {
-        | Anchor::Tree(Authority::Key(tree)) => Ok(tree),
-        | Anchor::Tree(_) | Anchor::Path { .. } | Anchor::Commit { .. } => {
+        Anchor::Tree(Authority::Key(tree)) => Ok(tree),
+        Anchor::Tree(_) | Anchor::Path { .. } | Anchor::Commit { .. } => {
             Err(ParseProjectError::NotTree)
         },
     }
@@ -1156,14 +1155,14 @@ fn settings(project: Project) -> Result<Settings, RunError>
 {
     let set = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
     let state = match (set(STATE), set("XDG_STATE_HOME"), set("HOME")) {
-        | (Some(state), ..) => PathBuf::from(state),
-        | (None, Some(base), _) => PathBuf::from(base).join("domhringr"),
-        | (None, None, Some(home)) => PathBuf::from(home).join(".local/state/domhringr"),
-        | (None, None, None) => return Err(RunError::NoState),
+        (Some(state), ..) => PathBuf::from(state),
+        (None, Some(base), _) => PathBuf::from(base).join("domhringr"),
+        (None, None, Some(home)) => PathBuf::from(home).join(".local/state/domhringr"),
+        (None, None, None) => return Err(RunError::NoState),
     };
     let project = match project {
-        | Project::Named(tree) => tree,
-        | Project::Environment => {
+        Project::Named(tree) => tree,
+        Project::Environment => {
             let text = set(PROJECT).ok_or(RunError::NoProject)?;
             read_project(&text).map_err(RunError::Project)?
         },
@@ -1267,8 +1266,8 @@ async fn act(
 ) -> Result<Completion, RunError>
 {
     match command {
-        | Command::Open => project::open(peer, state, operator, project).await?,
-        | Command::Dispatch {
+        Command::Open => project::open(peer, state, operator, project).await?,
+        Command::Dispatch {
             task,
             seat,
             brief,
@@ -1281,7 +1280,7 @@ async fn act(
             };
             project::dispatch(peer, on, &task, seat, brief, at).await?;
         },
-        | Command::Verify {
+        Command::Verify {
             task,
             playbook,
             repository,
@@ -1304,7 +1303,7 @@ async fn act(
             drop(store);
             verified?;
         },
-        | Command::Decide {
+        Command::Decide {
             task,
             rubrics,
             repository,
@@ -1331,7 +1330,7 @@ async fn act(
             drop(store);
             return decided;
         },
-        | Command::Land { task, repository } => {
+        Command::Land { task, repository } => {
             let (tree, store) = project::caught_up(peer, project, &task, evidence).await?;
             let before = store.peer().heads(tree).await?;
             let landed = change::land(store.peer(), evidence, operator, tree, &repository).await;
@@ -1417,20 +1416,20 @@ fn report(error: &dyn Error) -> std::io::Result<()>
 fn main() -> ExitCode
 {
     let invocation = match parse(lexopt::Parser::from_env()) {
-        | Ok(invocation) => invocation,
-        | Err(error) => {
+        Ok(invocation) => invocation,
+        Err(error) => {
             let reported =
                 report(&error).and_then(|()| std::io::stderr().write_all(USAGE.as_bytes()));
             return match reported {
-                | Ok(()) | Err(_) => ExitCode::from(USAGE_STATUS),
+                Ok(()) | Err(_) => ExitCode::from(USAGE_STATUS),
             };
         },
     };
     match run(invocation) {
-        | Ok(Completion::Success) => ExitCode::SUCCESS,
-        | Ok(Completion::Undecided) => ExitCode::from(UNDECIDED_STATUS),
-        | Err(error) => match report(&error) {
-            | Ok(()) | Err(_) => ExitCode::FAILURE,
+        Ok(Completion::Success) => ExitCode::SUCCESS,
+        Ok(Completion::Undecided) => ExitCode::from(UNDECIDED_STATUS),
+        Err(error) => match report(&error) {
+            Ok(()) | Err(_) => ExitCode::FAILURE,
         },
     }
 }

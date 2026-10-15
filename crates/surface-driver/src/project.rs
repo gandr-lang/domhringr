@@ -133,8 +133,8 @@ impl TaskName
     ) -> Result<(), RunError>
     {
         match self.within {
-            | Within::Project(named) if named != project => Err(RunError::OtherProject(named)),
-            | Within::Any | Within::Project(_) => Ok(()),
+            Within::Project(named) if named != project => Err(RunError::OtherProject(named)),
+            Within::Any | Within::Project(_) => Ok(()),
         }
     }
 }
@@ -269,8 +269,8 @@ async fn task(
 ) -> Result<TreeId, RunError>
 {
     match find(peer, project, task).await? {
-        | Found::Tree(tree) => Ok(tree),
-        | Found::Unbound => Err(RunError::Unbound(task.path().clone())),
+        Found::Tree(tree) => Ok(tree),
+        Found::Unbound => Err(RunError::Unbound(task.path().clone())),
     }
 }
 
@@ -301,9 +301,9 @@ async fn find(
     task.within(project)?;
     let view = peer.view(project).await?;
     match view.bindings().get(task.path()) {
-        | Some(&(_, Target::Anchor(Anchor::Tree(Authority::Key(tree))))) => Ok(Found::Tree(tree)),
-        | Some(_) => Err(RunError::NotTask(task.path().clone())),
-        | None => Ok(Found::Unbound),
+        Some(&(_, Target::Anchor(Anchor::Tree(Authority::Key(tree))))) => Ok(Found::Tree(tree)),
+        Some(_) => Err(RunError::NotTask(task.path().clone())),
+        None => Ok(Found::Unbound),
     }
 }
 
@@ -362,8 +362,8 @@ pub async fn dispatch(
 ) -> Result<(), RunError>
 {
     let tree = match find(&peer, on.project, task).await? {
-        | Found::Tree(tree) => tree,
-        | Found::Unbound => {
+        Found::Tree(tree) => tree,
+        Found::Unbound => {
             let key = TreeKey::mint(on.state)?;
             let tree = key.tree();
             peer.commit(tree, Receipt::open(&key, on.operator)?).await?;
@@ -379,22 +379,22 @@ pub async fn dispatch(
     let remote = reach(&peer, on.project, tree, seat, at).await?;
     let view = peer.view(tree).await?;
     let resent = match *view.task().current() {
-        | Current::Attempt(ref attempt)
+        Current::Attempt(ref attempt)
             if attempt.slot() == Slot::Held(seat)
                 && *attempt.brief() == brief
                 && attempt.edition() == domhringr_record_tree::Edition::CURRENT =>
         {
             Some(attempt.dispatch())
         },
-        | Current::Attempt(_) | Current::Undispatched => None,
+        Current::Attempt(_) | Current::Undispatched => None,
     };
-    let dispatch = match resent {
-        | Some(dispatch) => dispatch,
-        | None => {
-            let receipt =
-                Receipt::dispatch(tree, seat, domhringr_record_tree::Edition::CURRENT, brief)?;
-            peer.commit(tree, receipt).await?
-        },
+    let dispatch = if let Some(dispatch) = resent {
+        dispatch
+    }
+    else {
+        let receipt =
+            Receipt::dispatch(tree, seat, domhringr_record_tree::Edition::CURRENT, brief)?;
+        peer.commit(tree, receipt).await?
     };
     emit(&format_args!(
         "dispatch {}\n",
@@ -456,14 +456,14 @@ async fn reach(
 ) -> Result<RemotePeer, Unreached>
 {
     let route = match peer.route(tree, Aim::Peer(seat), at).await {
-        | Err(RouteError::Unreachable { .. }) => {
+        Err(RouteError::Unreachable { .. }) => {
             peer.route(project, Aim::Peer(seat), At::Book).await?
         },
-        | routed => routed?,
+        routed => routed?,
     };
     match route {
-        | Route::Itself => Err(Unreached::Itself),
-        | Route::Book { remote, .. } | Route::Given { remote } => Ok(remote),
+        Route::Itself => Err(Unreached::Itself),
+        Route::Book { remote, .. } | Route::Given { remote } => Ok(remote),
     }
 }
 
@@ -487,16 +487,16 @@ async fn awaited(
 ) -> Result<Awaiting, RunError>
 {
     let view = match peer.view(tree).await {
-        | Ok(view) => view,
-        | Err(ViewError::Unopened(_)) => return Ok(Awaiting::Nothing),
-        | Err(failure) => return Err(RunError::View(failure)),
+        Ok(view) => view,
+        Err(ViewError::Unopened(_)) => return Ok(Awaiting::Nothing),
+        Err(failure) => return Err(RunError::View(failure)),
     };
     Ok(match *view.task().current() {
-        | Current::Attempt(ref attempt) => match (attempt.slot(), attempt.answer()) {
-            | (Slot::Held(seat), Answer::Awaited) => Awaiting::Seat(seat),
-            | (Slot::Held(_) | Slot::Retired { .. }, _) => Awaiting::Nothing,
+        Current::Attempt(ref attempt) => match (attempt.slot(), attempt.answer()) {
+            (Slot::Held(seat), Answer::Awaited) => Awaiting::Seat(seat),
+            (Slot::Held(_) | Slot::Retired { .. }, _) => Awaiting::Nothing,
         },
-        | Current::Undispatched => Awaiting::Nothing,
+        Current::Undispatched => Awaiting::Nothing,
     })
 }
 
@@ -546,8 +546,8 @@ impl Store
     pub const fn peer(&self) -> &Peer
     {
         match *self {
-            | Self::Local(ref peer) => peer,
-            | Self::Bound(ref node) => node.peer(),
+            Self::Local(ref peer) => peer,
+            Self::Bound(ref node) => node.peer(),
         }
     }
 
@@ -591,16 +591,16 @@ async fn unheld(
 ) -> Result<Unheld, RunError>
 {
     let view = match peer.view(tree).await {
-        | Ok(view) => view,
-        | Err(ViewError::Unopened(_)) => return Ok(Unheld::Nothing),
-        | Err(failure) => return Err(RunError::View(failure)),
+        Ok(view) => view,
+        Err(ViewError::Unopened(_)) => return Ok(Unheld::Nothing),
+        Err(failure) => return Err(RunError::View(failure)),
     };
     Ok(match change::reported(&view) {
-        | Ok(reported) if evidence.read(reported.content).is_err() => Unheld::Report {
+        Ok(reported) if evidence.read(reported.content).is_err() => Unheld::Report {
             author: reported.author,
             content: reported.content,
         },
-        | Ok(_) | Err(_) => Unheld::Nothing,
+        Ok(_) | Err(_) => Unheld::Nothing,
     })
 }
 
@@ -679,8 +679,8 @@ pub async fn caught_up(
     let tree = task(&peer, project, name).await?;
     let awaiting = awaited(&peer, tree).await?;
     let store = match awaiting {
-        | Awaiting::Nothing => Store::Local(peer),
-        | Awaiting::Seat(seat) => {
+        Awaiting::Nothing => Store::Local(peer),
+        Awaiting::Seat(seat) => {
             let node = peer.bind(BindPort::Ephemeral, &[]).await?;
             if let Err(failure) = catch_up(&node, project, tree, seat).await {
                 node.close().await;
@@ -724,16 +724,16 @@ async fn holding(
 ) -> Result<Store, RunError>
 {
     let lacking = match unheld(store.peer(), tree, evidence).await {
-        | Ok(Unheld::Report { author, content }) => (author, content),
-        | Ok(Unheld::Nothing) => return Ok(store),
-        | Err(failure) => {
+        Ok(Unheld::Report { author, content }) => (author, content),
+        Ok(Unheld::Nothing) => return Ok(store),
+        Err(failure) => {
             store.close().await;
             return Err(failure);
         },
     };
     let node = match store {
-        | Store::Local(peer) => peer.bind(BindPort::Ephemeral, &[]).await?,
-        | Store::Bound(node) => node,
+        Store::Local(peer) => peer.bind(BindPort::Ephemeral, &[]).await?,
+        Store::Bound(node) => node,
     };
     if let Err(failure) = fetch(&node, project, tree, lacking, evidence).await {
         node.close().await;
@@ -799,8 +799,8 @@ pub async fn open(
                 return None;
             };
             match (attempt.slot(), attempt.answer()) {
-                | (Slot::Held(seat), Answer::Awaited) => Some((name, tree, seat)),
-                | _answered => None,
+                (Slot::Held(seat), Answer::Awaited) => Some((name, tree, seat)),
+                _answered => None,
             }
         })
         .collect();
@@ -824,8 +824,8 @@ pub async fn open(
     }
     store.close().await;
     let derived = match store {
-        | Store::Local(_) => before,
-        | Store::Bound(_) => {
+        Store::Local(_) => before,
+        Store::Bound(_) => {
             deriver
                 .project(store.peer(), project, &view, &indexes)
                 .await?
@@ -875,7 +875,7 @@ fn listing(
     }
     for (name, entry) in tasks {
         let standing = match *entry {
-            | TaskEntry::Held {
+            TaskEntry::Held {
                 tree,
                 ref current,
                 ref refused,
@@ -889,7 +889,7 @@ fn listing(
                 }
                 current.to_string()
             },
-            | TaskEntry::Unheld { .. } => String::from("unheld"),
+            TaskEntry::Unheld { .. } => String::from("unheld"),
         };
         lines.push(format!("task {} {standing}\n", in_project(project, name)));
     }

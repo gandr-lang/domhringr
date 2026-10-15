@@ -196,8 +196,8 @@ impl Step
             .parsed::<StepId>(Reason::Identifier)?;
         let why = table.require(Key("why"))?.filled()?;
         let bound = match (table.take(Key("verifier")), table.take(Key("question"))) {
-            | (Slot::Given(verifier), Slot::Absent) => Bound::Verifier(Verifier::read(verifier)?),
-            | (Slot::Absent, Slot::Given(question)) => {
+            (Slot::Given(verifier), Slot::Absent) => Bound::Verifier(Verifier::read(verifier)?),
+            (Slot::Absent, Slot::Given(question)) => {
                 let mut question = question.table(Keys(&["rubric", "question"]))?;
                 let rubric = question
                     .require(Key("rubric"))?
@@ -207,10 +207,10 @@ impl Step
                     .parsed::<Name>(Reason::Identifier)?;
                 Bound::Question { rubric, question }
             },
-            | (Slot::Given(_), Slot::Given(_)) => {
+            (Slot::Given(_), Slot::Given(_)) => {
                 return Err(table.field().clone().refused(Reason::Ambiguous));
             },
-            | (Slot::Absent, Slot::Absent) => {
+            (Slot::Absent, Slot::Absent) => {
                 return Err(table.field().clone().refused(Reason::Unbound));
             },
         };
@@ -394,10 +394,10 @@ question = { rubric = "../rubrics/change.toml", question = "readme-current" }
             .iter()
             .map(|step| {
                 let bound = match *step.bound() {
-                    | Bound::Verifier(ref verifier) => {
+                    Bound::Verifier(ref verifier) => {
                         format!("{} {:?}", verifier.command(), verifier.arguments())
                     },
-                    | Bound::Question {
+                    Bound::Question {
                         ref rubric,
                         ref question,
                     } => format!("{rubric} {question}"),

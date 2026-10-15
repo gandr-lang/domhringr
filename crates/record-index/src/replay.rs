@@ -162,17 +162,30 @@ pub fn replay(
         };
         let action = action(movement.receipt.kind()).map_err(&refused)?;
         let channel = match *movement.receipt.kind() {
-            | Kind::Verdict { .. } => judges
+            Kind::Verdict { .. } => judges
                 .entry(movement.commit)
                 .or_insert_with(|| Play::new(Channel::Judge)),
-            | Kind::Graded { verdict, .. } => judges
+            Kind::Graded { verdict, .. } => judges
                 .entry(verdict)
                 .or_insert_with(|| Play::new(Channel::Judge)),
-            | Kind::Verified { runner, .. } => runners
+            Kind::Verified { runner, .. } => runners
                 .entry(runner)
                 .or_insert_with(|| Play::new(Channel::Runner)),
-            | Kind::Decide { .. } | Kind::Landed { .. } => &mut decision,
-            | _ => &mut slot,
+            Kind::Decide { .. } | Kind::Landed { .. } => &mut decision,
+            Kind::Indexed { .. }
+            | Kind::Open { .. }
+            | Kind::Grant { .. }
+            | Kind::Note { .. }
+            | Kind::Bind { .. }
+            | Kind::Claim { .. }
+            | Kind::Introduce { .. }
+            | Kind::Present { .. }
+            | Kind::Withdraw { .. }
+            | Kind::Dispatch { .. }
+            | Kind::Report { .. }
+            | Kind::Handoff { .. }
+            | Kind::Retire { .. }
+            | Kind::Pause { .. } => &mut slot,
         };
         let _progress = channel
             .record(
@@ -184,8 +197,8 @@ pub fn replay(
             .map_err(|reason| refused(Reason::Protocol(reason)))?;
         let step = resolve(movement, &related).map_err(&refused)?;
         let dispatch = match step {
-            | Step::Dispatch { .. } => movement.commit,
-            | Step::Report { dispatch, .. }
+            Step::Dispatch { .. } => movement.commit,
+            Step::Report { dispatch, .. }
             | Step::Handoff { dispatch, .. }
             | Step::Retire { dispatch, .. }
             | Step::Pause { dispatch, .. }
@@ -225,21 +238,21 @@ pub fn replay(
 fn action(kind: &Kind) -> Result<Movement, Reason>
 {
     Ok(match *kind {
-        | Kind::Dispatch { .. } => Movement::Dispatch,
-        | Kind::Report { .. } => Movement::Report,
-        | Kind::Handoff { .. } => Movement::Handoff,
-        | Kind::Retire { .. } => Movement::Retire,
-        | Kind::Pause { .. } => Movement::Pause,
-        | Kind::Verdict { .. } => Movement::Verdict,
-        | Kind::Graded { .. } => Movement::Graded,
-        | Kind::Verified { .. } => Movement::Verified,
-        | Kind::Decide { ref decision, .. } => Movement::Decide(match *decision {
-            | Decision::Land => Choice::Land,
-            | Decision::Rework { .. } => Choice::Rework,
-            | Decision::Abandon => Choice::Abandon,
+        Kind::Dispatch { .. } => Movement::Dispatch,
+        Kind::Report { .. } => Movement::Report,
+        Kind::Handoff { .. } => Movement::Handoff,
+        Kind::Retire { .. } => Movement::Retire,
+        Kind::Pause { .. } => Movement::Pause,
+        Kind::Verdict { .. } => Movement::Verdict,
+        Kind::Graded { .. } => Movement::Graded,
+        Kind::Verified { .. } => Movement::Verified,
+        Kind::Decide { ref decision, .. } => Movement::Decide(match *decision {
+            Decision::Land => Choice::Land,
+            Decision::Rework { .. } => Choice::Rework,
+            Decision::Abandon => Choice::Abandon,
         }),
-        | Kind::Landed { .. } => Movement::Landed,
-        | Kind::Indexed { .. }
+        Kind::Landed { .. } => Movement::Landed,
+        Kind::Indexed { .. }
         | Kind::Open { .. }
         | Kind::Grant { .. }
         | Kind::Note { .. }
@@ -277,7 +290,7 @@ pub fn resolve(
 {
     let author = movement.author;
     Ok(match *movement.receipt.kind() {
-        | Kind::Dispatch {
+        Kind::Dispatch {
             seat,
             edition,
             ref brief,
@@ -286,7 +299,7 @@ pub fn resolve(
             edition,
             brief: brief.clone(),
         },
-        | Kind::Report {
+        Kind::Report {
             dispatch,
             content,
             ref summary,
@@ -296,14 +309,14 @@ pub fn resolve(
             author,
             summary: summary.clone(),
         },
-        | Kind::Handoff { dispatch, to } => Step::Handoff {
+        Kind::Handoff { dispatch, to } => Step::Handoff {
             dispatch,
             from: author,
             to,
         },
-        | Kind::Retire { dispatch } => Step::Retire { dispatch, author },
-        | Kind::Pause { dispatch } => Step::Pause { dispatch, author },
-        | Kind::Verdict {
+        Kind::Retire { dispatch } => Step::Retire { dispatch, author },
+        Kind::Pause { dispatch } => Step::Pause { dispatch, author },
+        Kind::Verdict {
             dispatch,
             judge,
             rubric,
@@ -316,7 +329,7 @@ pub fn resolve(
             transcript,
             answers: answers.clone(),
         },
-        | Kind::Verified {
+        Kind::Verified {
             dispatch,
             runner,
             playbook,
@@ -331,7 +344,7 @@ pub fn resolve(
             output,
             status,
         },
-        | Kind::Graded {
+        Kind::Graded {
             verdict,
             ref grades,
             composed,
@@ -364,7 +377,7 @@ pub fn resolve(
                 composed,
             }
         },
-        | Kind::Decide {
+        Kind::Decide {
             dispatch,
             operator,
             ref decision,
@@ -373,7 +386,7 @@ pub fn resolve(
             operator,
             decision: decision.clone(),
         },
-        | Kind::Landed { decided, merge } => {
+        Kind::Landed { decided, merge } => {
             let decision = related
                 .get(&decided)
                 .ok_or(Reason::Reference(Movement::Landed))?;
@@ -390,7 +403,7 @@ pub fn resolve(
                 merge,
             }
         },
-        | Kind::Indexed { .. }
+        Kind::Indexed { .. }
         | Kind::Open { .. }
         | Kind::Grant { .. }
         | Kind::Note { .. }

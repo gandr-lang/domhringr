@@ -89,24 +89,23 @@ fn index(
         .enumerate()
         .map(|(position, value)| {
             let key = match kind {
-                | IndexKind::Dialogue => MoveKey::new(
+                IndexKind::Dialogue => MoveKey::new(
                     AttemptNumber(1),
                     SequenceNumber(u32::try_from(position).unwrap()),
                 )
                 .owned(),
-                | IndexKind::Project => format!("task-{position:08}")
+                IndexKind::Project => format!("task-{position:08}")
                     .parse::<crate::project::TaskName>()
                     .unwrap()
                     .key(),
-                | IndexKind::Provenance => {
-                    crate::provenance::Subject::Evidence(testing::evidence()).key(
+                IndexKind::Provenance => crate::provenance::Subject::Evidence(testing::evidence())
+                    .key(
                         testing::tree(),
                         MoveKey::new(
                             AttemptNumber(1),
                             SequenceNumber(u32::try_from(position).unwrap()),
                         ),
-                    )
-                },
+                    ),
             };
             Record::new(key, value.clone())
         })

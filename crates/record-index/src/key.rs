@@ -228,8 +228,8 @@ impl AttemptNumber
     {
         let lower = OwnedKeyBound::Included(MoveKey::new(self, SequenceNumber(0)).owned());
         let upper = match self.next() {
-            | Ok(next) => OwnedKeyBound::Excluded(MoveKey::new(next, SequenceNumber(0)).owned()),
-            | Err(KeyError::Overflow | KeyError::Width) => OwnedKeyBound::Unbounded,
+            Ok(next) => OwnedKeyBound::Excluded(MoveKey::new(next, SequenceNumber(0)).owned()),
+            Err(KeyError::Overflow | KeyError::Width) => OwnedKeyBound::Unbounded,
         };
         let range = gandr_storage_records::KeyRange::new(lower.as_bound(), upper.as_bound())?;
         Ok(OwnedKeyRange::from_range(range))

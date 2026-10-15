@@ -332,16 +332,16 @@ impl fmt::Display for Movement
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Dispatch => "dispatch",
-            | Self::Report => "report",
-            | Self::Handoff => "handoff",
-            | Self::Retire => "retire",
-            | Self::Pause => "pause",
-            | Self::Verdict => "verdict",
-            | Self::Graded => "graded",
-            | Self::Verified => "verified",
-            | Self::Decide(_) => "decide",
-            | Self::Landed => "landed",
+            Self::Dispatch => "dispatch",
+            Self::Report => "report",
+            Self::Handoff => "handoff",
+            Self::Retire => "retire",
+            Self::Pause => "pause",
+            Self::Verdict => "verdict",
+            Self::Graded => "graded",
+            Self::Verified => "verified",
+            Self::Decide(_) => "decide",
+            Self::Landed => "landed",
         })
     }
 }
@@ -520,16 +520,16 @@ impl Arena
     ) -> Result<&Session, UnknownEdition>
     {
         let channels = match edition {
-            | Edition::ONE => &self.base,
+            Edition::ONE => &self.base,
             #[cfg(feature = "edition-2")]
-            | Edition::TWO => &self.paused,
-            | unknown => return Err(UnknownEdition(unknown)),
+            Edition::TWO => &self.paused,
+            unknown => return Err(UnknownEdition(unknown)),
         };
         Ok(match channel {
-            | Channel::Slot => &channels.slot,
-            | Channel::Judge => &channels.judge,
-            | Channel::Runner => &channels.runner,
-            | Channel::Decision => &channels.decision,
+            Channel::Slot => &channels.slot,
+            Channel::Judge => &channels.judge,
+            Channel::Runner => &channels.runner,
+            Channel::Decision => &channels.decision,
         })
     }
 
@@ -568,8 +568,8 @@ impl Arena
             target,
             gandr_core_session::Relation::Subtype,
         )? {
-            | gandr_core_session::RelationResult::Related(evidence) => evidence,
-            | gandr_core_session::RelationResult::Unrelated => {
+            gandr_core_session::RelationResult::Related(evidence) => evidence,
+            gandr_core_session::RelationResult::Unrelated => {
                 return Err(ArenaError::NotWidening {
                     source_edition,
                     target_edition,
@@ -709,18 +709,18 @@ impl Play
         })?;
         let before = self.moves.len();
         let (label, identity) = match movement {
-            | Movement::Dispatch => (None, DISPATCH),
-            | Movement::Report => (Some("report"), REPORT),
-            | Movement::Handoff => (Some("handoff"), HANDOFF),
-            | Movement::Retire => (Some("retire"), RETIRE),
-            | Movement::Pause => (Some("pause"), PAUSE),
-            | Movement::Verdict => (None, VERDICT),
-            | Movement::Graded => (None, GRADED),
-            | Movement::Verified => (None, VERIFIED),
-            | Movement::Decide(Choice::Land) => (Some("land"), DECIDE),
-            | Movement::Decide(Choice::Rework) => (Some("rework"), DECIDE),
-            | Movement::Decide(Choice::Abandon) => (Some("abandon"), DECIDE),
-            | Movement::Landed => (None, LANDED),
+            Movement::Dispatch => (None, DISPATCH),
+            Movement::Report => (Some("report"), REPORT),
+            Movement::Handoff => (Some("handoff"), HANDOFF),
+            Movement::Retire => (Some("retire"), RETIRE),
+            Movement::Pause => (Some("pause"), PAUSE),
+            Movement::Verdict => (None, VERDICT),
+            Movement::Graded => (None, GRADED),
+            Movement::Verified => (None, VERIFIED),
+            Movement::Decide(Choice::Land) => (Some("land"), DECIDE),
+            Movement::Decide(Choice::Rework) => (Some("rework"), DECIDE),
+            Movement::Decide(Choice::Abandon) => (Some("abandon"), DECIDE),
+            Movement::Landed => (None, LANDED),
         };
         let payload = Payload { identity, digest };
         if let Some(label) = label {
@@ -745,9 +745,9 @@ impl Play
         // economy: replay each canonical prefix because the upstream monitor has no
         // cursor API; a resumable monitor removes this quadratic cost.
         match gandr_core_session::replay(session, &self.moves) {
-            | Ok(_) => Ok(Progress::Complete),
-            | Err(ReplayError::IncompleteRun { expected, .. }) => Ok(Progress::Open(expected)),
-            | Err(reason) => {
+            Ok(_) => Ok(Progress::Complete),
+            Err(ReplayError::IncompleteRun { expected, .. }) => Ok(Progress::Open(expected)),
+            Err(reason) => {
                 self.moves.truncate(before);
                 Err(Box::new(Refusal {
                     edition,

@@ -243,7 +243,7 @@ pub fn derive(task: &Task) -> Result<Dialogue, DialogueError>
             return Err(DialogueError::Sources);
         }
         let (attempt, seq) = match *step {
-            | Step::Dispatch { .. } => {
+            Step::Dispatch { .. } => {
                 attempts = attempts.next()?;
                 let previous = positions.insert(commit, (attempts, SequenceNumber(0)));
                 if previous.is_some() {
@@ -251,7 +251,7 @@ pub fn derive(task: &Task) -> Result<Dialogue, DialogueError>
                 }
                 (attempts, SequenceNumber(0))
             },
-            | Step::Report { ref dispatch, .. }
+            Step::Report { ref dispatch, .. }
             | Step::Handoff { ref dispatch, .. }
             | Step::Retire { ref dispatch, .. }
             | Step::Pause { ref dispatch, .. }
@@ -604,7 +604,7 @@ mod tests
                 let receipt = value.receipt().unwrap();
                 assert_eq!(receipt.tree(), tree());
                 let step = match *receipt.kind() {
-                    | Kind::Dispatch {
+                    Kind::Dispatch {
                         ref edition,
                         ref seat,
                         ref brief,
@@ -613,7 +613,7 @@ mod tests
                         seat: *seat,
                         brief: brief.clone(),
                     },
-                    | Kind::Report {
+                    Kind::Report {
                         ref dispatch,
                         ref content,
                         ref summary,
@@ -623,7 +623,7 @@ mod tests
                         content: *content,
                         summary: summary.clone(),
                     },
-                    | Kind::Handoff {
+                    Kind::Handoff {
                         ref dispatch,
                         ref to,
                     } => Step::Handoff {
@@ -631,15 +631,15 @@ mod tests
                         from: value.author,
                         to: *to,
                     },
-                    | Kind::Retire { ref dispatch } => Step::Retire {
+                    Kind::Retire { ref dispatch } => Step::Retire {
                         dispatch: *dispatch,
                         author: value.author,
                     },
-                    | Kind::Pause { ref dispatch } => Step::Pause {
+                    Kind::Pause { ref dispatch } => Step::Pause {
                         dispatch: *dispatch,
                         author: value.author,
                     },
-                    | Kind::Verdict {
+                    Kind::Verdict {
                         ref dispatch,
                         ref judge,
                         ref rubric,
@@ -652,7 +652,7 @@ mod tests
                         transcript: *transcript,
                         answers: answers.clone(),
                     },
-                    | Kind::Verified {
+                    Kind::Verified {
                         ref dispatch,
                         ref runner,
                         ref playbook,
@@ -667,7 +667,7 @@ mod tests
                         output: *output,
                         status: *status,
                     },
-                    | Kind::Graded {
+                    Kind::Graded {
                         ref verdict,
                         ref grades,
                         ref composed,
@@ -695,7 +695,7 @@ mod tests
                             composed: *composed,
                         }
                     },
-                    | Kind::Decide {
+                    Kind::Decide {
                         ref dispatch,
                         ref operator,
                         ref decision,
@@ -704,7 +704,7 @@ mod tests
                         operator: *operator,
                         decision: decision.clone(),
                     },
-                    | Kind::Landed {
+                    Kind::Landed {
                         ref decided,
                         ref merge,
                     } => {
@@ -725,7 +725,15 @@ mod tests
                             merge: *merge,
                         }
                     },
-                    | ref _nonmove => panic!("non-move in dialogue"),
+                    Kind::Indexed { .. }
+                    | Kind::Open { .. }
+                    | Kind::Grant { .. }
+                    | Kind::Note { .. }
+                    | Kind::Bind { .. }
+                    | Kind::Claim { .. }
+                    | Kind::Introduce { .. }
+                    | Kind::Present { .. }
+                    | Kind::Withdraw { .. } => panic!("non-move in dialogue"),
                 };
                 assert_eq!(&step, steps[&value.commit()]);
             }

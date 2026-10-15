@@ -73,15 +73,15 @@ impl Subject
     {
         let mut bytes = Vec::with_capacity(34);
         match self {
-            | Self::Evidence(digest) => {
+            Self::Evidence(digest) => {
                 bytes.push(1);
                 bytes.extend_from_slice(digest.as_ref());
             },
-            | Self::Revision(revision) => {
+            Self::Revision(revision) => {
                 bytes.push(2);
                 bytes.push(match revision {
-                    | Revision::Sha1(_) => 20,
-                    | Revision::Sha256(_) => 32,
+                    Revision::Sha1(_) => 20,
+                    Revision::Sha256(_) => 32,
                 });
                 bytes.extend_from_slice(revision.as_ref());
             },
@@ -150,15 +150,15 @@ impl Subject
     {
         let mut bytes = Vec::with_capacity(74);
         match self {
-            | Self::Evidence(digest) => {
+            Self::Evidence(digest) => {
                 bytes.push(1);
                 bytes.extend_from_slice(digest.as_ref());
             },
-            | Self::Revision(revision) => {
+            Self::Revision(revision) => {
                 bytes.push(2);
                 bytes.push(match revision {
-                    | Revision::Sha1(_) => 20,
-                    | Revision::Sha256(_) => 32,
+                    Revision::Sha1(_) => 20,
+                    Revision::Sha256(_) => 32,
                 });
                 bytes.extend_from_slice(revision.as_ref());
             },
@@ -205,12 +205,12 @@ impl TryFrom<&[u8]> for Reference
     {
         let (tag, bytes) = bytes.split_first().ok_or(ProvenanceError::Key)?;
         let (subject, bytes) = match *tag {
-            | 1 => {
+            1 => {
                 let (digest, bytes) = bytes.split_at_checked(32).ok_or(ProvenanceError::Key)?;
                 let digest = <[u8; 32]>::try_from(digest).map_err(|_width| ProvenanceError::Key)?;
                 (Subject::Evidence(ManifestDigest::from(digest)), bytes)
             },
-            | 2 => {
+            2 => {
                 let (width, bytes) = bytes.split_first().ok_or(ProvenanceError::Key)?;
                 let (revision, bytes) = bytes
                     .split_at_checked(usize::from(*width))
@@ -219,7 +219,7 @@ impl TryFrom<&[u8]> for Reference
                     Revision::try_from(revision).map_err(|_width| ProvenanceError::Key)?;
                 (Subject::Revision(revision), bytes)
             },
-            | _foreign => return Err(ProvenanceError::Key),
+            _foreign => return Err(ProvenanceError::Key),
         };
         let (tree, position) = bytes.split_at_checked(32).ok_or(ProvenanceError::Key)?;
         let tree = <[u8; 32]>::try_from(tree).map_err(|_width| ProvenanceError::Key)?;
@@ -260,10 +260,10 @@ impl fmt::Display for Field
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Content => "content",
-            | Self::Output => "output",
-            | Self::Transcript => "transcript",
-            | Self::Revision => "revision",
+            Self::Content => "content",
+            Self::Output => "output",
+            Self::Transcript => "transcript",
+            Self::Revision => "revision",
         })
     }
 }
@@ -305,10 +305,10 @@ impl CanonicalValue for Attribution
         Sink: TokenSink + ?Sized,
     {
         let tag = match self.field {
-            | Field::Content => 1,
-            | Field::Output => 2,
-            | Field::Transcript => 3,
-            | Field::Revision => 4,
+            Field::Content => 1,
+            Field::Output => 2,
+            Field::Transcript => 3,
+            Field::Revision => 4,
         };
         sink.open(ConstructorTag::from(tag))?;
         sink.bytes(TokenBytes::from(self.holder.as_ref()))?;
@@ -338,11 +338,11 @@ impl CanonicalValue for Attribution
         let found = reader.read_tag()?;
         let refused = || ValueError::UnexpectedConstructor { found, position };
         let field = match u8::from(found) {
-            | 1 => Field::Content,
-            | 2 => Field::Output,
-            | 3 => Field::Transcript,
-            | 4 => Field::Revision,
-            | _foreign => return Err(refused()),
+            1 => Field::Content,
+            2 => Field::Output,
+            3 => Field::Transcript,
+            4 => Field::Revision,
+            _foreign => return Err(refused()),
         };
         let holder = reader.read_bytes()?;
         let holder = <[u8; 32]>::try_from(<&[u8]>::from(holder)).map_err(|_width| refused())?;
@@ -386,15 +386,13 @@ pub fn naming(
 ) -> Naming
 {
     let (subject, field, holder) = match *receipt.kind() {
-        | Kind::Report { content, .. } => (Subject::Evidence(content), Field::Content, author),
-        | Kind::Verified { output, runner, .. } => {
-            (Subject::Evidence(output), Field::Output, runner)
-        },
-        | Kind::Verdict {
+        Kind::Report { content, .. } => (Subject::Evidence(content), Field::Content, author),
+        Kind::Verified { output, runner, .. } => (Subject::Evidence(output), Field::Output, runner),
+        Kind::Verdict {
             transcript, judge, ..
         } => (Subject::Evidence(transcript), Field::Transcript, judge),
-        | Kind::Landed { merge, .. } => (Subject::Revision(merge), Field::Revision, author),
-        | Kind::Open { .. }
+        Kind::Landed { merge, .. } => (Subject::Revision(merge), Field::Revision, author),
+        Kind::Open { .. }
         | Kind::Grant { .. }
         | Kind::Note { .. }
         | Kind::Bind { .. }

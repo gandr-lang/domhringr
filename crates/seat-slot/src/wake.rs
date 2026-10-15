@@ -256,12 +256,12 @@ impl fmt::Display for Decline
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Malformed => "malformed",
-            | Self::Unsynced => "unsynced",
-            | Self::Unfolded => "unfolded",
-            | Self::NotCurrent => "not current",
-            | Self::NotHeld => "not held",
-            | Self::Unpresented => "unpresented",
+            Self::Malformed => "malformed",
+            Self::Unsynced => "unsynced",
+            Self::Unfolded => "unfolded",
+            Self::NotCurrent => "not current",
+            Self::NotHeld => "not held",
+            Self::Unpresented => "unpresented",
         })
     }
 }
@@ -297,8 +297,8 @@ impl fmt::Display for Reply
     ) -> fmt::Result
     {
         match *self {
-            | Self::Woken => f.write_str("woken"),
-            | Self::Declined(decline) => write!(f, "declined {decline}"),
+            Self::Woken => f.write_str("woken"),
+            Self::Declined(decline) => write!(f, "declined {decline}"),
         }
     }
 }
@@ -327,14 +327,14 @@ impl FromStr for Reply
     fn from_str(text: &str) -> Result<Self, Self::Err>
     {
         let decline = match text {
-            | "woken" => return Ok(Self::Woken),
-            | "declined malformed" => Decline::Malformed,
-            | "declined unsynced" => Decline::Unsynced,
-            | "declined unfolded" => Decline::Unfolded,
-            | "declined not current" => Decline::NotCurrent,
-            | "declined not held" => Decline::NotHeld,
-            | "declined unpresented" => Decline::Unpresented,
-            | _ => return Err(ParseReplyError),
+            "woken" => return Ok(Self::Woken),
+            "declined malformed" => Decline::Malformed,
+            "declined unsynced" => Decline::Unsynced,
+            "declined unfolded" => Decline::Unfolded,
+            "declined not current" => Decline::NotCurrent,
+            "declined not held" => Decline::NotHeld,
+            "declined unpresented" => Decline::Unpresented,
+            _ => return Err(ParseReplyError),
         };
         Ok(Self::Declined(decline))
     }
@@ -418,14 +418,14 @@ async fn exchange(
     let replied = ask(&connection, wake).await;
     connection.close(iroh::endpoint::VarInt::from_u32(0), b"answered");
     match replied? {
-        | Reply::Woken => {
+        Reply::Woken => {
             let _heads = node
                 .pull(remote.peer(), wake.tree())
                 .await
                 .map_err(WakeError::Pull)?;
             Ok(())
         },
-        | Reply::Declined(decline) => Err(WakeError::Declined(decline)),
+        Reply::Declined(decline) => Err(WakeError::Declined(decline)),
     }
 }
 
