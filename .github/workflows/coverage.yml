@@ -6,16 +6,20 @@
 # </critical>
 name: Coverage
 
+# Daily on main when main moved since the last upload, never per landing: an
+# instrumented run pays a cold instrumented build and two to three times the
+# test time, and a run per push was cancelled by the next push before it
+# uploaded. A pull request that wants numbers dispatches this workflow, which
+# always measures, or runs `mise run check:coverage`.
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: "0 3 * * *"
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
-# Off the merge queue. The latest main commit wins; a cancelled run
-# blocks nothing the queue measures.
+# One run at a time; a dispatch during the scheduled run replaces it.
 concurrency:
   group: coverage-main
   cancel-in-progress: true
@@ -118,9 +122,35 @@ jobs:
           cache: true
           cache_key: mise-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml', 'mise.lock', 'rust-toolchain.toml') }}
           cache_save: false
+      # The instrumented build lives in its own target directory and nothing
+      # else writes it, so this job is its one cache writer. The key is the
+      # dependency fingerprint: the dependencies' instrumented artifacts are
+      # what a run reuses (cargo-llvm-cov rebuilds the workspace's own crates
+      # so coverage data is never stale), so one entry per fingerprint is
+      # exact, and a partial match restores the newest entry to rebuild from.
+      - &identify-coverage-state
+        name: identify coverage-state inputs
+        env:
+          CI_STATE_FINGERPRINT: ${{ hashFiles('**/Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
+        run: printf 'COVERAGE_STATE_FINGERPRINT=%s\n' "$CI_STATE_FINGERPRINT" >> "$GITHUB_ENV"
+      - &restore-coverage-state
+        name: restore instrumented build state
+        id: coverage-state-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/coverage
+          key: domhringr-v1-coverage-state-${{ runner.os }}-${{ runner.arch }}-${{ env.COVERAGE_STATE_FINGERPRINT }}
+          restore-keys: domhringr-v1-coverage-state-${{ runner.os }}-${{ runner.arch }}-
       - &measure-coverage
         name: measure enforcing coverage
         run: mise run check:coverage
+      - &save-coverage-state
+        name: cache instrumented build state
+        if: ${{ !cancelled() && steps.coverage-state-restore.outputs.cache-hit != 'true' && hashFiles('target/coverage/**/.rustc_info.json') != '' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/coverage
+          key: ${{ steps.coverage-state-restore.outputs.cache-primary-key }}
       - &upload-coverage
         name: upload coverage
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
@@ -143,10 +173,37 @@ jobs:
       - *registry-login
       - *lookup-image
 
+  # The scheduled run measures only when main moved since the last successful
+  # upload; a dispatch always measures. A run that skipped the measurement
+  # succeeds at the same commit the last upload covered, so the comparison
+  # stays exact across skips, and a failed measurement is retried next day.
+  freshness:
+    name: decide whether main moved since the last upload
+    runs-on: *linux
+    permissions:
+      actions: read
+    outputs:
+      stale: ${{ steps.compare.outputs.stale }}
+    steps:
+      - id: compare
+        name: compare main against the last successful upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          uploaded=$(gh run list --workflow coverage.yml --branch main --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+          if [ "$uploaded" = "$GITHUB_SHA" ]; then
+            echo "main is at $GITHUB_SHA, the commit the last successful upload covered: nothing to measure"
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "main is at $GITHUB_SHA, the last successful upload covered ${uploaded:-nothing}: measuring"
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+
   coverage:
     name: measure and upload coverage
-    needs: ci-image-ref
-    if: ${{ !cancelled() && !failure() }}
+    needs: [ci-image-ref, freshness]
+    if: ${{ !cancelled() && !failure() && (github.event_name == 'workflow_dispatch' || needs.freshness.outputs.stale == 'true') }}
     runs-on: *linux
     permissions: *image-read-permissions
     container: ${{ needs.ci-image-ref.outputs.ref }} # zizmor: ignore[unpinned-images]
@@ -158,5 +215,8 @@ jobs:
       - *read-sibling-pins
       - *checkout-gandr
       - *setup-rust
+      - *identify-coverage-state
+      - *restore-coverage-state
       - *measure-coverage
+      - *save-coverage-state
       - *upload-coverage
