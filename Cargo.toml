@@ -486,6 +486,13 @@ let_underscore_must_use = "deny"
 lossy_float_literal = "deny"
 map_err_ignore = "deny"
 map_with_unused_argument_over_ranges = "deny"
+# A match over an enum names every variant it handles: a new variant is a
+# compile failure at every match that has not decided it, never a silent
+# fall-through. A match that must keep a wildcard — a foreign enum with
+# dozens of variants matched for one shape — carries `#[expect]` with the
+# reason on the statement or item that holds it: the lint reports at the
+# match, so an attribute on the arm is never consulted.
+match_wildcard_for_single_variants = "deny"
 mem_forget = "deny"
 missing_assert_message = "deny"
 missing_asserts_for_indexing = "deny"
@@ -543,6 +550,13 @@ unwrap_in_result = "deny"
 unwrap_used = "deny"
 use_debug = "deny"
 verbose_file_reads = "deny"
+# A match over an enum names every variant it handles: a new variant is a
+# compile failure at every match that has not decided it, never a silent
+# fall-through. A match that must keep a wildcard — a foreign enum with
+# dozens of variants matched for one shape — carries `#[expect]` with the
+# reason on the statement or item that holds it: the lint reports at the
+# match, so an attribute on the arm is never consulted.
+wildcard_enum_match_arm = "deny"
 
 [workspace.lints.rust]
 deprecated_safe = "deny"
