@@ -155,8 +155,8 @@ impl fmt::Display for Status
     ) -> fmt::Result
     {
         match *self {
-            | Self::Exited(code) => write!(f, "exit {code}"),
-            | Self::Signalled(signal) => write!(f, "signal {signal}"),
+            Self::Exited(code) => write!(f, "exit {code}"),
+            Self::Signalled(signal) => write!(f, "signal {signal}"),
         }
     }
 }
@@ -317,10 +317,10 @@ impl fmt::Display for Grade
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Met => "met",
-            | Self::Unmet => "unmet",
-            | Self::Undecided => "undecided",
-            | Self::Refused => "refused",
+            Self::Met => "met",
+            Self::Unmet => "unmet",
+            Self::Undecided => "undecided",
+            Self::Refused => "refused",
         })
     }
 }

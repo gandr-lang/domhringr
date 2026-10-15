@@ -785,11 +785,18 @@ mod tests
                 .steps()
                 .iter()
                 .filter_map(|&(commit, ref step)| match step {
-                    | &domhringr_record_tree::Step::Verdict { .. }
+                    &domhringr_record_tree::Step::Verdict { .. }
                     | &domhringr_record_tree::Step::Landed { .. } => {
                         Some(domhringr_record_tree::StepLine { commit, step }.to_string())
                     },
-                    | _other => None,
+                    &domhringr_record_tree::Step::Dispatch { .. }
+                    | &domhringr_record_tree::Step::Report { .. }
+                    | &domhringr_record_tree::Step::Handoff { .. }
+                    | &domhringr_record_tree::Step::Retire { .. }
+                    | &domhringr_record_tree::Step::Pause { .. }
+                    | &domhringr_record_tree::Step::Verified { .. }
+                    | &domhringr_record_tree::Step::Graded { .. }
+                    | &domhringr_record_tree::Step::Decide { .. } => None,
                 })
                 .flat_map(|text| text.lines().map(str::to_owned).collect::<Vec<_>>())
                 .collect()
@@ -915,14 +922,14 @@ mod tests
                 let holder = Peer::open(&state, identity).unwrap();
                 let view = holder.view(tree).await.unwrap();
                 let dispatch = match *view.task().current() {
-                    | Current::Attempt(ref attempt) => attempt.dispatch(),
-                    | Current::Undispatched => domhringr_record_tree::CommitId::new([0; 32]),
+                    Current::Attempt(ref attempt) => attempt.dispatch(),
+                    Current::Undispatched => domhringr_record_tree::CommitId::new([0; 32]),
                 };
                 let hash = BRIEF.parse().unwrap();
                 let value = ManifestDigest::from([42; 32]);
                 match stage {
-                    | "undispatched" => {},
-                    | "dispatched" => {
+                    "undispatched" => {},
+                    "dispatched" => {
                         holder
                             .commit(
                                 tree,
@@ -932,7 +939,7 @@ mod tests
                             .await
                             .unwrap();
                     },
-                    | "reported" => {
+                    "reported" => {
                         holder
                             .commit(
                                 tree,
@@ -942,7 +949,7 @@ mod tests
                             .await
                             .unwrap();
                     },
-                    | "verified" => {
+                    "verified" => {
                         holder
                             .commit(
                                 tree,
@@ -960,7 +967,7 @@ mod tests
                             .await
                             .unwrap();
                     },
-                    | "graded" => {
+                    "graded" => {
                         let verdict = holder
                             .commit(
                                 tree,
@@ -986,7 +993,7 @@ mod tests
                             .await
                             .unwrap();
                     },
-                    | "decided" => {
+                    "decided" => {
                         holder
                             .commit(
                                 tree,
@@ -995,7 +1002,7 @@ mod tests
                             .await
                             .unwrap();
                     },
-                    | "landed" => {
+                    "landed" => {
                         let Current::Attempt(ref attempt) = *view.task().current()
                         else {
                             panic!("attempt");
@@ -1013,7 +1020,7 @@ mod tests
                             .await
                             .unwrap();
                     },
-                    | "rework" | "abandon" => {
+                    "rework" | "abandon" => {
                         let dispatch = holder
                             .commit(
                                 tree,
@@ -1035,7 +1042,7 @@ mod tests
                             .await
                             .unwrap();
                     },
-                    | _ => panic!("stage"),
+                    _ => panic!("stage"),
                 }
                 let view = holder.view(tree).await.unwrap();
                 assert!(view.refused().is_empty());
@@ -1066,10 +1073,10 @@ mod tests
             ]));
             assert_eq!(output.last(), Some(&format!("current {expected}")));
             let attempts = match stage {
-                | "undispatched" => 0,
-                | "rework" => 2,
-                | "abandon" => 3,
-                | _ => 1,
+                "undispatched" => 0,
+                "rework" => 2,
+                "abandon" => 3,
+                _ => 1,
             };
             assert_eq!(
                 output

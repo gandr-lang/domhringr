@@ -260,8 +260,8 @@ mod tests
             let mut server = Self { child, lines };
             for expected in ids.iter().map(String::as_str).chain(["listening"]) {
                 match server.lines.recv_timeout(DEADLINE) {
-                    | Ok(line) => assert_eq!(line, expected, "serve announces its ids"),
-                    | Err(error) => {
+                    Ok(line) => assert_eq!(line, expected, "serve announces its ids"),
+                    Err(error) => {
                         server.child.kill()?;
                         let status = server.child.wait()?;
                         let mut stderr = Vec::new();
@@ -396,9 +396,9 @@ mod tests
         // only on EADDRINUSE; assertion failures are never retried.
         for _ in 0_u8 .. 3 {
             match check_presence() {
-                | Ok(()) => return,
-                | Err(FixtureError::PortCollision) => {},
-                | Err(error) => panic!("presence fixture failed: {error}"),
+                Ok(()) => return,
+                Err(FixtureError::PortCollision) => {},
+                Err(error) => panic!("presence fixture failed: {error}"),
             }
         }
         panic!("presence fixture lost its UDP port on all three attempts");

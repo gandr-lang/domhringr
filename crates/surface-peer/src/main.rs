@@ -947,18 +947,18 @@ impl fmt::Display for Operand
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Tree => "tree anchor",
-            | Self::Anchor => "anchor",
-            | Self::Target => "target anchor",
-            | Self::Endpoint => "endpoint id",
-            | Self::At => "endpoint",
-            | Self::Peer => "peer id",
-            | Self::Witness => "witness's tree id",
-            | Self::Brief => "brief anchor",
-            | Self::Content => "content hash",
-            | Self::Evidence => "evidence digest",
-            | Self::Transcript => "transcript digest",
-            | Self::Rubric => "rubric hash",
+            Self::Tree => "tree anchor",
+            Self::Anchor => "anchor",
+            Self::Target => "target anchor",
+            Self::Endpoint => "endpoint id",
+            Self::At => "endpoint",
+            Self::Peer => "peer id",
+            Self::Witness => "witness's tree id",
+            Self::Brief => "brief anchor",
+            Self::Content => "content hash",
+            Self::Evidence => "evidence digest",
+            Self::Transcript => "transcript digest",
+            Self::Rubric => "rubric hash",
         })
     }
 }
@@ -1366,9 +1366,9 @@ impl fmt::Display for Reached
     {
         let tree = Anchor::key(self.tree);
         match self.route {
-            | Route::Itself => Ok(()),
-            | Route::Book { since, .. } => writeln!(f, "source {tree} book {since}"),
-            | Route::Given { ref remote } => {
+            Route::Itself => Ok(()),
+            Route::Book { since, .. } => writeln!(f, "source {tree} book {since}"),
+            Route::Given { ref remote } => {
                 writeln!(f, "source {tree} at {}", remote.endpoint())
             },
         }
@@ -1722,10 +1722,10 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     let mut state = None;
     let word = loop {
         match arguments.next()? {
-            | Some(lexopt::Arg::Long("state")) => state = Some(arguments.value()?),
-            | Some(lexopt::Arg::Value(word)) => break word,
-            | Some(other) => return Err(UsageError::from(other.unexpected())),
-            | None => return Err(UsageError::NoCommand),
+            Some(lexopt::Arg::Long("state")) => state = Some(arguments.value()?),
+            Some(lexopt::Arg::Value(word)) => break word,
+            Some(other) => return Err(UsageError::from(other.unexpected())),
+            None => return Err(UsageError::NoCommand),
         }
     };
     let verb = verb(word)?;
@@ -1778,34 +1778,34 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     // One more operand than any verb takes is read, so that a surplus is seen.
     let operands = (raw.next(), raw.next(), raw.next(), raw.next());
     let command = match (verb, operands) {
-        | (Verb::Id, (None, None, None, None)) => Command::Id,
-        | (Verb::Open, (None, None, None, None)) => Command::Open,
-        | (Verb::Withdraw, (Some(tree), None, None, None)) => Command::Withdraw {
+        (Verb::Id, (None, None, None, None)) => Command::Id,
+        (Verb::Open, (None, None, None, None)) => Command::Open,
+        (Verb::Withdraw, (Some(tree), None, None, None)) => Command::Withdraw {
             tree: read_tree(&tree)?,
             of: Withdrawn::Own,
         },
-        | (Verb::Withdraw, (Some(tree), Some(of), None, None)) => {
+        (Verb::Withdraw, (Some(tree), Some(of), None, None)) => {
             let tree = read_tree(&tree)?;
             Command::Withdraw {
                 tree,
                 of: Withdrawn::Of(read_id(&of, Operand::Peer)?),
             }
         },
-        | (Verb::Book, (Some(tree), None, None, None)) => Command::Book {
+        (Verb::Book, (Some(tree), None, None, None)) => Command::Book {
             tree: read_tree(&tree)?,
         },
-        | (Verb::Grant, (Some(tree), Some(to), None, None)) => {
+        (Verb::Grant, (Some(tree), Some(to), None, None)) => {
             let tree = read_tree(&tree)?;
             Command::Grant {
                 tree,
                 to: read_id(&to, Operand::Peer)?,
             }
         },
-        | (Verb::Note, (Some(tree), Some(text), None, None)) => Command::Note {
+        (Verb::Note, (Some(tree), Some(text), None, None)) => Command::Note {
             tree: read_tree(&tree)?,
             text: text.into_string().map_err(UsageError::Text)?,
         },
-        | (Verb::Bind, (Some(anchor), Some(kind), Some(value), None)) => {
+        (Verb::Bind, (Some(anchor), Some(kind), Some(value), None)) => {
             let anchor = read_anchor::<Anchor>(&anchor, Operand::Anchor)?;
             let Anchor::Path { authority, path } = anchor
             else {
@@ -1818,21 +1818,21 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
             let target = read_target(&kind, value)?;
             Command::Bind { tree, path, target }
         },
-        | (Verb::Claim, (Some(tree), Some(domain), None, None)) => Command::Claim {
+        (Verb::Claim, (Some(tree), Some(domain), None, None)) => Command::Claim {
             tree: read_tree(&tree)?,
             domain: read_name(domain, UsageError::Domain)?,
         },
-        | (Verb::Introduce, (Some(tree), Some(label), Some(introduced), None)) => {
+        (Verb::Introduce, (Some(tree), Some(label), Some(introduced), None)) => {
             Command::Introduce {
                 tree: read_tree(&tree)?,
                 label: read_name(label, UsageError::Label)?,
                 introduced: read_tree(&introduced)?,
             }
         },
-        | (Verb::View, (Some(tree), None, None, None)) => Command::View {
+        (Verb::View, (Some(tree), None, None, None)) => Command::View {
             tree: read_tree(&tree)?,
         },
-        | (Verb::Transport, (Some(tree), Some(edition), None, None)) => {
+        (Verb::Transport, (Some(tree), Some(edition), None, None)) => {
             let tree = read_tree(&tree)?;
             let edition = edition
                 .to_string_lossy()
@@ -1840,28 +1840,28 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
                 .map_err(UsageError::Edition)?;
             Command::Transport { tree, edition }
         },
-        | (Verb::Heads, (Some(tree), None, None, None)) => Command::Heads {
+        (Verb::Heads, (Some(tree), None, None, None)) => Command::Heads {
             tree: read_tree(&tree)?,
         },
-        | (Verb::Report, (Some(tree), Some(file), Some(summary), None)) => Command::Report {
+        (Verb::Report, (Some(tree), Some(file), Some(summary), None)) => Command::Report {
             tree: read_tree(&tree)?,
             file: PathBuf::from(file),
             summary: read_name(summary, UsageError::Summary)?,
         },
-        | (Verb::Handoff, (Some(tree), Some(to), None, None)) => {
+        (Verb::Handoff, (Some(tree), Some(to), None, None)) => {
             let tree = read_tree(&tree)?;
             Command::Handoff {
                 tree,
                 to: read_id(&to, Operand::Peer)?,
             }
         },
-        | (Verb::Retire, (Some(tree), None, None, None)) => Command::Retire {
+        (Verb::Retire, (Some(tree), None, None, None)) => Command::Retire {
             tree: read_tree(&tree)?,
         },
-        | (Verb::Pause, (Some(tree), None, None, None)) => Command::Pause {
+        (Verb::Pause, (Some(tree), None, None, None)) => Command::Pause {
             tree: read_tree(&tree)?,
         },
-        | (verb, _) => return Err(UsageError::Operands(verb)),
+        (verb, _) => return Err(UsageError::Operands(verb)),
     };
     Ok(Invocation { state, command })
 }
@@ -1906,27 +1906,27 @@ fn sync_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
-            | lexopt::Arg::Long("peer") => {
+            lexopt::Arg::Long("peer") => {
                 let value = arguments.value()?;
                 dial.aim = Aim::Peer(read_id(&value, Operand::Peer)?);
             },
-            | lexopt::Arg::Long("at") => {
+            lexopt::Arg::Long("at") => {
                 let value = arguments.value()?;
                 dial.at = At::Given(read_id(&value, Operand::At)?);
             },
-            | lexopt::Arg::Value(operand) => operands.push(operand),
-            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+            lexopt::Arg::Value(operand) => operands.push(operand),
+            other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
             },
         }
     }
     let mut operands = operands.into_iter();
     match (operands.next(), operands.next()) {
-        | (Some(tree), None) => Ok(Command::Sync {
+        (Some(tree), None) => Ok(Command::Sync {
             tree: read_tree(&tree)?,
             dial,
         }),
-        | _ => Err(UsageError::Operands(Verb::Sync)),
+        _ => Err(UsageError::Operands(Verb::Sync)),
     }
 }
 
@@ -1965,24 +1965,24 @@ fn present_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
-            | lexopt::Arg::Long("port") => {
+            lexopt::Arg::Long("port") => {
                 let value = arguments.value()?;
                 let fixed = value.to_string_lossy().parse::<UdpPort>();
                 port = BindPort::Fixed(fixed.map_err(UsageError::Port)?);
             },
-            | lexopt::Arg::Value(operand) => operands.push(operand),
-            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+            lexopt::Arg::Value(operand) => operands.push(operand),
+            other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
             },
         }
     }
     let mut operands = operands.into_iter();
     match (operands.next(), operands.next()) {
-        | (Some(tree), None) => Ok(Command::Present {
+        (Some(tree), None) => Ok(Command::Present {
             tree: read_tree(&tree)?,
             port,
         }),
-        | _ => Err(UsageError::Operands(Verb::Present)),
+        _ => Err(UsageError::Operands(Verb::Present)),
     }
 }
 
@@ -2047,27 +2047,27 @@ fn whence_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
-            | lexopt::Arg::Long("witness") => {
+            lexopt::Arg::Long("witness") => {
                 let value = arguments.value()?;
                 witnessed.push(read_witness(value)?);
             },
-            | lexopt::Arg::Long("in") => {
+            lexopt::Arg::Long("in") => {
                 let value = arguments.value()?;
                 scope = Scope::In(read_tree(&value)?);
             },
-            | lexopt::Arg::Long("peer") => {
+            lexopt::Arg::Long("peer") => {
                 let value = arguments.value()?;
                 dial.aim = Aim::Peer(read_id(&value, Operand::Peer)?);
                 named = true;
             },
-            | lexopt::Arg::Long("at") => {
+            lexopt::Arg::Long("at") => {
                 let value = arguments.value()?;
                 dial.at = At::Given(read_id(&value, Operand::At)?);
                 named = true;
             },
-            | lexopt::Arg::Long("local") => local = true,
-            | lexopt::Arg::Value(operand) => operands.push(operand),
-            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+            lexopt::Arg::Long("local") => local = true,
+            lexopt::Arg::Value(operand) => operands.push(operand),
+            other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
             },
         }
@@ -2079,19 +2079,19 @@ fn whence_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
         Witnessing::ByHand(witnessed.into_iter().collect())
     };
     let reach = match (local, named) {
-        | (false, _) => Reach::Dial(dial),
-        | (true, false) => Reach::Local,
-        | (true, true) => return Err(UsageError::Local),
+        (false, _) => Reach::Dial(dial),
+        (true, false) => Reach::Local,
+        (true, true) => return Err(UsageError::Local),
     };
     let mut operands = operands.into_iter();
     match (operands.next(), operands.next()) {
-        | (Some(reference), None) => Ok(Command::Whence {
+        (Some(reference), None) => Ok(Command::Whence {
             reference: read_anchor(&reference, Operand::Anchor)?,
             witnessing,
             scope,
             reach,
         }),
-        | _ => Err(UsageError::Operands(Verb::Whence)),
+        _ => Err(UsageError::Operands(Verb::Whence)),
     }
 }
 
@@ -2132,16 +2132,16 @@ fn drift_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
-            | lexopt::Arg::Long("public") => {
+            lexopt::Arg::Long("public") => {
                 let value = arguments.value()?;
                 public = Some(PathBuf::from(value));
             },
-            | lexopt::Arg::Long("vault") => {
+            lexopt::Arg::Long("vault") => {
                 let value = arguments.value()?;
                 vault = Some(PathBuf::from(value));
             },
-            | lexopt::Arg::Value(operand) => operands.push(operand),
-            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+            lexopt::Arg::Value(operand) => operands.push(operand),
+            other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
             },
         }
@@ -2228,16 +2228,16 @@ fn serve_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     let mut surface = Surface::Hold;
     while let Some(argument) = arguments.next()? {
         match argument {
-            | lexopt::Arg::Long("port") => {
+            lexopt::Arg::Long("port") => {
                 let value = arguments.value()?;
                 let fixed = value.to_string_lossy().parse::<UdpPort>();
                 port = BindPort::Fixed(fixed.map_err(UsageError::Port)?);
             },
-            | lexopt::Arg::Long("surface") => {
+            lexopt::Arg::Long("surface") => {
                 surface = Surface::Program(PathBuf::from(arguments.value()?));
             },
-            | lexopt::Arg::Value(_) => return Err(UsageError::Operands(Verb::Serve)),
-            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+            lexopt::Arg::Value(_) => return Err(UsageError::Operands(Verb::Serve)),
+            other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
             },
         }
@@ -2292,19 +2292,19 @@ fn dispatch_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageErro
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
-            | lexopt::Arg::Long("at") => {
+            lexopt::Arg::Long("at") => {
                 let value = arguments.value()?;
                 at = At::Given(read_id(&value, Operand::At)?);
             },
-            | lexopt::Arg::Long("edition") => {
+            lexopt::Arg::Long("edition") => {
                 let value = arguments.value()?;
                 edition = value
                     .to_string_lossy()
                     .parse()
                     .map_err(UsageError::Edition)?;
             },
-            | lexopt::Arg::Value(operand) => operands.push(operand),
-            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+            lexopt::Arg::Value(operand) => operands.push(operand),
+            other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
             },
         }
@@ -2382,36 +2382,36 @@ fn replay_command(
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
-            | lexopt::Arg::Long("peer") => {
+            lexopt::Arg::Long("peer") => {
                 let value = arguments.value()?;
                 toward = Toward::Peer(read_id(&value, Operand::Peer)?);
                 named = true;
             },
-            | lexopt::Arg::Long("at") => {
+            lexopt::Arg::Long("at") => {
                 let value = arguments.value()?;
                 at = At::Given(read_id(&value, Operand::At)?);
                 named = true;
             },
-            | lexopt::Arg::Long("local") => local = true,
+            lexopt::Arg::Long("local") => local = true,
 
-            | lexopt::Arg::Value(operand) => operands.push(operand),
-            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+            lexopt::Arg::Value(operand) => operands.push(operand),
+            other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
             },
         }
     }
     let replaying = match (local, named) {
-        | (false, _) => Replaying::Dial { toward, at },
-        | (true, false) => Replaying::Local,
-        | (true, true) => return Err(UsageError::Local),
+        (false, _) => Replaying::Dial { toward, at },
+        (true, false) => Replaying::Local,
+        (true, true) => return Err(UsageError::Local),
     };
     let mut operands = operands.into_iter();
     match (verb, operands.next(), operands.next(), operands.next()) {
-        | (Verb::Replay, Some(tree), None, None) => Ok(Command::Replay {
+        (Verb::Replay, Some(tree), None, None) => Ok(Command::Replay {
             tree: read_tree(&tree)?,
             replaying,
         }),
-        | (Verb::Evidence, Some(tree), Some(digest), None) => {
+        (Verb::Evidence, Some(tree), Some(digest), None) => {
             let tree = read_tree(&tree)?;
             let digest = read_digest(&digest, Operand::Evidence)?;
             Ok(Command::Evidence {
@@ -2420,7 +2420,7 @@ fn replay_command(
                 reaching: replaying,
             })
         },
-        | _ => Err(UsageError::Operands(verb)),
+        _ => Err(UsageError::Operands(verb)),
     }
 }
 
@@ -2471,48 +2471,48 @@ fn replay_command(
 fn judge_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
 {
     let judged = match arguments.next()? {
-        | Some(lexopt::Arg::Value(word)) => match word.to_str() {
-            | Some("ask") => Verb::Ask,
-            | Some("verdict") => Verb::Verdict,
-            | Some(_) | None => return Err(UsageError::Command(word)),
+        Some(lexopt::Arg::Value(word)) => match word.to_str() {
+            Some("ask") => Verb::Ask,
+            Some("verdict") => Verb::Verdict,
+            Some(_) | None => return Err(UsageError::Command(word)),
         },
-        | Some(other) => return Err(UsageError::from(other.unexpected())),
-        | None => return Err(UsageError::Operands(Verb::Judge)),
+        Some(other) => return Err(UsageError::from(other.unexpected())),
+        None => return Err(UsageError::Operands(Verb::Judge)),
     };
     let (mut transcript, mut rubric, mut judging) = (None, None, Judging::Endpoint);
     let mut asked: Vec<(String, Vec<String>)> = Vec::new();
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
-            | lexopt::Arg::Long("question") => {
+            lexopt::Arg::Long("question") => {
                 let value = arguments.value()?;
                 let text = value.into_string().map_err(UsageError::Text)?;
                 asked.push((text, Vec::new()));
             },
-            | lexopt::Arg::Long("option") => {
+            lexopt::Arg::Long("option") => {
                 let value = arguments.value()?;
                 let option = value.into_string().map_err(UsageError::Text)?;
                 let last = asked.last_mut().ok_or(UsageError::Unasked)?;
                 last.1.push(option);
             },
-            | lexopt::Arg::Long("transcript") => {
+            lexopt::Arg::Long("transcript") => {
                 let value = arguments.value()?;
                 transcript = Some(Asked::Named(read_digest(&value, Operand::Transcript)?));
             },
-            | lexopt::Arg::Long("transcript-file") => {
+            lexopt::Arg::Long("transcript-file") => {
                 let value = arguments.value()?;
                 transcript = Some(Asked::File(PathBuf::from(value)));
             },
-            | lexopt::Arg::Long("rubric") if judged == Verb::Verdict => {
+            lexopt::Arg::Long("rubric") if judged == Verb::Verdict => {
                 let value = arguments.value()?;
                 rubric = Some(read_id(&value, Operand::Rubric)?);
             },
-            | lexopt::Arg::Long("static") => {
+            lexopt::Arg::Long("static") => {
                 let value = arguments.value()?;
                 judging = Judging::Table(PathBuf::from(value));
             },
-            | lexopt::Arg::Value(operand) => operands.push(operand),
-            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+            lexopt::Arg::Value(operand) => operands.push(operand),
+            other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
             },
         }
@@ -2523,7 +2523,7 @@ fn judge_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     let mut operands = operands.into_iter();
     let mut asked = asked.into_iter();
     match (judged, operands.next(), operands.next()) {
-        | (Verb::Ask, None, None) => {
+        (Verb::Ask, None, None) => {
             let (Some((text, options)), None) = (asked.next(), asked.next())
             else {
                 return Err(UsageError::Operands(Verb::Ask));
@@ -2536,7 +2536,7 @@ fn judge_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
                 judging,
             })
         },
-        | (Verb::Verdict, Some(tree), None) => {
+        (Verb::Verdict, Some(tree), None) => {
             let transcript = transcript.ok_or(UsageError::NoTranscript)?;
             let rubric = rubric.ok_or(UsageError::NoRubric)?;
             let tree = read_tree(&tree)?;
@@ -2552,7 +2552,7 @@ fn judge_command(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
                 judging,
             })
         },
-        | (judged, ..) => Err(UsageError::Operands(judged)),
+        (judged, ..) => Err(UsageError::Operands(judged)),
     }
 }
 
@@ -2594,54 +2594,54 @@ fn strategy_command(
 ) -> Result<Command, UsageError>
 {
     let acted = match arguments.next()? {
-        | Some(lexopt::Arg::Value(word)) => match (document, word.to_str()) {
-            | (Verb::Playbook, Some("validate")) => Verb::ValidatePlaybook,
-            | (Verb::Playbook, Some("run")) => Verb::RunPlaybook,
-            | (Verb::Rubric, Some("validate")) => Verb::ValidateRubric,
-            | (Verb::Rubric, Some("grade")) => Verb::GradeRubric,
-            | _ => return Err(UsageError::Command(word)),
+        Some(lexopt::Arg::Value(word)) => match (document, word.to_str()) {
+            (Verb::Playbook, Some("validate")) => Verb::ValidatePlaybook,
+            (Verb::Playbook, Some("run")) => Verb::RunPlaybook,
+            (Verb::Rubric, Some("validate")) => Verb::ValidateRubric,
+            (Verb::Rubric, Some("grade")) => Verb::GradeRubric,
+            _ => return Err(UsageError::Command(word)),
         },
-        | Some(other) => return Err(UsageError::from(other.unexpected())),
-        | None => return Err(UsageError::Operands(document)),
+        Some(other) => return Err(UsageError::from(other.unexpected())),
+        None => return Err(UsageError::Operands(document)),
     };
     let checks = matches!(acted, Verb::RunPlaybook | Verb::GradeRubric);
     let (mut directory, mut judging) = (PathBuf::from("."), Judging::Endpoint);
     let mut operands = Vec::new();
     while let Some(argument) = arguments.next()? {
         match argument {
-            | lexopt::Arg::Long("task-state") if checks => {
+            lexopt::Arg::Long("task-state") if checks => {
                 directory = PathBuf::from(arguments.value()?);
             },
-            | lexopt::Arg::Long("static") if checks => {
+            lexopt::Arg::Long("static") if checks => {
                 judging = Judging::Table(PathBuf::from(arguments.value()?));
             },
-            | lexopt::Arg::Value(operand) => operands.push(operand),
-            | other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
+            lexopt::Arg::Value(operand) => operands.push(operand),
+            other @ (lexopt::Arg::Long(_) | lexopt::Arg::Short(_)) => {
                 return Err(UsageError::from(other.unexpected()));
             },
         }
     }
     let mut operands = operands.into_iter();
     match (acted, operands.next(), operands.next(), operands.next()) {
-        | (Verb::ValidatePlaybook, Some(file), None, None) => Ok(Command::ValidatePlaybook {
+        (Verb::ValidatePlaybook, Some(file), None, None) => Ok(Command::ValidatePlaybook {
             file: PathBuf::from(file),
         }),
-        | (Verb::ValidateRubric, Some(file), None, None) => Ok(Command::ValidateRubric {
+        (Verb::ValidateRubric, Some(file), None, None) => Ok(Command::ValidateRubric {
             file: PathBuf::from(file),
         }),
-        | (Verb::RunPlaybook, Some(file), Some(tree), None) => Ok(Command::RunPlaybook {
-            file: PathBuf::from(file),
-            tree: read_tree(&tree)?,
-            directory,
-            judging,
-        }),
-        | (Verb::GradeRubric, Some(file), Some(tree), None) => Ok(Command::GradeRubric {
+        (Verb::RunPlaybook, Some(file), Some(tree), None) => Ok(Command::RunPlaybook {
             file: PathBuf::from(file),
             tree: read_tree(&tree)?,
             directory,
             judging,
         }),
-        | (acted, ..) => Err(UsageError::Operands(acted)),
+        (Verb::GradeRubric, Some(file), Some(tree), None) => Ok(Command::GradeRubric {
+            file: PathBuf::from(file),
+            tree: read_tree(&tree)?,
+            directory,
+            judging,
+        }),
+        (acted, ..) => Err(UsageError::Operands(acted)),
     }
 }
 
@@ -2668,36 +2668,36 @@ fn strategy_command(
 fn verb(word: OsString) -> Result<Verb, UsageError>
 {
     match word.to_str() {
-        | Some("id") => Ok(Verb::Id),
-        | Some("index") => Ok(Verb::Index),
-        | Some("provenance") => Ok(Verb::Provenance),
-        | Some("serve") => Ok(Verb::Serve),
-        | Some("open") => Ok(Verb::Open),
-        | Some("grant") => Ok(Verb::Grant),
-        | Some("note") => Ok(Verb::Note),
-        | Some("bind") => Ok(Verb::Bind),
-        | Some("claim") => Ok(Verb::Claim),
-        | Some("introduce") => Ok(Verb::Introduce),
-        | Some("present") => Ok(Verb::Present),
-        | Some("withdraw") => Ok(Verb::Withdraw),
-        | Some("book") => Ok(Verb::Book),
-        | Some("whence") => Ok(Verb::Whence),
-        | Some("view") => Ok(Verb::View),
-        | Some("heads") => Ok(Verb::Heads),
-        | Some("sync") => Ok(Verb::Sync),
-        | Some("dispatch") => Ok(Verb::Dispatch),
-        | Some("report") => Ok(Verb::Report),
-        | Some("handoff") => Ok(Verb::Handoff),
-        | Some("retire") => Ok(Verb::Retire),
-        | Some("pause") => Ok(Verb::Pause),
-        | Some("replay") => Ok(Verb::Replay),
-        | Some("transport") => Ok(Verb::Transport),
-        | Some("evidence") => Ok(Verb::Evidence),
-        | Some("drift") => Ok(Verb::Drift),
-        | Some("judge") => Ok(Verb::Judge),
-        | Some("playbook") => Ok(Verb::Playbook),
-        | Some("rubric") => Ok(Verb::Rubric),
-        | Some(_) | None => Err(UsageError::Command(word)),
+        Some("id") => Ok(Verb::Id),
+        Some("index") => Ok(Verb::Index),
+        Some("provenance") => Ok(Verb::Provenance),
+        Some("serve") => Ok(Verb::Serve),
+        Some("open") => Ok(Verb::Open),
+        Some("grant") => Ok(Verb::Grant),
+        Some("note") => Ok(Verb::Note),
+        Some("bind") => Ok(Verb::Bind),
+        Some("claim") => Ok(Verb::Claim),
+        Some("introduce") => Ok(Verb::Introduce),
+        Some("present") => Ok(Verb::Present),
+        Some("withdraw") => Ok(Verb::Withdraw),
+        Some("book") => Ok(Verb::Book),
+        Some("whence") => Ok(Verb::Whence),
+        Some("view") => Ok(Verb::View),
+        Some("heads") => Ok(Verb::Heads),
+        Some("sync") => Ok(Verb::Sync),
+        Some("dispatch") => Ok(Verb::Dispatch),
+        Some("report") => Ok(Verb::Report),
+        Some("handoff") => Ok(Verb::Handoff),
+        Some("retire") => Ok(Verb::Retire),
+        Some("pause") => Ok(Verb::Pause),
+        Some("replay") => Ok(Verb::Replay),
+        Some("transport") => Ok(Verb::Transport),
+        Some("evidence") => Ok(Verb::Evidence),
+        Some("drift") => Ok(Verb::Drift),
+        Some("judge") => Ok(Verb::Judge),
+        Some("playbook") => Ok(Verb::Playbook),
+        Some("rubric") => Ok(Verb::Rubric),
+        Some(_) | None => Err(UsageError::Command(word)),
     }
 }
 
@@ -2820,9 +2820,9 @@ fn read_tree(text: &OsStr) -> Result<TreeId, UsageError>
 {
     let anchor = read_anchor::<Anchor>(text, Operand::Tree)?;
     match anchor {
-        | Anchor::Tree(Authority::Key(tree)) => Ok(tree),
-        | Anchor::Tree(Authority::Domain(_) | Authority::Label(_)) => Err(UsageError::NotKey),
-        | Anchor::Path { .. } | Anchor::Commit { .. } => Err(UsageError::NotTree),
+        Anchor::Tree(Authority::Key(tree)) => Ok(tree),
+        Anchor::Tree(Authority::Domain(_) | Authority::Label(_)) => Err(UsageError::NotKey),
+        Anchor::Path { .. } | Anchor::Commit { .. } => Err(UsageError::NotTree),
     }
 }
 
@@ -2891,13 +2891,13 @@ fn read_target(
 ) -> Result<Target, UsageError>
 {
     match kind.to_str() {
-        | Some("anchor") => read_anchor(&value, Operand::Target).map(Target::Anchor),
-        | Some("endpoint") => read_id(&value, Operand::Endpoint).map(Target::Endpoint),
-        | Some("datum") => value
+        Some("anchor") => read_anchor(&value, Operand::Target).map(Target::Anchor),
+        Some("endpoint") => read_id(&value, Operand::Endpoint).map(Target::Endpoint),
+        Some("datum") => value
             .into_string()
             .map(Target::Datum)
             .map_err(UsageError::Text),
-        | Some(_) | None => Err(UsageError::Target(kind.to_os_string())),
+        Some(_) | None => Err(UsageError::Target(kind.to_os_string())),
     }
 }
 
@@ -2931,9 +2931,9 @@ fn read_brief(
 ) -> Result<Brief, UsageError>
 {
     match kind.to_str() {
-        | Some("anchor") => read_anchor(value, Operand::Brief).map(Brief::Anchor),
-        | Some("content") => read_id(value, Operand::Content).map(Brief::Content),
-        | Some(_) | None => Err(UsageError::Brief(kind.to_os_string())),
+        Some("anchor") => read_anchor(value, Operand::Brief).map(Brief::Anchor),
+        Some("content") => read_id(value, Operand::Content).map(Brief::Content),
+        Some(_) | None => Err(UsageError::Brief(kind.to_os_string())),
     }
 }
 
@@ -3112,7 +3112,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
     let identity = Identity::load_or_create(&state)?;
     let evidence = Evidence::open(&state);
     let emitted = match command {
-        | Command::Index(command) => {
+        Command::Index(command) => {
             let peer = Peer::open(&state, identity)?;
             #[expect(
                 clippy::large_futures,
@@ -3121,12 +3121,12 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             let result = index::run(peer, &state, command).await;
             return result;
         },
-        | Command::Id => emit(&format_args!(
+        Command::Id => emit(&format_args!(
             "{}\n{}\n",
             identity.endpoint_key(),
             identity.peer_key()
         )),
-        | Command::Serve { port, surface } => {
+        Command::Serve { port, surface } => {
             let indexes = domhringr_record_index::store::Store::open(&state);
             serve(
                 Peer::open(&state, identity)?,
@@ -3137,7 +3137,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             )
             .await
         },
-        | Command::Open => {
+        Command::Open => {
             let owner = identity.peer_key();
             let peer = Peer::open(&state, identity)?;
             let key = TreeKey::mint(&state)?;
@@ -3145,23 +3145,23 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             drop(peer);
             emit(&format_args!("{}\n", Anchor::key(key.tree())))
         },
-        | Command::Grant { tree, to } => {
+        Command::Grant { tree, to } => {
             let peer = Peer::open(&state, identity)?;
             record(&peer, tree, Receipt::grant(tree, to)?).await
         },
-        | Command::Note { tree, text } => {
+        Command::Note { tree, text } => {
             let peer = Peer::open(&state, identity)?;
             record(&peer, tree, Receipt::note(tree, text)?).await
         },
-        | Command::Bind { tree, path, target } => {
+        Command::Bind { tree, path, target } => {
             let peer = Peer::open(&state, identity)?;
             record(&peer, tree, Receipt::bind(tree, path, target)?).await
         },
-        | Command::Claim { tree, domain } => {
+        Command::Claim { tree, domain } => {
             let peer = Peer::open(&state, identity)?;
             record(&peer, tree, Receipt::claim(tree, domain)?).await
         },
-        | Command::Introduce {
+        Command::Introduce {
             tree,
             label,
             introduced,
@@ -3169,28 +3169,28 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             let peer = Peer::open(&state, identity)?;
             record(&peer, tree, Receipt::introduce(tree, label, introduced)?).await
         },
-        | Command::Present { tree, port } => {
+        Command::Present { tree, port } => {
             let node = Peer::open(&state, identity)?.bind(port, &[]).await?;
             let presented = node.present(tree).await;
             node.close().await;
             drop(node);
             emit(&format_args!("{}\n", presented?))
         },
-        | Command::Withdraw { tree, of } => {
+        Command::Withdraw { tree, of } => {
             let of = match of {
-                | Withdrawn::Own => identity.peer_key(),
-                | Withdrawn::Of(peer) => peer,
+                Withdrawn::Own => identity.peer_key(),
+                Withdrawn::Of(peer) => peer,
             };
             let peer = Peer::open(&state, identity)?;
             record(&peer, tree, Receipt::withdraw(tree, of)?).await
         },
-        | Command::Book { tree } => {
+        Command::Book { tree } => {
             let view = Peer::open(&state, identity)?.view(tree).await?;
             view.book()
                 .iter()
                 .try_for_each(|(peer, presence)| emit(&format_args!("{peer} {presence}\n")))
         },
-        | Command::Whence {
+        Command::Whence {
             reference,
             witnessing,
             scope,
@@ -3198,20 +3198,18 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
         } => {
             let peer = Peer::open(&state, identity)?;
             let (sources, resolution) = match witnessing {
-                | Witnessing::Dns => {
-                    resolve(peer, &reference, &Dns::system(), scope, reach).await?
-                },
-                | Witnessing::ByHand(witness) => {
+                Witnessing::Dns => resolve(peer, &reference, &Dns::system(), scope, reach).await?,
+                Witnessing::ByHand(witness) => {
                     resolve(peer, &reference, &witness, scope, reach).await?
                 },
             };
             emit(&format_args!("{sources}{resolution}\n"))
         },
-        | Command::View { tree } => {
+        Command::View { tree } => {
             let view = Peer::open(&state, identity)?.view(tree).await?;
             emit(&view)
         },
-        | Command::Transport { tree, edition } => {
+        Command::Transport { tree, edition } => {
             let peer = Peer::open(&state, identity)?;
             let view = peer.view(tree).await?;
             drop(peer);
@@ -3227,19 +3225,19 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
                 play.moves().len()
             ))
         },
-        | Command::Heads { tree } => {
+        Command::Heads { tree } => {
             let heads = Peer::open(&state, identity)?.heads(tree).await?;
             emit(&heads)
         },
-        | Command::Sync { tree, dial } => {
+        Command::Sync { tree, dial } => {
             let peer = Peer::open(&state, identity)?;
             let route = peer.route(tree, dial.aim, dial.at).await?;
             let remote = match route {
-                | Route::Itself => {
+                Route::Itself => {
                     drop(peer);
                     return Err(RunError::Itself);
                 },
-                | Route::Book { ref remote, .. } | Route::Given { ref remote } => remote.clone(),
+                Route::Book { ref remote, .. } | Route::Given { ref remote } => remote.clone(),
             };
             let node = peer.bind(BindPort::Ephemeral, &[]).await?;
             let synced = node.sync(&remote, tree).await;
@@ -3254,7 +3252,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
                 synced.path()
             ))
         },
-        | Command::Dispatch {
+        Command::Dispatch {
             tree,
             seat,
             brief,
@@ -3265,7 +3263,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             let peer = Peer::open(&state, identity)?;
             dispatch(peer, operator, tree, seat, edition, brief, at).await
         },
-        | Command::Report {
+        Command::Report {
             tree,
             file,
             summary,
@@ -3278,22 +3276,22 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             })
             .await
         },
-        | Command::Handoff { tree, to } => {
+        Command::Handoff { tree, to } => {
             let peer = Peer::open(&state, identity)?;
             on_current(peer, tree, |dispatch| Receipt::handoff(tree, dispatch, to)).await
         },
-        | Command::Retire { tree } => {
+        Command::Retire { tree } => {
             let peer = Peer::open(&state, identity)?;
             on_current(peer, tree, |dispatch| Receipt::retire(tree, dispatch)).await
         },
-        | Command::Pause { tree } => {
+        Command::Pause { tree } => {
             let peer = Peer::open(&state, identity)?;
             on_current(peer, tree, |dispatch| Receipt::pause(tree, dispatch)).await
         },
-        | Command::Replay { tree, replaying } => {
+        Command::Replay { tree, replaying } => {
             replay(Peer::open(&state, identity)?, &evidence, tree, replaying).await
         },
-        | Command::Evidence {
+        Command::Evidence {
             tree,
             digest,
             reaching,
@@ -3301,7 +3299,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             let peer = Peer::open(&state, identity)?;
             self::evidence(peer, &evidence, tree, digest, reaching).await
         },
-        | Command::Drift {
+        Command::Drift {
             public,
             vault,
             tree,
@@ -3316,7 +3314,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
                 Completion::Drifted
             });
         },
-        | Command::Ask {
+        Command::Ask {
             question,
             transcript,
             judging,
@@ -3327,7 +3325,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
                 .await
                 .map(drop)
         },
-        | Command::Verdict {
+        Command::Verdict {
             tree,
             rubric,
             transcript,
@@ -3342,9 +3340,9 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             };
             verdict(on, judge, tree, rubric, transcript, questions, judging).await
         },
-        | Command::ValidatePlaybook { file } => strategy::validate_playbook(&file),
-        | Command::ValidateRubric { file } => strategy::validate_rubric(&file),
-        | Command::RunPlaybook {
+        Command::ValidatePlaybook { file } => strategy::validate_playbook(&file),
+        Command::ValidateRubric { file } => strategy::validate_rubric(&file),
+        Command::RunPlaybook {
             file,
             tree,
             directory,
@@ -3358,7 +3356,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             };
             strategy::run_playbook(on, runner, tree, &file, &directory, judging).await
         },
-        | Command::GradeRubric {
+        Command::GradeRubric {
             file,
             tree,
             directory,
@@ -3519,8 +3517,8 @@ async fn sync_routes(
     let mut sources = String::new();
     for reached in routes {
         match reached.route {
-            | Route::Itself => {},
-            | Route::Book { ref remote, .. } | Route::Given { ref remote } => {
+            Route::Itself => {},
+            Route::Book { ref remote, .. } | Route::Given { ref remote } => {
                 let _synced = node.sync(remote, reached.tree).await?;
             },
         }
@@ -3582,8 +3580,8 @@ async fn current(
 ) -> Result<CommitId, RunError>
 {
     match *peer.view(tree).await?.task().current() {
-        | Current::Attempt(ref attempt) => Ok(attempt.dispatch()),
-        | Current::Undispatched => Err(RunError::Undispatched),
+        Current::Attempt(ref attempt) => Ok(attempt.dispatch()),
+        Current::Undispatched => Err(RunError::Undispatched),
     }
 }
 
@@ -3700,8 +3698,8 @@ fn transcript_of(
 ) -> Result<Transcript, RunError>
 {
     let content = match asked {
-        | Asked::Named(digest) => evidence.read(digest)?,
-        | Asked::File(path) => {
+        Asked::Named(digest) => evidence.read(digest)?,
+        Asked::File(path) => {
             let bytes = std::fs::read(path).map_err(RunError::Transcript)?;
             Content::from(bytes)
         },
@@ -3742,12 +3740,12 @@ async fn rulings(
 ) -> Result<Vec<(ContentHash, Ruling)>, RunError>
 {
     match judging {
-        | Judging::Endpoint => {
+        Judging::Endpoint => {
             let config = Config::from_environment().map_err(RunError::Config)?;
             let client = ChatCompletions::new(config).map_err(RunError::Client)?;
             rule(&client, questions, transcript).await
         },
-        | Judging::Table(path) => {
+        Judging::Table(path) => {
             let text = std::fs::read_to_string(path).map_err(RunError::Table)?;
             let table = text
                 .parse::<domhringr_judge_oracle::Static>()
@@ -3792,8 +3790,8 @@ where
     let mut answers = Vec::with_capacity(questions.len());
     for question in questions {
         let ruling = match backend.ask(question, transcript).await {
-            | Ok(readout) => Ruling::Read(readout),
-            | Err(refusal) => {
+            Ok(readout) => Ruling::Read(readout),
+            Err(refusal) => {
                 report(&refusal).map_err(RunError::Diagnostics)?;
                 Ruling::Unread(refusal.reason())
             },
@@ -3847,26 +3845,26 @@ async fn dispatch(
 {
     let route = peer.route(tree, Aim::Peer(seat), at).await?;
     let remote = match route {
-        | Route::Itself => return Err(RunError::Itself),
-        | Route::Book { ref remote, .. } | Route::Given { ref remote } => remote.clone(),
+        Route::Itself => return Err(RunError::Itself),
+        Route::Book { ref remote, .. } | Route::Given { ref remote } => remote.clone(),
     };
     let view = peer.view(tree).await?;
     let resent = match *view.task().current() {
-        | Current::Attempt(ref attempt)
+        Current::Attempt(ref attempt)
             if attempt.slot() == Slot::Held(seat)
                 && *attempt.brief() == brief
                 && attempt.edition() == edition =>
         {
             Some(attempt.dispatch())
         },
-        | Current::Attempt(_) | Current::Undispatched => None,
+        Current::Attempt(_) | Current::Undispatched => None,
     };
-    let dispatch = match resent {
-        | Some(dispatch) => dispatch,
-        | None => {
-            let receipt = Receipt::dispatch(tree, seat, edition, brief)?;
-            peer.commit(tree, receipt).await?
-        },
+    let dispatch = if let Some(dispatch) = resent {
+        dispatch
+    }
+    else {
+        let receipt = Receipt::dispatch(tree, seat, edition, brief)?;
+        peer.commit(tree, receipt).await?
     };
     emit(&format_args!("{dispatch}\n"))?;
     let node = peer.bind(BindPort::Ephemeral, &[]).await?;
@@ -3933,32 +3931,32 @@ async fn replay(
         return attest(gathered);
     };
     let aim = match toward {
-        | Toward::Peer(named) => Aim::Peer(named),
-        | Toward::Seat => match *peer.view(tree).await?.task().current() {
-            | Current::Attempt(ref attempt) => Aim::Peer(attempt.seat()),
-            | Current::Undispatched => Aim::Owner,
+        Toward::Peer(named) => Aim::Peer(named),
+        Toward::Seat => match *peer.view(tree).await?.task().current() {
+            Current::Attempt(ref attempt) => Aim::Peer(attempt.seat()),
+            Current::Undispatched => Aim::Owner,
         },
     };
     let route = peer.route(tree, aim, at).await?;
     let (view, gathered) = match route {
-        | Route::Itself => {
+        Route::Itself => {
             let view = peer.view(tree).await?;
             let gathered = gather(evidence, view.task(), Source::Local).await;
             (view, gathered)
         },
-        | Route::Book { ref remote, .. } | Route::Given { ref remote } => {
+        Route::Book { ref remote, .. } | Route::Given { ref remote } => {
             let node = peer.bind(BindPort::Ephemeral, &[]).await?;
             let synced = node.sync(remote, tree).await;
             let view = node.peer().view(tree).await;
             let gathered = match (&synced, &view) {
-                | (&Ok(_), &Ok(ref view)) => {
+                (&Ok(_), &Ok(ref view)) => {
                     let source = Source::Remote {
                         node: &node,
                         holder: remote.endpoint(),
                     };
                     gather(evidence, view.task(), source).await
                 },
-                | _ => Vec::new(),
+                _ => Vec::new(),
             };
             node.close().await;
             drop(node);
@@ -4044,9 +4042,9 @@ async fn gather(
             continue;
         }
         let outcome = match (evidence.read(digest), source) {
-            | (Ok(_content), _) => Ok(()),
-            | (Err(refused), Source::Local) => Err(RunError::Evidence(refused)),
-            | (Err(_lacking), Source::Remote { node, holder }) => {
+            (Ok(_content), _) => Ok(()),
+            (Err(refused), Source::Local) => Err(RunError::Evidence(refused)),
+            (Err(_lacking), Source::Remote { node, holder }) => {
                 domhringr_record_evidence::fetch(node, holder, digest, evidence)
                     .await
                     .map(drop)
@@ -4081,8 +4079,8 @@ fn attest(gathered: Vec<(ManifestDigest, Result<(), RunError>)>) -> Result<(), R
 {
     for (digest, outcome) in gathered {
         match outcome {
-            | Ok(()) => emit(&format_args!("evidence {digest} held\n"))?,
-            | Err(failure) => {
+            Ok(()) => emit(&format_args!("evidence {digest} held\n"))?,
+            Err(failure) => {
                 emit(&format_args!("evidence {digest} unheld\n"))?;
                 report(&failure).map_err(RunError::Diagnostics)?;
             },
@@ -4134,12 +4132,12 @@ async fn evidence(
 ) -> Result<(), RunError>
 {
     let content = match (evidence.read(digest), reaching) {
-        | (Ok(content), _) => content,
-        | (Err(refused), Replaying::Local) => return Err(RunError::Evidence(refused)),
-        | (Err(refused), Replaying::Dial { toward, at }) => {
+        (Ok(content), _) => content,
+        (Err(refused), Replaying::Local) => return Err(RunError::Evidence(refused)),
+        (Err(refused), Replaying::Dial { toward, at }) => {
             let aim = match toward {
-                | Toward::Peer(named) => named,
-                | Toward::Seat => peer
+                Toward::Peer(named) => named,
+                Toward::Seat => peer
                     .view(tree)
                     .await?
                     .task()
@@ -4236,7 +4234,7 @@ async fn serve(
     drop(node);
     while let Some(event) = events.recv().await {
         let diagnosed = match event {
-            | Event::Accepted(accepted) => {
+            Event::Accepted(accepted) => {
                 emit(&format_args!(
                     "accepted {peer}\npath {peer} {path}\n",
                     peer = accepted.peer(),
@@ -4244,19 +4242,19 @@ async fn serve(
                 ))?;
                 Ok(())
             },
-            | Event::Woken { tree, dispatch } => {
+            Event::Woken { tree, dispatch } => {
                 emit(&format_args!("woken {} {dispatch}\n", Anchor::key(tree)))?;
                 Ok(())
             },
-            | Event::Declined(declined) => {
+            Event::Declined(declined) => {
                 emit(&format_args!("declined {}\n", declined.decline()))?;
                 report(&declined)
             },
-            | Event::Reported { tree, report } => {
+            Event::Reported { tree, report } => {
                 emit(&format_args!("reported {} {report}\n", Anchor::key(tree)))?;
                 Ok(())
             },
-            | Event::Unreported {
+            Event::Unreported {
                 tree,
                 dispatch,
                 failure,
@@ -4267,24 +4265,24 @@ async fn serve(
                 ))?;
                 report(&failure)
             },
-            | Event::Served(Served::Held { digest, .. }) => {
+            Event::Served(Served::Held { digest, .. }) => {
                 emit(&format_args!("served {digest}\n"))?;
                 Ok(())
             },
-            | Event::Served(Served::Unheld { digest, reason }) => {
+            Event::Served(Served::Unheld { digest, reason }) => {
                 emit(&format_args!("unserved {digest}\n"))?;
                 report(&reason)
             },
-            | Event::Proved(served) => {
+            Event::Proved(served) => {
                 emit(&format_args!("proved {}\n", served.0))?;
                 Ok(())
             },
-            | Event::Unproved(failure) => report(&failure),
-            | Event::Unserved(failure) => report(&failure),
-            | Event::Unaccepted(failure) => report(&failure),
-            | Event::Unanswered(failure) => report(&failure),
-            | Event::Unresumed(failure) => report(&failure),
-            | Event::Closed => return Err(RunError::Closed),
+            Event::Unproved(failure) => report(&failure),
+            Event::Unserved(failure) => report(&failure),
+            Event::Unaccepted(failure) => report(&failure),
+            Event::Unanswered(failure) => report(&failure),
+            Event::Unresumed(failure) => report(&failure),
+            Event::Closed => return Err(RunError::Closed),
         };
         diagnosed.map_err(RunError::Diagnostics)?;
     }
@@ -4362,21 +4360,21 @@ fn report(error: &dyn Error) -> std::io::Result<()>
 fn main() -> ExitCode
 {
     let invocation = match parse(lexopt::Parser::from_env()) {
-        | Ok(invocation) => invocation,
-        | Err(error) => {
+        Ok(invocation) => invocation,
+        Err(error) => {
             let reported =
                 report(&error).and_then(|()| std::io::stderr().lock().write_all(USAGE.as_bytes()));
             return match reported {
-                | Ok(()) | Err(_) => ExitCode::from(USAGE_STATUS),
+                Ok(()) | Err(_) => ExitCode::from(USAGE_STATUS),
             };
         },
     };
     match run(invocation) {
-        | Ok(Completion::Success) => ExitCode::SUCCESS,
-        | Ok(Completion::Drifted) => ExitCode::from(DRIFT_STATUS),
-        | Ok(Completion::IndexFinding) => ExitCode::from(INDEX_STATUS),
-        | Err(error) => match report(&error) {
-            | Ok(()) | Err(_) => ExitCode::FAILURE,
+        Ok(Completion::Success) => ExitCode::SUCCESS,
+        Ok(Completion::Drifted) => ExitCode::from(DRIFT_STATUS),
+        Ok(Completion::IndexFinding) => ExitCode::from(INDEX_STATUS),
+        Err(error) => match report(&error) {
+            Ok(()) | Err(_) => ExitCode::FAILURE,
         },
     }
 }

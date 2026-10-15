@@ -177,9 +177,9 @@ impl Witness for Dns
         let name = WitnessName(domain);
         async move {
             match self.0.lookup_txt(name, iroh::dns::DNS_TIMEOUT).await {
-                | Ok(records) => Ok(named(records)),
-                | Err(iroh::dns::DnsError::NxDomain { .. }) => Ok(BTreeSet::new()),
-                | Err(failure) => Err(WitnessError::Dns(failure)),
+                Ok(records) => Ok(named(records)),
+                Err(iroh::dns::DnsError::NxDomain { .. }) => Ok(BTreeSet::new()),
+                Err(failure) => Err(WitnessError::Dns(failure)),
             }
         }
     }
@@ -240,8 +240,8 @@ where
     records
         .into_iter()
         .filter_map(|record| match read(&record) {
-            | Record::Tree(tree) => Some(tree),
-            | Record::Other => None,
+            Record::Tree(tree) => Some(tree),
+            Record::Other => None,
         })
         .collect()
 }
@@ -284,8 +284,8 @@ fn read(record: &iroh::dns::TxtRecordData) -> Record
     }
     let tree = core::str::from_utf8(&id).map(str::parse::<TreeId>);
     match tree {
-        | Ok(Ok(tree)) => Record::Tree(tree),
-        | Ok(Err(_)) | Err(_) => Record::Other,
+        Ok(Ok(tree)) => Record::Tree(tree),
+        Ok(Err(_)) | Err(_) => Record::Other,
     }
 }
 

@@ -254,9 +254,9 @@ impl CanonicalValue for Lines<'_>
             let position = reader.position();
             let tag = reader.read_tag()?;
             match u8::from(tag) {
-                | LINE => opened.push(position),
-                | START => break,
-                | _ => {
+                LINE => opened.push(position),
+                START => break,
+                _ => {
                     return Err(ValueError::UnexpectedConstructor {
                         found: tag,
                         position,
@@ -270,8 +270,8 @@ impl CanonicalValue for Lines<'_>
         while let Some(position) = lines.next() {
             let line = reader.read_bytes()?;
             let place = match lines.peek() {
-                | Some(_) => Place::Inner,
-                | None => Place::Last,
+                Some(_) => Place::Inner,
+                None => Place::Last,
             };
             admit(line, place, position)?;
             content.extend_from_slice(line.as_ref());

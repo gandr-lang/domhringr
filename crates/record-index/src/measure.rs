@@ -149,8 +149,8 @@ pub fn measure(index: &Index) -> Result<Measurement, MeasureError>
     let root_size = ByteSize(root_size);
     let root_node = decode_node(root.bytes(), &mut DecodeWork::new())?;
     let fanout = match root_node {
-        | DecodedNode::Leaf(_) => RootChildren(0),
-        | DecodedNode::Internal(ref internal) => RootChildren(internal.children().len()),
+        DecodedNode::Leaf(_) => RootChildren(0),
+        DecodedNode::Internal(ref internal) => RootChildren(internal.children().len()),
     };
     let leaves = if fanout.0 == 0 {
         nodes.as_ref()

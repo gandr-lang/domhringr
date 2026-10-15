@@ -225,7 +225,7 @@ impl TaskEntry
     pub const fn tree(&self) -> TreeId
     {
         match *self {
-            | Self::Held { tree, .. } | Self::Unheld { tree } => tree,
+            Self::Held { tree, .. } | Self::Unheld { tree } => tree,
         }
     }
 }
@@ -257,7 +257,7 @@ impl CanonicalValue for TaskEntry
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Held {
+            Self::Held {
                 ref tree,
                 ref heads,
                 ref current,
@@ -290,7 +290,7 @@ impl CanonicalValue for TaskEntry
                     sink.bytes(TokenBytes::from(refusal.reason.as_bytes()))?;
                 }
             },
-            | Self::Unheld { ref tree } => {
+            Self::Unheld { ref tree } => {
                 sink.open(ConstructorTag::from(2))?;
                 sink.bytes(TokenBytes::from(tree.as_ref()))?;
             },
@@ -325,7 +325,7 @@ impl CanonicalValue for TaskEntry
         let bytes = <[u8; 32]>::try_from(<&[u8]>::from(bytes)).map_err(|_width| refused())?;
         let tree = TreeId::try_from(bytes).map_err(|_key| refused())?;
         let entry = match u8::from(found) {
-            | 1 => {
+            1 => {
                 let count = reader.read_word()?;
                 let count = u64::from(count);
                 let mut heads = Vec::new();
@@ -368,8 +368,8 @@ impl CanonicalValue for TaskEntry
                     refused: refusals,
                 }
             },
-            | 2 => Self::Unheld { tree },
-            | _unknown => return Err(refused()),
+            2 => Self::Unheld { tree },
+            _unknown => return Err(refused()),
         };
         reader.read_close()?;
         Ok(entry)
@@ -566,16 +566,16 @@ mod tests
                 assert!(view.refused().is_empty());
                 let expected = view.task().current();
                 let standing = match *expected {
-                    | Current::Undispatched => 0,
-                    | Current::Attempt(ref attempt) => match *attempt.progress() {
-                        | Progress::Unchecked => match attempt.answer() {
-                            | Answer::Awaited => 1,
-                            | Answer::Reported { .. } => 2,
+                    Current::Undispatched => 0,
+                    Current::Attempt(ref attempt) => match *attempt.progress() {
+                        Progress::Unchecked => match attempt.answer() {
+                            Answer::Awaited => 1,
+                            Answer::Reported { .. } => 2,
                         },
-                        | Progress::Verified { .. } => 3,
-                        | Progress::Graded { .. } => 4,
-                        | Progress::Decided { .. } => 5,
-                        | Progress::Landed { .. } => 6,
+                        Progress::Verified { .. } => 3,
+                        Progress::Graded { .. } => 4,
+                        Progress::Decided { .. } => 5,
+                        Progress::Landed { .. } => 6,
                     },
                 };
                 reached.push(standing);

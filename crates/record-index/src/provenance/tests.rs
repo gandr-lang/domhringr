@@ -71,31 +71,31 @@ fn provenance_agrees_with_every_tasks_evidence()
             );
             for &(commit, ref step) in view.task().steps() {
                 let naming = match *step {
-                    | Step::Report {
+                    Step::Report {
                         author, content, ..
                     } => (Subject::Evidence(content), Attribution {
                         field: Field::Content,
                         holder: author,
                     }),
-                    | Step::Verified { runner, output, .. } => {
+                    Step::Verified { runner, output, .. } => {
                         (Subject::Evidence(output), Attribution {
                             field: Field::Output,
                             holder: runner,
                         })
                     },
-                    | Step::Verdict {
+                    Step::Verdict {
                         judge, transcript, ..
                     } => (Subject::Evidence(transcript), Attribution {
                         field: Field::Transcript,
                         holder: judge,
                     }),
-                    | Step::Landed {
+                    Step::Landed {
                         operator, merge, ..
                     } => (Subject::Revision(merge), Attribution {
                         field: Field::Revision,
                         holder: operator,
                     }),
-                    | Step::Dispatch { .. }
+                    Step::Dispatch { .. }
                     | Step::Handoff { .. }
                     | Step::Retire { .. }
                     | Step::Pause { .. }

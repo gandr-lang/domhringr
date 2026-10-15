@@ -92,8 +92,8 @@ fn every_key_proves_against_the_manifest_alone()
             panic!("absence");
         };
         assert_eq!(neighbours.predecessor(), match position {
-            | 0 => None,
-            | _ => expected.get(usize::from(
+            0 => None,
+            _ => expected.get(usize::from(
                 arith::checked_sub(Int::from(position), Int::from(1)).unwrap()
             )),
         });

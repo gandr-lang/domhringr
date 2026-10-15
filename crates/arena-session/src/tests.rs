@@ -335,18 +335,18 @@ fn task_channels_replay_with_their_duals()
                 .moves()
                 .iter()
                 .map(|movement| match *movement {
-                    | Move::Send(payload) => Move::Receive(payload),
-                    | Move::Receive(payload) => Move::Send(payload),
-                    | Move::Select(ref label) => Move::Offer(label.clone()),
-                    | Move::Offer(ref label) => Move::Select(label.clone()),
-                    | Move::End => Move::End,
+                    Move::Send(payload) => Move::Receive(payload),
+                    Move::Receive(payload) => Move::Send(payload),
+                    Move::Select(ref label) => Move::Offer(label.clone()),
+                    Move::Offer(ref label) => Move::Select(label.clone()),
+                    Move::End => Move::End,
                 })
                 .collect::<Vec<_>>();
             match expected {
-                | Progress::Complete => {
+                Progress::Complete => {
                     assert_eq!(gandr_core_session::replay(&dual, &opposite), Ok(Completion));
                 },
-                | Progress::Open(_) => assert!(
+                Progress::Open(_) => assert!(
                     matches!(gandr_core_session::replay(&dual, &opposite), Err(ReplayError::IncompleteRun { expected: Action::Receive(identity), .. }) if identity == crate::VERIFIED)
                 ),
             }

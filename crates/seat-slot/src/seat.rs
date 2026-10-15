@@ -322,34 +322,34 @@ async fn accept(seat: Arc<Seat>)
 {
     loop {
         match seat.node.accept().await {
-            | Ok(Incoming::Peer(accepted)) => seat.tell(Event::Accepted(accepted)),
-            | Ok(Incoming::Protocol {
+            Ok(Incoming::Peer(accepted)) => seat.tell(Event::Accepted(accepted)),
+            Ok(Incoming::Protocol {
                 protocol,
                 connection,
             }) if protocol == PROTOCOL => {
                 drop(tokio::spawn(answer(Arc::clone(&seat), connection)));
             },
-            | Ok(Incoming::Protocol {
+            Ok(Incoming::Protocol {
                 protocol,
                 connection,
             }) if protocol == domhringr_record_evidence::PROTOCOL => {
                 drop(tokio::spawn(give(Arc::clone(&seat), connection)));
             },
-            | Ok(Incoming::Protocol {
+            Ok(Incoming::Protocol {
                 protocol,
                 connection,
             }) if protocol == domhringr_record_index::stream::PROTOCOL => {
                 drop(tokio::spawn(prove(Arc::clone(&seat), connection)));
             },
-            | Ok(Incoming::Protocol { connection, .. }) => {
+            Ok(Incoming::Protocol { connection, .. }) => {
                 connection.close(iroh::endpoint::VarInt::from_u32(0), b"unknown protocol");
                 seat.tell(Event::Unaccepted(AcceptError::Protocol));
             },
-            | Err(AcceptError::Closed) => {
+            Err(AcceptError::Closed) => {
                 seat.tell(Event::Closed);
                 return;
             },
-            | Err(failure) => seat.tell(Event::Unaccepted(failure)),
+            Err(failure) => seat.tell(Event::Unaccepted(failure)),
         }
     }
 }
@@ -364,8 +364,8 @@ async fn prove(
 )
 {
     match domhringr_record_index::stream::answer(&seat.indexes, &seat.proofs, connection).await {
-        | Ok(served) => seat.tell(Event::Proved(served)),
-        | Err(failure) => seat.tell(Event::Unproved(failure)),
+        Ok(served) => seat.tell(Event::Proved(served)),
+        Err(failure) => seat.tell(Event::Unproved(failure)),
     }
 }
 
@@ -395,9 +395,9 @@ async fn answer(
     let answered = seat.converse(&connection).await;
     let _closed = tokio::time::timeout(LINGER, connection.closed()).await;
     match answered {
-        | Err(failure) => seat.tell(Event::Unanswered(failure)),
-        | Ok(Err(declined)) => seat.tell(Event::Declined(declined)),
-        | Ok(Ok((tree, attempt))) => {
+        Err(failure) => seat.tell(Event::Unanswered(failure)),
+        Ok(Err(declined)) => seat.tell(Event::Declined(declined)),
+        Ok(Ok((tree, attempt))) => {
             seat.tell(Event::Woken {
                 tree,
                 dispatch: attempt.dispatch(),
@@ -429,8 +429,8 @@ async fn give(
 )
 {
     match domhringr_record_evidence::answer(&seat.evidence, connection).await {
-        | Ok(served) => seat.tell(Event::Served(served)),
-        | Err(failure) => seat.tell(Event::Unserved(failure)),
+        Ok(served) => seat.tell(Event::Served(served)),
+        Err(failure) => seat.tell(Event::Unserved(failure)),
     }
 }
 
@@ -455,8 +455,8 @@ async fn give(
 async fn resume(seat: Arc<Seat>)
 {
     let trees = match seat.node.peer().trees().await {
-        | Ok(trees) => trees,
-        | Err(failure) => {
+        Ok(trees) => trees,
+        Err(failure) => {
             seat.tell(Event::Unresumed(ResumeError::Trees(failure)));
             return;
         },
@@ -464,8 +464,8 @@ async fn resume(seat: Arc<Seat>)
     let me = seat.node.peer().identity().peer_key();
     for tree in trees {
         let view = match seat.node.peer().view(tree).await {
-            | Ok(view) => view,
-            | Err(failure) => {
+            Ok(view) => view,
+            Err(failure) => {
                 seat.tell(Event::Unresumed(ResumeError::View { tree, failure }));
                 continue;
             },
@@ -515,8 +515,8 @@ async fn act(
     let reported = seat.report(tree, &attempt, program.clone()).await;
     let _was_acting = seat.acting.lock().await.remove(&dispatch);
     seat.tell(match reported {
-        | Ok(report) => Event::Reported { tree, report },
-        | Err(failure) => Event::Unreported {
+        Ok(report) => Event::Reported { tree, report },
+        Err(failure) => Event::Unreported {
             tree,
             dispatch,
             failure,
@@ -584,12 +584,12 @@ impl Seat
             .map_err(AnswerError::Receive)?;
         let read = Line::try_from(asked).and_then(|line| line.as_ref().parse::<Wake>());
         let considered = match read {
-            | Ok(wake) => self.consider(&wake).await,
-            | Err(malformed) => Err(Declined::Malformed(malformed)),
+            Ok(wake) => self.consider(&wake).await,
+            Err(malformed) => Err(Declined::Malformed(malformed)),
         };
         let reply = match considered {
-            | Ok(_) => Reply::Woken,
-            | Err(ref declined) => Reply::Declined(declined.decline()),
+            Ok(_) => Reply::Woken,
+            Err(ref declined) => Reply::Declined(declined.decline()),
         };
         let line = format!("{reply}\n");
         send.write_all(line.as_bytes())
@@ -646,8 +646,8 @@ impl Seat
             .map_err(Declined::Unfolded)?;
         let me = self.node.peer().identity().peer_key();
         let attempt = match *view.task().current() {
-            | Current::Attempt(ref attempt) if attempt.dispatch() == wake.dispatch() => attempt,
-            | Current::Attempt(_) | Current::Undispatched => return Err(Declined::NotCurrent),
+            Current::Attempt(ref attempt) if attempt.dispatch() == wake.dispatch() => attempt,
+            Current::Attempt(_) | Current::Undispatched => return Err(Declined::NotCurrent),
         };
         if attempt.slot() != Slot::Held(me) {
             return Err(Declined::NotHeld);
@@ -696,8 +696,8 @@ impl Seat
     {
         let dispatch = attempt.dispatch();
         let (kind, brief) = match *attempt.brief() {
-            | Brief::Anchor(ref anchor) => ("anchor", anchor.to_string()),
-            | Brief::Content(content) => ("content", content.to_string()),
+            Brief::Anchor(ref anchor) => ("anchor", anchor.to_string()),
+            Brief::Content(content) => ("content", content.to_string()),
         };
         let task = Anchor::key(tree).to_string();
         let named = Anchor::commit(tree, dispatch).to_string();
@@ -770,12 +770,12 @@ impl Declined
     pub const fn decline(&self) -> Decline
     {
         match *self {
-            | Self::Malformed(_) => Decline::Malformed,
-            | Self::Unsynced(_) => Decline::Unsynced,
-            | Self::Unfolded(_) => Decline::Unfolded,
-            | Self::NotCurrent => Decline::NotCurrent,
-            | Self::NotHeld => Decline::NotHeld,
-            | Self::Unpresented(_) => Decline::Unpresented,
+            Self::Malformed(_) => Decline::Malformed,
+            Self::Unsynced(_) => Decline::Unsynced,
+            Self::Unfolded(_) => Decline::Unfolded,
+            Self::NotCurrent => Decline::NotCurrent,
+            Self::NotHeld => Decline::NotHeld,
+            Self::Unpresented(_) => Decline::Unpresented,
         }
     }
 }

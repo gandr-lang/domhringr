@@ -87,8 +87,8 @@ impl Timeout<Sendable> for TokioTimer
     {
         Box::pin(async move {
             match tokio::time::timeout(dur, fut).await {
-                | Ok(output) => Ok(output),
-                | Err(_elapsed) => Err(TimedOut),
+                Ok(output) => Ok(output),
+                Err(_elapsed) => Err(TimedOut),
             }
         })
     }

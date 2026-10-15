@@ -184,7 +184,7 @@ impl Question
     fn name(&self) -> &TaskName
     {
         match *self {
-            | Self::Task(ref name)
+            Self::Task(ref name)
             | Self::Replay(ref name)
             | Self::Move(ref name, _)
             | Self::Play(ref name, _)
@@ -246,18 +246,20 @@ pub fn parse(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
     let mut at = At::Book;
     while let Some(argument) = arguments.next()? {
         match argument {
-            | lexopt::Arg::Value(value) => operands.push(value),
-            | lexopt::Arg::Long("by") if proving || action == "check" => {
+            lexopt::Arg::Value(value) => operands.push(value),
+            lexopt::Arg::Long("by") if proving || action == "check" => {
                 let value = arguments.value()?;
                 let peer = crate::read_id(&value, Operand::Peer)?;
                 by = Aim::Peer(peer);
             },
-            | lexopt::Arg::Long("at") if proving => {
+            lexopt::Arg::Long("at") if proving => {
                 let value = arguments.value()?;
                 let endpoint = crate::read_id(&value, Operand::At)?;
                 at = At::Given(endpoint);
             },
-            | argument => return Err(argument.unexpected().into()),
+            argument @ (lexopt::Arg::Short(_) | lexopt::Arg::Long(_)) => {
+                return Err(argument.unexpected().into());
+            },
         }
     }
     let (project, operands) = operands
@@ -265,10 +267,10 @@ pub fn parse(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
         .ok_or(UsageError::Operands(Verb::Index))?;
     let project = crate::read_tree(project)?;
     let action = match (action, operands) {
-        | ("derive", &[]) => Action::Derive,
-        | ("measure", &[]) => Action::Measure,
-        | ("check", &[]) => Action::Check(by),
-        | ("replay", &[ref name]) => {
+        ("derive", &[]) => Action::Derive,
+        ("measure", &[]) => Action::Measure,
+        ("check", &[]) => Action::Check(by),
+        ("replay", &[ref name]) => {
             let name = read_name(name)?;
             Action::Prove {
                 question: Question::Replay(name),
@@ -276,7 +278,7 @@ pub fn parse(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
                 at,
             }
         },
-        | ("task", &[ref name]) => {
+        ("task", &[ref name]) => {
             let name = read_name(name)?;
             Action::Prove {
                 question: Question::Task(name),
@@ -284,7 +286,7 @@ pub fn parse(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
                 at,
             }
         },
-        | ("move", &[ref name, ref coordinate]) => {
+        ("move", &[ref name, ref coordinate]) => {
             let name = read_name(name)?;
             let coordinate = coordinate
                 .to_str()
@@ -301,7 +303,7 @@ pub fn parse(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
                 at,
             }
         },
-        | ("play" | "after", &[ref name, ref attempt]) => {
+        ("play" | "after", &[ref name, ref attempt]) => {
             let name = read_name(name)?;
             let attempt = attempt.to_str().ok_or(UsageError::Operands(Verb::Index))?;
             let attempt = attempt.parse().map_err(ParseError::from)?;
@@ -314,7 +316,7 @@ pub fn parse(arguments: &mut lexopt::Parser) -> Result<Command, UsageError>
             };
             Action::Prove { question, by, at }
         },
-        | _arity => return Err(UsageError::Operands(Verb::Index)),
+        _arity => return Err(UsageError::Operands(Verb::Index)),
     };
     Ok(Command { project, action })
 }
@@ -473,8 +475,8 @@ impl Reader
     fn peer(&self) -> &Peer
     {
         match self.link {
-            | Link::Local { ref peer, .. } => peer,
-            | Link::Remote { ref node, .. } => node.peer(),
+            Link::Local { ref peer, .. } => peer,
+            Link::Remote { ref node, .. } => node.peer(),
         }
     }
 
@@ -502,25 +504,25 @@ impl Reader
     ) -> Result<(Self, Answer), IndexError>
     {
         match self.store.load(request.digest) {
-            | Ok(index) => {
+            Ok(index) => {
                 let answer = prove::answer(&index, &request.query)?;
                 return Ok((self, answer));
             },
-            | Err(StoreError::Unheld(_digest)) => {},
-            | Err(failure) => return Err(failure.into()),
+            Err(StoreError::Unheld(_digest)) => {},
+            Err(failure) => return Err(failure.into()),
         }
         let (node, connection) = match self.link {
-            | Link::Local { peer, at } => {
+            Link::Local { peer, at } => {
                 let route = peer.route(self.project, Aim::Peer(self.author), at).await?;
                 let remote = match route {
-                    | Route::Itself => return Err(StoreError::Unheld(request.digest).into()),
-                    | Route::Book { remote, .. } | Route::Given { remote } => remote,
+                    Route::Itself => return Err(StoreError::Unheld(request.digest).into()),
+                    Route::Book { remote, .. } | Route::Given { remote } => remote,
                 };
                 let node = peer.bind(BindPort::Ephemeral, &[]).await?;
                 let connection = node.open(remote.endpoint(), stream::PROTOCOL).await?;
                 (node, connection)
             },
-            | Link::Remote { node, connection } => (node, connection),
+            Link::Remote { node, connection } => (node, connection),
         };
         let answer = stream::ask(&connection, request, kind).await?;
         self.link = Link::Remote { node, connection };
@@ -549,10 +551,10 @@ impl Reader
     ) -> Result<(Self, Index), IndexError>
     {
         match self.store.load(digest) {
-            | Ok(index) if index.manifest.kind() == kind => return Ok((self, index)),
-            | Ok(_foreign) => return Err(IndexError::Shape),
-            | Err(StoreError::Unheld(_digest)) => {},
-            | Err(failure) => return Err(failure.into()),
+            Ok(index) if index.manifest.kind() == kind => return Ok((self, index)),
+            Ok(_foreign) => return Err(IndexError::Shape),
+            Err(StoreError::Unheld(_digest)) => {},
+            Err(failure) => return Err(failure.into()),
         }
         let query = Query::Range(OwnedKeyRange::from_range(KeyRange::all()));
         let request = Request { digest, query };
@@ -657,15 +659,15 @@ async fn execute(
         return Ok((Completion::Success, format!("indexed {commit} {digest}\n")));
     }
     let (by, at) = match action {
-        | Action::Prove { by, ref at, .. } | Action::Provenance { by, ref at, .. } => {
+        Action::Prove { by, ref at, .. } | Action::Provenance { by, ref at, .. } => {
             (by, at.clone())
         },
-        | Action::Check(by) => (by, At::Book),
-        | Action::Measure | Action::Derive => (Aim::Owner, At::Book),
+        Action::Check(by) => (by, At::Book),
+        Action::Measure | Action::Derive => (Aim::Owner, At::Book),
     };
     let author = match by {
-        | Aim::Owner => view.owner(),
-        | Aim::Peer(author) => author,
+        Aim::Owner => view.owner(),
+        Aim::Peer(author) => author,
     };
     let attestation = view
         .indexes()
@@ -678,17 +680,17 @@ async fn execute(
         link: Link::Local { peer, at },
     };
     match action {
-        | Action::Provenance { subjects, .. } => {
+        Action::Provenance { subjects, .. } => {
             let (reader, output) = provenance::answer(reader, attestation, subjects).await?;
             reader.close().await;
             Ok((Completion::Success, output))
         },
-        | Action::Prove { question, .. } => {
+        Action::Prove { question, .. } => {
             let (reader, output) = answer(reader, attestation.index, question).await?;
             reader.close().await;
             Ok((Completion::Success, output))
         },
-        | Action::Check(_by) => {
+        Action::Check(_by) => {
             let (reader, index) = reader.load(attestation.index, IndexKind::Project).await?;
             let report = check::check(reader.peer(), project, attestation, &index).await?;
             let completion = if report.0.is_empty() {
@@ -700,12 +702,12 @@ async fn execute(
             reader.close().await;
             Ok((completion, report.to_string()))
         },
-        | Action::Measure => {
+        Action::Measure => {
             let (reader, output) = measurements(reader, attestation.index).await?;
             reader.close().await;
             Ok((Completion::Success, output))
         },
-        | Action::Derive => {
+        Action::Derive => {
             drop(reader);
             Err(IndexError::Shape)
         },
@@ -733,9 +735,9 @@ async fn answer(
     let (reader, answer) = reader.ask(&request, IndexKind::Project).await?;
     let verified = answer.verify(digest, IndexKind::Project, &request.query)?;
     let entry = match verified {
-        | Verified::Present(value) => decode_flat::<TaskEntry>(TokenBody::from(value.as_ref()))?,
-        | Verified::Absent(_evidence) => return Err(IndexError::Absent(question.name().clone())),
-        | Verified::Range(_records) => return Err(IndexError::Shape),
+        Verified::Present(value) => decode_flat::<TaskEntry>(TokenBody::from(value.as_ref()))?,
+        Verified::Absent(_evidence) => return Err(IndexError::Absent(question.name().clone())),
+        Verified::Range(_records) => return Err(IndexError::Shape),
     };
     let mut output = format!("proved {digest} {}\n", reader.author);
     if matches!(&question, Question::Replay(_name)) {
@@ -743,10 +745,10 @@ async fn answer(
     }
     if matches!(&question, Question::Task(_name)) {
         match entry {
-            | TaskEntry::Held { tree, current, .. } => {
+            TaskEntry::Held { tree, current, .. } => {
                 writeln!(output, "task {} {current}", Anchor::key(tree))?;
             },
-            | TaskEntry::Unheld { tree } => writeln!(output, "task {} unheld", Anchor::key(tree))?,
+            TaskEntry::Unheld { tree } => writeln!(output, "task {} unheld", Anchor::key(tree))?,
         }
         return Ok((reader, output));
     }
@@ -808,13 +810,13 @@ fn measurement(
 {
     let measured = measure::measure(index)?;
     let kind = match index.manifest.kind() {
-        | IndexKind::Dialogue => "dialogue",
-        | IndexKind::Project => "project",
-        | IndexKind::Provenance => "provenance",
+        IndexKind::Dialogue => "dialogue",
+        IndexKind::Project => "project",
+        IndexKind::Provenance => "provenance",
     };
     let levels = match measured.levels {
-        | measure::Levels::Closed => "closed",
-        | measure::Levels::Open => "open",
+        measure::Levels::Closed => "closed",
+        measure::Levels::Open => "open",
     };
     writeln!(
         output,

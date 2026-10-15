@@ -109,12 +109,12 @@ impl Refusal
     pub const fn reason(&self) -> Unread
     {
         match *self {
-            | Self::NoLetter => Unread::NoLetter,
-            | Self::Outside { .. } => Unread::Outside,
-            | Self::Tied => Unread::Tied,
-            | Self::Endpoint(_) => Unread::Endpoint,
-            | Self::Malformed(_) => Unread::Malformed,
-            | Self::Recorded(reason) => reason,
+            Self::NoLetter => Unread::NoLetter,
+            Self::Outside { .. } => Unread::Outside,
+            Self::Tied => Unread::Tied,
+            Self::Endpoint(_) => Unread::Endpoint,
+            Self::Malformed(_) => Unread::Malformed,
+            Self::Recorded(reason) => reason,
         }
     }
 }
@@ -293,9 +293,9 @@ impl Backend for Static
     ) -> impl Future<Output = Result<Readout, Refusal>> + Send
     {
         let answered = match self.0.get(&(question.hash(), transcript.digest())) {
-            | Some(&Ruling::Read(ref readout)) => Ok(readout.clone()),
-            | Some(&Ruling::Unread(reason)) => Err(Refusal::Recorded(reason)),
-            | None => Err(Refusal::Malformed(MalformedError::Unlisted)),
+            Some(&Ruling::Read(ref readout)) => Ok(readout.clone()),
+            Some(&Ruling::Unread(reason)) => Err(Refusal::Recorded(reason)),
+            None => Err(Refusal::Malformed(MalformedError::Unlisted)),
         };
         core::future::ready(answered)
     }

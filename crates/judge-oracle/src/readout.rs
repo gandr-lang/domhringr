@@ -152,8 +152,8 @@ pub fn read(
         .collect::<Result<Vec<_>, _>>()
         .map_err(unreadable)?;
     Readout::new(probabilities, outside).map_err(|unread| match unread {
-        | ReadoutError::Tied => Refusal::Tied,
-        | ReadoutError::Few | ReadoutError::Many | ReadoutError::Sum => {
+        ReadoutError::Tied => Refusal::Tied,
+        ReadoutError::Few | ReadoutError::Many | ReadoutError::Sum => {
             Refusal::Endpoint(EndpointError::Distribution)
         },
     })

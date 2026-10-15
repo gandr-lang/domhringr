@@ -126,12 +126,12 @@ pub async fn verify(
         })
         .await;
         let (output, status) = match kept {
-            | Ok(Ok(kept)) => kept,
-            | Ok(Err(failure)) => {
+            Ok(Ok(kept)) => kept,
+            Ok(Err(failure)) => {
                 ran = Err(failure);
                 break;
             },
-            | Err(failure) => {
+            Err(failure) => {
                 ran = Err(RunError::Join(failure));
                 break;
             },
@@ -285,11 +285,11 @@ pub async fn decide(
     let composed = compose(&grades);
     emit(&format_args!("composed {composed}\n"))?;
     let decision = match (composed, failure) {
-        | (Grade::Met, _) => Decision::Land,
-        | (Grade::Unmet, Some(reason)) => Decision::Rework {
+        (Grade::Met, _) => Decision::Land,
+        (Grade::Unmet, Some(reason)) => Decision::Rework {
             reason: reason.parse().map_err(RunError::Reason)?,
         },
-        | (Grade::Unmet, None) | (Grade::Undecided | Grade::Refused, _) => {
+        (Grade::Unmet, None) | (Grade::Undecided | Grade::Refused, _) => {
             return Ok(Completion::Undecided);
         },
     };
@@ -465,12 +465,12 @@ async fn rulings(
 ) -> Result<Vec<(ContentHash, Ruling)>, RunError>
 {
     match *judging {
-        | Judging::Endpoint => {
+        Judging::Endpoint => {
             let config = Config::from_environment().map_err(RunError::Config)?;
             let client = ChatCompletions::new(config).map_err(RunError::Client)?;
             rule(&client, questions, transcript).await
         },
-        | Judging::Table(ref path) => {
+        Judging::Table(ref path) => {
             let text = std::fs::read_to_string(path).map_err(RunError::Table)?;
             let table = text
                 .parse::<domhringr_judge_oracle::Static>()
@@ -513,8 +513,8 @@ where
     let mut answers = Vec::with_capacity(questions.len());
     for question in questions {
         let ruling = match backend.ask(question, transcript).await {
-            | Ok(readout) => Ruling::Read(readout),
-            | Err(refusal) => {
+            Ok(readout) => Ruling::Read(readout),
+            Err(refusal) => {
                 report(&refusal).map_err(RunError::Diagnostics)?;
                 Ruling::Unread(refusal.reason())
             },

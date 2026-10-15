@@ -173,10 +173,10 @@ impl fmt::Display for Variable
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Endpoint => ENDPOINT,
-            | Self::Model => MODEL,
-            | Self::Key => KEY,
-            | Self::Ceiling => CEILING,
+            Self::Endpoint => ENDPOINT,
+            Self::Model => MODEL,
+            Self::Key => KEY,
+            Self::Ceiling => CEILING,
         })
     }
 }
@@ -263,11 +263,11 @@ impl Config
         let (mut endpoint, mut model, mut key, mut ceiling) = (None, None, None, None);
         for (name, value) in variables {
             let slot = match name.to_str() {
-                | Some(ENDPOINT) => &mut endpoint,
-                | Some(MODEL) => &mut model,
-                | Some(KEY) => &mut key,
-                | Some(CEILING) => &mut ceiling,
-                | Some(_) | None => continue,
+                Some(ENDPOINT) => &mut endpoint,
+                Some(MODEL) => &mut model,
+                Some(KEY) => &mut key,
+                Some(CEILING) => &mut ceiling,
+                Some(_) | None => continue,
             };
             *slot = Some(value);
         }
@@ -292,18 +292,18 @@ impl Config
             return Err(ConfigError::Model);
         }
         let authorization = match key {
-            | Some(key) => Authorization::Bearer(Key(text(Variable::Key, key)?)),
-            | None => Authorization::Anonymous,
+            Some(key) => Authorization::Bearer(Key(text(Variable::Key, key)?)),
+            None => Authorization::Anonymous,
         };
         let ceiling = match ceiling {
-            | Some(ceiling) => {
+            Some(ceiling) => {
                 let ceiling = text(Variable::Ceiling, ceiling)?;
                 let ceiling = ceiling
                     .parse::<Probability>()
                     .map_err(ConfigError::Ceiling)?;
                 Ceiling::At(ceiling)
             },
-            | None => Ceiling::Unbounded,
+            None => Ceiling::Unbounded,
         };
         Ok(Self {
             url,

@@ -153,8 +153,8 @@ criteria.false = "The diff changes another file."
         ) -> fmt::Result
         {
             f.write_str(match *self {
-                | Self::Holds => "read A A=0.9 B=0.1 outside=0",
-                | Self::Fails => "read B A=0.1 B=0.9 outside=0",
+                Self::Holds => "read A A=0.9 B=0.1 outside=0",
+                Self::Fails => "read B A=0.1 B=0.9 outside=0",
             })
         }
     }
@@ -281,8 +281,8 @@ criteria.false = "The diff changes another file."
     {
         let output = command.output().unwrap();
         let expected = match exit {
-            | Exit::Success => 0_i32,
-            | Exit::Undecided => 3_i32,
+            Exit::Success => 0_i32,
+            Exit::Undecided => 3_i32,
         };
         assert_eq!(
             output.status.code(),
@@ -565,8 +565,8 @@ rm -rf "$work"
         ) -> (String, CommitId)
         {
             let index = match which {
-                | Which::First => 0,
-                | Which::Second => 1,
+                Which::First => 0,
+                Which::Second => 1,
             };
             let lines = ended(
                 self.driver()
@@ -590,12 +590,12 @@ rm -rf "$work"
             let report = runtime.block_on(async {
                 loop {
                     match tokio::time::timeout(DEADLINE, events.recv()).await.unwrap() {
-                        | Some(Event::Reported { report, .. }) => return report,
-                        | Some(Event::Unreported { failure, .. }) => {
+                        Some(Event::Reported { report, .. }) => return report,
+                        Some(Event::Unreported { failure, .. }) => {
                             panic!("the seat's script fails: {failure}")
                         },
-                        | Some(_) => {},
-                        | None => panic!("the seat stopped serving"),
+                        Some(_) => {},
+                        None => panic!("the seat stopped serving"),
                     }
                 }
             });
@@ -1128,7 +1128,7 @@ rm -rf "$work"
                 continue;
             }
             let standing = match peer.view(tree).await {
-                | Ok(task) => {
+                Ok(task) => {
                     for &(commit, ref refusal) in task.refused() {
                         lines.push(format!(
                             "refused {} {refusal}",
@@ -1137,8 +1137,8 @@ rm -rf "$work"
                     }
                     task.task().current().to_string()
                 },
-                | Err(ViewError::Unopened(_)) => String::from("unheld"),
-                | Err(failure) => panic!("fold task: {failure}"),
+                Err(ViewError::Unopened(_)) => String::from("unheld"),
+                Err(failure) => panic!("fold task: {failure}"),
             };
             lines.push(format!("task {}{path} {standing}", Anchor::key(project)));
         }
@@ -1223,14 +1223,14 @@ rm -rf "$work"
                 let peer = Peer::open(&state, identity).unwrap();
                 let view = peer.view(task).await.unwrap();
                 let dispatch = match *view.task().current() {
-                    | Current::Attempt(ref attempt) => Some(attempt.dispatch()),
-                    | Current::Undispatched => None,
+                    Current::Attempt(ref attempt) => Some(attempt.dispatch()),
+                    Current::Undispatched => None,
                 };
                 let hash = BRIEF.parse().unwrap();
                 let value = ManifestDigest::from([42; 32]);
                 match stage {
-                    | "undispatched" => {},
-                    | "dispatched" => {
+                    "undispatched" => {},
+                    "dispatched" => {
                         peer.commit(
                             task,
                             Receipt::dispatch(task, me, Edition::CURRENT, Brief::Content(hash))
@@ -1239,7 +1239,7 @@ rm -rf "$work"
                         .await
                         .unwrap();
                     },
-                    | "reported" => {
+                    "reported" => {
                         peer.commit(
                             task,
                             Receipt::report(
@@ -1253,7 +1253,7 @@ rm -rf "$work"
                         .await
                         .unwrap();
                     },
-                    | "verified" => {
+                    "verified" => {
                         peer.commit(
                             task,
                             Receipt::verified(
@@ -1270,7 +1270,7 @@ rm -rf "$work"
                         .await
                         .unwrap();
                     },
-                    | "graded" => {
+                    "graded" => {
                         let verdict = peer
                             .commit(
                                 task,
@@ -1290,7 +1290,7 @@ rm -rf "$work"
                         .await
                         .unwrap();
                     },
-                    | "decided" => {
+                    "decided" => {
                         peer.commit(
                             task,
                             Receipt::decide(task, dispatch.unwrap(), me, Decision::Land).unwrap(),
@@ -1298,7 +1298,7 @@ rm -rf "$work"
                         .await
                         .unwrap();
                     },
-                    | "landed" => {
+                    "landed" => {
                         let Current::Attempt(ref attempt) = *view.task().current()
                         else {
                             panic!("attempt");
@@ -1315,7 +1315,7 @@ rm -rf "$work"
                         .await
                         .unwrap();
                     },
-                    | "refused" => {
+                    "refused" => {
                         peer.commit(
                             task,
                             Receipt::dispatch(task, me, Edition::from(99), Brief::Content(hash))
@@ -1324,7 +1324,7 @@ rm -rf "$work"
                         .await
                         .unwrap();
                     },
-                    | _ => panic!("unknown fixture stage"),
+                    _ => panic!("unknown fixture stage"),
                 }
                 let reference = folding_listing(&peer, project).await;
                 if stage == "refused" {

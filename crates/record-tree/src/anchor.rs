@@ -233,12 +233,12 @@ impl FromStr for Authority
             return Ok(Self::Domain(domain));
         }
         match text.parse::<TreeId>() {
-            | Ok(tree) => Ok(Self::Key(tree)),
-            | Err(ParseIdError::TreeLength | ParseIdError::TreeAlphabet) => {
+            Ok(tree) => Ok(Self::Key(tree)),
+            Err(ParseIdError::TreeLength | ParseIdError::TreeAlphabet) => {
                 let label = text.parse::<Label>().map_err(ParseAnchorError::Label)?;
                 Ok(Self::Label(label))
             },
-            | Err(failure) => Err(ParseAnchorError::Authority(failure)),
+            Err(failure) => Err(ParseAnchorError::Authority(failure)),
         }
     }
 }
@@ -256,9 +256,9 @@ impl fmt::Display for Authority
     ) -> fmt::Result
     {
         match *self {
-            | Self::Key(tree) => fmt::Display::fmt(&tree, f),
-            | Self::Domain(ref domain) => fmt::Display::fmt(domain, f),
-            | Self::Label(ref label) => fmt::Display::fmt(label, f),
+            Self::Key(tree) => fmt::Display::fmt(&tree, f),
+            Self::Domain(ref domain) => fmt::Display::fmt(domain, f),
+            Self::Label(ref label) => fmt::Display::fmt(label, f),
         }
     }
 }
@@ -329,7 +329,7 @@ impl Anchor
     pub const fn authority(&self) -> &Authority
     {
         match *self {
-            | Self::Tree(ref authority)
+            Self::Tree(ref authority)
             | Self::Path { ref authority, .. }
             | Self::Commit { ref authority, .. } => authority,
         }
@@ -371,8 +371,8 @@ impl FromStr for Anchor
     {
         let reference = text.parse::<Reference>()?;
         match reference {
-            | Reference::Anchor(anchor) => Ok(anchor),
-            | Reference::Abbreviated { .. } => Err(ParseAnchorError::Abbreviated),
+            Reference::Anchor(anchor) => Ok(anchor),
+            Reference::Abbreviated { .. } => Err(ParseAnchorError::Abbreviated),
         }
     }
 }
@@ -392,12 +392,12 @@ impl fmt::Display for Anchor
     ) -> fmt::Result
     {
         match *self {
-            | Self::Tree(ref authority) => write!(f, "{SCHEME}{authority}/"),
-            | Self::Path {
+            Self::Tree(ref authority) => write!(f, "{SCHEME}{authority}/"),
+            Self::Path {
                 ref authority,
                 ref path,
             } => write!(f, "{SCHEME}{authority}/{path}"),
-            | Self::Commit {
+            Self::Commit {
                 ref authority,
                 commit,
             } => write!(f, "{SCHEME}{authority}/{COMMIT}/{commit}"),
@@ -434,8 +434,8 @@ impl Reference
     pub const fn authority(&self) -> &Authority
     {
         match *self {
-            | Self::Anchor(ref anchor) => anchor.authority(),
-            | Self::Abbreviated { ref authority, .. } => authority,
+            Self::Anchor(ref anchor) => anchor.authority(),
+            Self::Abbreviated { ref authority, .. } => authority,
         }
     }
 
@@ -446,10 +446,10 @@ impl Reference
     pub(crate) const fn locus(&self) -> Locus<'_>
     {
         match *self {
-            | Self::Anchor(Anchor::Tree(_)) => Locus::Tree,
-            | Self::Anchor(Anchor::Path { ref path, .. }) => Locus::Within(Within::Path(path)),
-            | Self::Anchor(Anchor::Commit { commit, .. }) => Locus::Within(Within::Commit(commit)),
-            | Self::Abbreviated { ref prefix, .. } => Locus::Within(Within::Prefix(prefix)),
+            Self::Anchor(Anchor::Tree(_)) => Locus::Tree,
+            Self::Anchor(Anchor::Path { ref path, .. }) => Locus::Within(Within::Path(path)),
+            Self::Anchor(Anchor::Commit { commit, .. }) => Locus::Within(Within::Commit(commit)),
+            Self::Abbreviated { ref prefix, .. } => Locus::Within(Within::Prefix(prefix)),
         }
     }
 }
@@ -549,8 +549,8 @@ impl FromStr for Reference
                 .parse::<CommitDigits>()
                 .map_err(ParseAnchorError::Commit)?;
             return Ok(match digits {
-                | CommitDigits::Full(commit) => Self::Anchor(Anchor::Commit { authority, commit }),
-                | CommitDigits::Abbreviated(prefix) => Self::Abbreviated { authority, prefix },
+                CommitDigits::Full(commit) => Self::Anchor(Anchor::Commit { authority, commit }),
+                CommitDigits::Abbreviated(prefix) => Self::Abbreviated { authority, prefix },
             });
         }
         let path = path.parse::<Path>()?;
@@ -662,12 +662,12 @@ impl fmt::Display for Target
     ) -> fmt::Result
     {
         match *self {
-            | Self::Anchor(ref anchor) => {
+            Self::Anchor(ref anchor) => {
                 f.write_str("anchor ")?;
                 write!(OneLine::new(f, Field::Last), "{anchor}")
             },
-            | Self::Endpoint(endpoint) => write!(f, "endpoint {endpoint}"),
-            | Self::Datum(ref datum) => {
+            Self::Endpoint(endpoint) => write!(f, "endpoint {endpoint}"),
+            Self::Datum(ref datum) => {
                 f.write_str("datum ")?;
                 OneLine::new(f, Field::Last).write_str(datum)
             },
@@ -713,10 +713,10 @@ impl fmt::Display for Resolution
     ) -> fmt::Result
     {
         match *self {
-            | Self::Bound(_author, ref target) => fmt::Display::fmt(target, f),
-            | Self::Unbound => f.write_str("unbound"),
-            | Self::Commit { id, ref verdict } => write!(f, "commit {id} {verdict}"),
-            | Self::Unknown => f.write_str("unknown"),
+            Self::Bound(_author, ref target) => fmt::Display::fmt(target, f),
+            Self::Unbound => f.write_str("unbound"),
+            Self::Commit { id, ref verdict } => write!(f, "commit {id} {verdict}"),
+            Self::Unknown => f.write_str("unknown"),
         }
     }
 }
@@ -935,14 +935,14 @@ mod tests
                 let (prefix, _rest) = HEX.split_at(digits);
                 let text = format!("domhringr://{written}/.commit/{prefix}");
                 match text.parse::<Reference>() {
-                    | Ok(Reference::Abbreviated {
+                    Ok(Reference::Abbreviated {
                         authority: read,
                         prefix: abbreviated,
                     }) => {
                         assert_eq!(read, authority, "{text}'s authority");
                         assert_eq!(abbreviated.to_string(), prefix, "{text} keeps its digits");
                     },
-                    | other => panic!("{text} is an abbreviated reference: {other:?}"),
+                    other => panic!("{text} is an abbreviated reference: {other:?}"),
                 }
                 assert!(
                     matches!(text.parse::<Anchor>(), Err(ParseAnchorError::Abbreviated)),

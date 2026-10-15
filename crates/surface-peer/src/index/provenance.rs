@@ -60,16 +60,18 @@ pub fn parse_provenance(arguments: &mut lexopt::Parser) -> Result<Command, Usage
     let mut at = At::Book;
     while let Some(argument) = arguments.next()? {
         match argument {
-            | lexopt::Arg::Value(value) => operands.push(value),
-            | lexopt::Arg::Long("by") => {
+            lexopt::Arg::Value(value) => operands.push(value),
+            lexopt::Arg::Long("by") => {
                 let value = arguments.value()?;
                 by = Aim::Peer(crate::read_id(&value, Operand::Peer)?);
             },
-            | lexopt::Arg::Long("at") => {
+            lexopt::Arg::Long("at") => {
                 let value = arguments.value()?;
                 at = At::Given(crate::read_id(&value, Operand::At)?);
             },
-            | argument => return Err(argument.unexpected().into()),
+            argument @ (lexopt::Arg::Short(_) | lexopt::Arg::Long(_)) => {
+                return Err(argument.unexpected().into());
+            },
         }
     }
     let [ref project, ref subject] = *operands.as_slice()
@@ -82,8 +84,8 @@ pub fn parse_provenance(arguments: &mut lexopt::Parser) -> Result<Command, Usage
         .parse::<Revision>()
         .map_err(|_revision| ParseError::Subject)?;
     let subjects = match revision {
-        | Revision::Sha1(_) => vec![Subject::Revision(revision)],
-        | Revision::Sha256(bytes) => vec![
+        Revision::Sha1(_) => vec![Subject::Revision(revision)],
+        Revision::Sha256(bytes) => vec![
             Subject::Evidence(ManifestDigest::from(bytes)),
             Subject::Revision(revision),
         ],

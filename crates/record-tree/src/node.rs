@@ -159,8 +159,8 @@ impl Peer
             .alpns(alpns)
             .address_lookup(iroh_mdns_address_lookup::MdnsAddressLookup::builder());
         let builder = match port {
-            | BindPort::Ephemeral => Ok(builder),
-            | BindPort::Fixed(port) => port.sockets(builder),
+            BindPort::Ephemeral => Ok(builder),
+            BindPort::Fixed(port) => port.sockets(builder),
         };
         let builder = builder.map_err(BindError::Address)?;
         let endpoint = builder.bind().await.map_err(BindError::Endpoint)?;
@@ -330,10 +330,10 @@ impl SelectedPath
             .find(iroh::endpoint::Path::is_selected)
             .map(|path| path.remote_addr().clone());
         match selected {
-            | None => Self::Pending,
-            | Some(iroh::TransportAddr::Ip(address)) => Self::Direct(address),
-            | Some(iroh::TransportAddr::Relay(url)) => Self::Relay(url),
-            | Some(other) => Self::Other(other),
+            None => Self::Pending,
+            Some(iroh::TransportAddr::Ip(address)) => Self::Direct(address),
+            Some(iroh::TransportAddr::Relay(url)) => Self::Relay(url),
+            Some(other) => Self::Other(other),
         }
     }
 
@@ -385,10 +385,10 @@ impl fmt::Display for SelectedPath
     ) -> fmt::Result
     {
         match *self {
-            | Self::Direct(address) => write!(f, "direct {address}"),
-            | Self::Relay(ref url) => write!(f, "relay {url}"),
-            | Self::Other(ref address) => write!(f, "other {address}"),
-            | Self::Pending => f.write_str("pending"),
+            Self::Direct(address) => write!(f, "direct {address}"),
+            Self::Relay(ref url) => write!(f, "relay {url}"),
+            Self::Other(ref address) => write!(f, "other {address}"),
+            Self::Pending => f.write_str("pending"),
         }
     }
 }
@@ -578,15 +578,15 @@ impl Node
             .iter()
             .copied()
             .find(|protocol| protocol.0 == connection.alpn());
-        match accepted {
-            | Some(protocol) => Ok(Incoming::Protocol {
+        if let Some(protocol) = accepted {
+            Ok(Incoming::Protocol {
                 protocol,
                 connection,
-            }),
-            | None => {
-                connection.close(iroh::endpoint::VarInt::from_u32(0), b"unknown protocol");
-                Err(AcceptError::Protocol)
-            },
+            })
+        }
+        else {
+            connection.close(iroh::endpoint::VarInt::from_u32(0), b"unknown protocol");
+            Err(AcceptError::Protocol)
         }
     }
 
@@ -1002,8 +1002,8 @@ impl Node
             return Ok(());
         }
         Err(match failures.into_iter().next() {
-            | Some((_connection, failure)) => SyncError::Call(failure),
-            | None => SyncError::Refused,
+            Some((_connection, failure)) => SyncError::Call(failure),
+            None => SyncError::Refused,
         })
     }
 
@@ -1207,9 +1207,8 @@ mod tests
         let node = Arc::clone(node);
         drop(tokio::spawn(async move {
             loop {
-                match node.accept().await {
-                    | Err(AcceptError::Closed) => break,
-                    | Ok(_) | Err(_) => {},
+                if matches!(node.accept().await, Err(AcceptError::Closed)) {
+                    break;
                 }
             }
         }));

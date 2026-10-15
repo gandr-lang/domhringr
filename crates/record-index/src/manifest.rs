@@ -52,9 +52,9 @@ impl From<IndexKind> for u8
     fn from(kind: IndexKind) -> Self
     {
         match kind {
-            | IndexKind::Dialogue => 1,
-            | IndexKind::Project => 2,
-            | IndexKind::Provenance => 3,
+            IndexKind::Dialogue => 1,
+            IndexKind::Project => 2,
+            IndexKind::Provenance => 3,
         }
     }
 }

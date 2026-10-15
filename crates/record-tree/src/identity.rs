@@ -384,14 +384,14 @@ impl Seed
     fn load_or_create(path: &Path) -> Result<Self, IdentityError>
     {
         match std::fs::read(path) {
-            | Ok(bytes) => match <[u8; 32]>::try_from(bytes.as_slice()) {
-                | Ok(seed) => Ok(Self(seed)),
-                | Err(_wrong_length) => Err(IdentityError::Malformed {
+            Ok(bytes) => match <[u8; 32]>::try_from(bytes.as_slice()) {
+                Ok(seed) => Ok(Self(seed)),
+                Err(_wrong_length) => Err(IdentityError::Malformed {
                     path: path.to_path_buf(),
                 }),
             },
-            | Err(error) if error.kind() == io::ErrorKind::NotFound => Self::create(path),
-            | Err(source) => Err(IdentityError::Read {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Self::create(path),
+            Err(source) => Err(IdentityError::Read {
                 path: path.to_path_buf(),
                 source,
             }),

@@ -50,8 +50,8 @@ impl CanonicalValue for Current
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Undispatched => sink.open(ConstructorTag::from(1))?,
-            | Self::Attempt(ref attempt) => {
+            Self::Undispatched => sink.open(ConstructorTag::from(1))?,
+            Self::Attempt(ref attempt) => {
                 sink.open(ConstructorTag::from(2))?;
                 sink.bytes(TokenBytes::from(attempt.dispatch.as_bytes().as_slice()))?;
                 sink.word(CanonicalWord::from(u64::from(attempt.edition)))?;
@@ -85,8 +85,8 @@ impl CanonicalValue for Current
     {
         let opened = Opened::read(reader)?;
         let current = match u8::from(opened.tag) {
-            | 1 => Self::Undispatched,
-            | 2 => {
+            1 => Self::Undispatched,
+            2 => {
                 let dispatch = opened.commit(reader)?;
                 let edition = reader.read_word()?;
                 let edition = Edition::from(u64::from(edition));
@@ -103,7 +103,7 @@ impl CanonicalValue for Current
                     progress,
                 })
             },
-            | _unknown => return Err(opened.refused()),
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(current)
@@ -136,11 +136,11 @@ impl CanonicalValue for Slot
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Held(holder) => {
+            Self::Held(holder) => {
                 sink.open(ConstructorTag::from(1))?;
                 sink.bytes(TokenBytes::from(holder.peer_id().as_bytes().as_slice()))?;
             },
-            | Self::Retired { by, at } => {
+            Self::Retired { by, at } => {
                 sink.open(ConstructorTag::from(2))?;
                 sink.bytes(TokenBytes::from(by.peer_id().as_bytes().as_slice()))?;
                 sink.bytes(TokenBytes::from(at.as_bytes().as_slice()))?;
@@ -169,16 +169,16 @@ impl CanonicalValue for Slot
     {
         let opened = Opened::read(reader)?;
         let slot = match u8::from(opened.tag) {
-            | 1 => {
+            1 => {
                 let peer = opened.peer(reader)?;
                 Self::Held(peer)
             },
-            | 2 => {
+            2 => {
                 let by = opened.peer(reader)?;
                 let at = opened.commit(reader)?;
                 Self::Retired { by, at }
             },
-            | _unknown => return Err(opened.refused()),
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(slot)
@@ -211,8 +211,8 @@ impl CanonicalValue for Answer
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Awaited => sink.open(ConstructorTag::from(1))?,
-            | Self::Reported(report) => {
+            Self::Awaited => sink.open(ConstructorTag::from(1))?,
+            Self::Reported(report) => {
                 sink.open(ConstructorTag::from(2))?;
                 sink.bytes(TokenBytes::from(report.as_bytes().as_slice()))?;
             },
@@ -240,12 +240,12 @@ impl CanonicalValue for Answer
     {
         let opened = Opened::read(reader)?;
         let answer = match u8::from(opened.tag) {
-            | 1 => Self::Awaited,
-            | 2 => {
+            1 => Self::Awaited,
+            2 => {
                 let commit = opened.commit(reader)?;
                 Self::Reported(commit)
             },
-            | _unknown => return Err(opened.refused()),
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(answer)
@@ -278,17 +278,17 @@ impl CanonicalValue for Progress
         Sink: TokenSink + ?Sized,
     {
         match *self {
-            | Self::Unchecked => sink.open(ConstructorTag::from(1))?,
-            | Self::Verified(commit) => {
+            Self::Unchecked => sink.open(ConstructorTag::from(1))?,
+            Self::Verified(commit) => {
                 sink.open(ConstructorTag::from(2))?;
                 sink.bytes(TokenBytes::from(commit.as_bytes().as_slice()))?;
             },
-            | Self::Graded { grading, composed } => {
+            Self::Graded { grading, composed } => {
                 sink.open(ConstructorTag::from(3))?;
                 sink.bytes(TokenBytes::from(grading.as_bytes().as_slice()))?;
                 composed.emit_tokens(sink)?;
             },
-            | Self::Decided {
+            Self::Decided {
                 decide,
                 ref decision,
             } => {
@@ -296,7 +296,7 @@ impl CanonicalValue for Progress
                 sink.bytes(TokenBytes::from(decide.as_bytes().as_slice()))?;
                 decision.emit_tokens(sink)?;
             },
-            | Self::Landed { landed, merge } => {
+            Self::Landed { landed, merge } => {
                 sink.open(ConstructorTag::from(5))?;
                 sink.bytes(TokenBytes::from(landed.as_bytes().as_slice()))?;
                 sink.bytes(TokenBytes::from(merge.as_ref()))?;
@@ -325,27 +325,27 @@ impl CanonicalValue for Progress
     {
         let opened = Opened::read(reader)?;
         let progress = match u8::from(opened.tag) {
-            | 1 => Self::Unchecked,
-            | 2 => {
+            1 => Self::Unchecked,
+            2 => {
                 let commit = opened.commit(reader)?;
                 Self::Verified(commit)
             },
-            | 3 => {
+            3 => {
                 let grading = opened.commit(reader)?;
                 let composed = Grade::decode_tokens(reader)?;
                 Self::Graded { grading, composed }
             },
-            | 4 => {
+            4 => {
                 let decide = opened.commit(reader)?;
                 let decision = Decision::decode_tokens(reader)?;
                 Self::Decided { decide, decision }
             },
-            | 5 => {
+            5 => {
                 let landed = opened.commit(reader)?;
                 let merge = opened.revision(reader)?;
                 Self::Landed { landed, merge }
             },
-            | _unknown => return Err(opened.refused()),
+            _unknown => return Err(opened.refused()),
         };
         reader.read_close()?;
         Ok(progress)

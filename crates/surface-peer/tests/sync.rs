@@ -153,16 +153,16 @@ mod tests
                 .and_then(|rest| rest.strip_prefix(' '))
                 .unwrap_or_else(|| panic!("not a path line for {}: {line:?}", from.peer()));
             match path.split_once(' ') {
-                | Some(("direct", address)) => Self::Direct(
+                Some(("direct", address)) => Self::Direct(
                     address
                         .parse()
                         .unwrap_or_else(|error| panic!("not a socket address: {line:?}: {error}")),
                 ),
-                | Some(("relay", url)) if url.starts_with("http") && !url.contains(' ') => {
+                Some(("relay", url)) if url.starts_with("http") && !url.contains(' ') => {
                     Self::Relay(url.into())
                 },
-                | None if path == "pending" => Self::Pending,
-                | Some(_) | None => panic!("not a path: {line:?}"),
+                None if path == "pending" => Self::Pending,
+                Some(_) | None => panic!("not a path: {line:?}"),
             }
         }
     }
@@ -334,8 +334,8 @@ mod tests
     {
         let text = anchor.to_str().expect("an anchor is UTF-8");
         match text.parse::<Anchor>() {
-            | Ok(Anchor::Tree(Authority::Key(tree))) => tree.to_string(),
-            | other => panic!("not a bare key-form anchor: {text:?}: {other:?}"),
+            Ok(Anchor::Tree(Authority::Key(tree))) => tree.to_string(),
+            other => panic!("not a bare key-form anchor: {text:?}: {other:?}"),
         }
     }
 
@@ -648,13 +648,13 @@ mod tests
         );
         let (heads, path) = sync(dialer.0, server.1, tree, port);
         match path {
-            | PathLine::Direct(address) => assert_eq!(
+            PathLine::Direct(address) => assert_eq!(
                 address.port().to_string(),
                 port.0,
                 "the dialer reaches the server at its fixed port"
             ),
-            | PathLine::Relay(url) => println!("the dialer stayed on the relay {url}"),
-            | PathLine::Pending => {
+            PathLine::Relay(url) => println!("the dialer stayed on the relay {url}"),
+            PathLine::Pending => {
                 panic!("a connection that carried a sync round has a selected path")
             },
         }

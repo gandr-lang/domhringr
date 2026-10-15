@@ -145,8 +145,8 @@ impl fmt::Display for Checkout
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Public => "public",
-            | Self::Vault => "vault",
+            Self::Public => "public",
+            Self::Vault => "vault",
         })
     }
 }
@@ -567,15 +567,15 @@ impl Citations
                 text = after;
                 let hit = hit.trim_end_matches(TRAILING);
                 match hit.parse::<Anchor>() {
-                    | Ok(Anchor::Path { path, .. }) => {
+                    Ok(Anchor::Path { path, .. }) => {
                         let _first = citations
                             .cited
                             .entry(path)
                             .or_default()
                             .insert(line.clone());
                     },
-                    | Ok(Anchor::Tree(_) | Anchor::Commit { .. }) => {},
-                    | Err(_reason) => {
+                    Ok(Anchor::Tree(_) | Anchor::Commit { .. }) => {},
+                    Err(_reason) => {
                         let _first = citations
                             .unreadable
                             .entry(Hit(hit.into()))
@@ -670,17 +670,17 @@ impl Held
                 !name.is_empty() && name.bytes().all(|digit| digit.is_ascii_hexdigit())
             });
             held.push(match named {
-                | Some((name, "blob")) => Self::Blob(ObjectName(name.into())),
-                | Some((_name, "tree" | "commit" | "tag")) => Self::Absent,
-                | Some(_) | None if answer.strip_suffix(" missing") == Some(query.0.as_str()) => {
+                Some((name, "blob")) => Self::Blob(ObjectName(name.into())),
+                Some((_name, "tree" | "commit" | "tag")) => Self::Absent,
+                Some(_) | None if answer.strip_suffix(" missing") == Some(query.0.as_str()) => {
                     Self::Absent
                 },
-                | Some(_) | None => return Err(unreadable()),
+                Some(_) | None => return Err(unreadable()),
             });
         }
         match lines.next() {
-            | Some(_) => Err(unreadable()),
-            | None => Ok(held),
+            Some(_) => Err(unreadable()),
+            None => Ok(held),
         }
     }
 }
@@ -723,9 +723,9 @@ impl Standing
     ) -> Self
     {
         match (head, bound) {
-            | (&Held::Absent, _) => Self::Missing,
-            | (&Held::Blob(ref now), &Held::Blob(ref then)) if now == then => Self::Consistent,
-            | (&Held::Blob(_), &Held::Blob(_) | &Held::Absent) => Self::Drifted,
+            (&Held::Absent, _) => Self::Missing,
+            (&Held::Blob(ref now), &Held::Blob(ref then)) if now == then => Self::Consistent,
+            (&Held::Blob(_), &Held::Blob(_) | &Held::Absent) => Self::Drifted,
         }
     }
 }
@@ -769,11 +769,11 @@ impl Datum
     {
         let unreadable = || Self::Unreadable(Rendered(target.to_string()));
         match *target {
-            | Target::Datum(ref text) => match text.parse::<Page>() {
-                | Ok(page) => Self::Page(page),
-                | Err(_reason) => unreadable(),
+            Target::Datum(ref text) => match text.parse::<Page>() {
+                Ok(page) => Self::Page(page),
+                Err(_reason) => unreadable(),
             },
-            | Target::Anchor(_) | Target::Endpoint(_) => unreadable(),
+            Target::Anchor(_) | Target::Endpoint(_) => unreadable(),
         }
     }
 }
@@ -819,11 +819,11 @@ impl fmt::Display for State
     ) -> fmt::Result
     {
         f.write_str(match *self {
-            | Self::Unbound => "unbound",
-            | Self::Drifted => "drifted",
-            | Self::Missing => "missing",
-            | Self::Orphaned => "orphaned",
-            | Self::Malformed => "malformed",
+            Self::Unbound => "unbound",
+            Self::Drifted => "drifted",
+            Self::Missing => "missing",
+            Self::Orphaned => "orphaned",
+            Self::Malformed => "malformed",
         })
     }
 }
@@ -859,9 +859,9 @@ impl fmt::Display for Place
     ) -> fmt::Result
     {
         match *self {
-            | Self::Cited(ref line) => fmt::Display::fmt(line, f),
-            | Self::Page(ref page) => fmt::Display::fmt(page, f),
-            | Self::Target(ref target) => f.write_str(&target.0),
+            Self::Cited(ref line) => fmt::Display::fmt(line, f),
+            Self::Page(ref page) => fmt::Display::fmt(page, f),
+            Self::Target(ref target) => f.write_str(&target.0),
         }
     }
 }
@@ -1127,14 +1127,14 @@ fn stand<'view>(
     let mut readings = BTreeMap::new();
     for (path, datum) in datums {
         let reading = match datum {
-            | Datum::Page(page) => {
+            Datum::Page(page) => {
                 let (Some(head), Some(bound)) = (held.next(), held.next())
                 else {
                     return Err(CheckError::Unreadable(Checkout::Vault));
                 };
                 Reading::Page(page, Standing::of(&head, &bound))
             },
-            | Datum::Unreadable(target) => Reading::Unreadable(target),
+            Datum::Unreadable(target) => Reading::Unreadable(target),
         };
         let _first = readings.insert(path, reading);
     }
@@ -1193,8 +1193,8 @@ fn judge(
     }
     for (&path, reading) in readings {
         let place = match *reading {
-            | Reading::Page(ref page, _) => Place::Page(page.clone()),
-            | Reading::Unreadable(ref target) => Place::Target(target.clone()),
+            Reading::Page(ref page, _) => Place::Page(page.clone()),
+            Reading::Unreadable(ref target) => Place::Target(target.clone()),
         };
         let mut find = |state| {
             findings.push(Finding {
@@ -1204,10 +1204,10 @@ fn judge(
             });
         };
         match *reading {
-            | Reading::Page(_, Standing::Consistent) => {},
-            | Reading::Page(_, Standing::Drifted) => find(State::Drifted),
-            | Reading::Page(_, Standing::Missing) => find(State::Missing),
-            | Reading::Unreadable(_) => find(State::Malformed),
+            Reading::Page(_, Standing::Consistent) => {},
+            Reading::Page(_, Standing::Drifted) => find(State::Drifted),
+            Reading::Page(_, Standing::Missing) => find(State::Missing),
+            Reading::Unreadable(_) => find(State::Malformed),
         }
         if !citations.cited.contains_key(path) {
             find(State::Orphaned);
@@ -1285,17 +1285,15 @@ fn run(
         .map_err(failed)?;
     let stdin = child.stdin.take();
     let (output, written) = std::thread::scope(|scope| {
-        let writer = scope.spawn(move || match stdin {
-            | Some(mut stdin) => stdin.write_all(input.0.as_bytes()),
-            | None => Ok(()),
-        });
+        let writer = scope
+            .spawn(move || stdin.map_or(Ok(()), |mut stdin| stdin.write_all(input.0.as_bytes())));
         (child.wait_with_output(), writer.join())
     });
     let output = output.map_err(failed)?;
     match written {
-        | Ok(Err(source)) if output.status.success() => Err(failed(source)),
-        | Ok(Ok(()) | Err(_)) => Ok(output),
-        | Err(panic) => std::panic::resume_unwind(panic),
+        Ok(Err(source)) if output.status.success() => Err(failed(source)),
+        Ok(Ok(()) | Err(_)) => Ok(output),
+        Err(panic) => std::panic::resume_unwind(panic),
     }
 }
 
@@ -1353,8 +1351,10 @@ mod tests
     fn tree() -> TreeId
     {
         match TREE.parse::<Anchor>().unwrap() {
-            | Anchor::Tree(domhringr_record_tree::Authority::Key(tree)) => tree,
-            | other => panic!("not a tree: {other:?}"),
+            Anchor::Tree(domhringr_record_tree::Authority::Key(tree)) => tree,
+            other @ (Anchor::Tree(_) | Anchor::Path { .. } | Anchor::Commit { .. }) => {
+                panic!("not a tree: {other:?}")
+            },
         }
     }
 

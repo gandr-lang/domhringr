@@ -270,9 +270,9 @@ impl<'answer> Cursor<'answer>
         };
         self.0 = rest;
         match first {
-            | UNHELD => Ok(Status::Unheld),
-            | HELD => Ok(Status::Held),
-            | _ => Err(Malformed),
+            UNHELD => Ok(Status::Unheld),
+            HELD => Ok(Status::Held),
+            _ => Err(Malformed),
         }
     }
 
@@ -567,14 +567,14 @@ async fn respond(
         .map_err(|_unparsed| ServeError::Request)?;
     let digest = ManifestDigest::from(parsed);
     let (written, served) = match evidence.held(digest) {
-        | Ok(held) => {
+        Ok(held) => {
             let written = Answer::held(&held)?;
             (written, Served::Held {
                 digest,
                 chunks: ChunkCount::from(held.chunks().iter().count()),
             })
         },
-        | Err(reason) => (Answer::unheld(), Served::Unheld { digest, reason }),
+        Err(reason) => (Answer::unheld(), Served::Unheld { digest, reason }),
     };
     send.write_all(&written.0).await.map_err(ServeError::Send)?;
     send.finish().map_err(ServeError::Finish)?;
@@ -710,11 +710,11 @@ mod tests
         drop(tokio::spawn(async move {
             loop {
                 match node.accept().await {
-                    | Ok(Incoming::Protocol { connection, .. }) => {
+                    Ok(Incoming::Protocol { connection, .. }) => {
                         let _served = answer(&evidence, connection).await;
                     },
-                    | Err(AcceptError::Closed) => break,
-                    | Ok(_) | Err(_) => {},
+                    Err(AcceptError::Closed) => break,
+                    Ok(_) | Err(_) => {},
                 }
             }
         }));

@@ -49,13 +49,13 @@ pub(super) async fn question(
 ) -> Result<(Reader, String), IndexError>
 {
     let query = match question {
-        | Question::Task(ref _name) | Question::Replay(ref _name) => return Err(IndexError::Shape),
-        | Question::Move(ref _name, key) => Query::Key(key.owned()),
-        | Question::Play(ref _name, attempt) => {
+        Question::Task(ref _name) | Question::Replay(ref _name) => return Err(IndexError::Shape),
+        Question::Move(ref _name, key) => Query::Key(key.owned()),
+        Question::Play(ref _name, attempt) => {
             let range = attempt.range()?;
             Query::Range(range)
         },
-        | Question::After(ref _name, attempt) => {
+        Question::After(ref _name, attempt) => {
             let next = attempt.next()?;
             Query::Key(MoveKey::new(next, SequenceNumber(0)).owned())
         },
@@ -65,18 +65,18 @@ pub(super) async fn question(
     let verified = answer.verify(digest, IndexKind::Dialogue, &request.query)?;
     writeln!(output, "proved {digest} {}", reader.author)?;
     match question {
-        | Question::Task(_name) | Question::Replay(_name) => Err(IndexError::Shape),
-        | Question::After(_name, attempt) => {
+        Question::Task(_name) | Question::Replay(_name) => Err(IndexError::Shape),
+        Question::After(_name, attempt) => {
             let later = prove::later(tree, &verified)?;
             match later {
-                | prove::Later::None => writeln!(output, "after {attempt} none")?,
-                | prove::Later::Dispatch(movement) => {
+                prove::Later::None => writeln!(output, "after {attempt} none")?,
+                prove::Later::Dispatch(movement) => {
                     writeln!(output, "after {attempt} {}", movement.commit)?;
                 },
             }
             Ok((reader, output))
         },
-        | Question::Play(_name, _attempt) => {
+        Question::Play(_name, _attempt) => {
             let Verified::Range(records) = verified
             else {
                 return Err(IndexError::Shape);
@@ -91,14 +91,14 @@ pub(super) async fn question(
             }
             Ok((reader, output))
         },
-        | Question::Move(_name, key) => {
+        Question::Move(_name, key) => {
             let value = match verified {
-                | Verified::Present(value) => value,
-                | Verified::Absent(_evidence) => {
+                Verified::Present(value) => value,
+                Verified::Absent(_evidence) => {
                     let (attempt, seq) = key.coordinates();
                     return Err(IndexError::MoveAbsent(attempt, seq));
                 },
-                | Verified::Range(_records) => return Err(IndexError::Shape),
+                Verified::Range(_records) => return Err(IndexError::Shape),
             };
             let movement = prove::read_move(tree, value)?;
             self::movement(reader, tree, digest, key, &movement, output).await

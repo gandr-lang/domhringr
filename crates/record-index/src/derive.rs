@@ -150,9 +150,9 @@ pub async fn at(
 ) -> Result<TaskEntry, DeriveError>
 {
     match peer.view_at(tree, heads).await {
-        | Ok(view) => held(tree, heads, &view, store),
-        | Err(ViewAtError::View(ViewError::Unopened(_unopened))) => Ok(TaskEntry::Unheld { tree }),
-        | Err(failure) => Err(failure.into()),
+        Ok(view) => held(tree, heads, &view, store),
+        Err(ViewAtError::View(ViewError::Unopened(_unopened))) => Ok(TaskEntry::Unheld { tree }),
+        Err(failure) => Err(failure.into()),
     }
 }
 
@@ -185,24 +185,24 @@ impl Deriver
     {
         let author = peer.identity().peer_key();
         let cached = match store.cached(project)? {
-            | crate::store::Cached::Absent => view.indexes().get(&author).map(|claim| claim.index),
-            | crate::store::Cached::Manifest(digest) => Some(digest),
+            crate::store::Cached::Absent => view.indexes().get(&author).map(|claim| claim.index),
+            crate::store::Cached::Manifest(digest) => Some(digest),
         };
         let Some(digest) = cached
         else {
             return Ok(Self::default());
         };
         let index = match store.load(digest) {
-            | Ok(index) => index,
-            | Err(StoreError::Unheld(_) | StoreError::Manifest(ManifestError::Layout)) => {
+            Ok(index) => index,
+            Err(StoreError::Unheld(_) | StoreError::Manifest(ManifestError::Layout)) => {
                 return Ok(Self::default());
             },
-            | Err(StoreError::File { ref source, .. })
+            Err(StoreError::File { ref source, .. })
                 if source.kind() == io::ErrorKind::NotFound =>
             {
                 return Ok(Self::default());
             },
-            | Err(failure) => return Err(failure.into()),
+            Err(failure) => return Err(failure.into()),
         };
         if index.manifest.kind() != IndexKind::Project {
             return Err(DeriveError::Kind);
@@ -250,37 +250,37 @@ impl Deriver
         for (name, tree) in project::bindings(view) {
             let heads = peer.heads(tree).await?;
             let cached = match self.0.get(&tree) {
-                | Some(
+                Some(
                     entry @ &TaskEntry::Held {
                         heads: ref previous,
                         dialogue,
                         ..
                     },
                 ) if previous == &heads => match store.load(dialogue) {
-                    | Ok(index) => Some((entry.clone(), Some(index))),
-                    | Err(StoreError::Unheld(_)) => None,
-                    | Err(StoreError::File { ref source, .. })
+                    Ok(index) => Some((entry.clone(), Some(index))),
+                    Err(StoreError::Unheld(_)) => None,
+                    Err(StoreError::File { ref source, .. })
                         if source.kind() == io::ErrorKind::NotFound =>
                     {
                         None
                     },
-                    | Err(failure) => return Err(failure.into()),
+                    Err(failure) => return Err(failure.into()),
                 },
-                | Some(entry @ &TaskEntry::Unheld { .. }) if heads.iter().next().is_none() => {
+                Some(entry @ &TaskEntry::Unheld { .. }) if heads.iter().next().is_none() => {
                     Some((entry.clone(), None))
                 },
-                | _changed => None,
+                _changed => None,
             };
-            let (entry, dialogue) = match cached {
-                | Some(cached) => cached,
-                | None => {
-                    let entry = at(peer, tree, &heads, store).await?;
-                    let dialogue = match entry {
-                        | TaskEntry::Held { dialogue, .. } => Some(store.load(dialogue)?),
-                        | TaskEntry::Unheld { .. } => None,
-                    };
-                    (entry, dialogue)
-                },
+            let (entry, dialogue) = if let Some(cached) = cached {
+                cached
+            }
+            else {
+                let entry = at(peer, tree, &heads, store).await?;
+                let dialogue = match entry {
+                    TaskEntry::Held { dialogue, .. } => Some(store.load(dialogue)?),
+                    TaskEntry::Unheld { .. } => None,
+                };
+                (entry, dialogue)
             };
             let _previous = self.0.insert(tree, entry.clone());
             if visited.insert(tree)
@@ -411,8 +411,8 @@ mod tests
                     .unwrap();
                 let mut arrivals = Vec::new();
                 match change {
-                    | Change::None => {},
-                    | Change::One | Change::Every => {
+                    Change::None => {},
+                    Change::One | Change::Every => {
                         first
                             .push(
                                 &testing::owner(),
@@ -444,7 +444,7 @@ mod tests
                             arrivals.push(second.commits.last().unwrap().clone());
                         }
                     },
-                    | Change::Added | Change::Held => {
+                    Change::Added | Change::Held => {
                         let secret = iroh::SecretKey::from_bytes(
                             &[if change == Change::Held { 7 } else { 18 }; 32],
                         );
@@ -470,7 +470,7 @@ mod tests
                             .unwrap();
                         }
                     },
-                    | Change::Refusal => {
+                    Change::Refusal => {
                         first
                             .push(
                                 &testing::stranger(),

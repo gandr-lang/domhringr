@@ -179,12 +179,12 @@ impl Encoder
     ) -> Result<(), WireError>
     {
         match bound {
-            | KeyBound::Unbounded => self.tag(Tag(0)),
-            | KeyBound::Included(key) => {
+            KeyBound::Unbounded => self.tag(Tag(0)),
+            KeyBound::Included(key) => {
                 self.tag(Tag(1))?;
                 self.framed(Body(key.as_ref()))
             },
-            | KeyBound::Excluded(key) => {
+            KeyBound::Excluded(key) => {
                 self.tag(Tag(2))?;
                 self.framed(Body(key.as_ref()))
             },
@@ -215,26 +215,26 @@ fn held(
     encoder.tag(Tag(1))?;
     let manifest = answer.manifest.encode()?;
     encoder.framed(Body(manifest.as_ref()))?;
-    match &answer.proof {
-        | &Proof::Present(ref proof) => {
+    match answer.proof {
+        Proof::Present(ref proof) => {
             encoder.tag(Tag(1))?;
             encoder.framed(Body(proof.value().as_ref()))?;
             encoder.nodes(proof.nodes())?;
         },
-        | &Proof::Absent(ref proof) => {
+        Proof::Absent(ref proof) => {
             encoder.tag(Tag(2))?;
             for neighbour in [proof.evidence().predecessor(), proof.evidence().successor()] {
                 match neighbour {
-                    | Some(record) => {
+                    Some(record) => {
                         encoder.tag(Tag(1))?;
                         encoder.record(record)?;
                     },
-                    | None => encoder.tag(Tag(0))?,
+                    None => encoder.tag(Tag(0))?,
                 }
             }
             encoder.nodes(proof.nodes())?;
         },
-        | &Proof::Range(ref proof) => {
+        Proof::Range(ref proof) => {
             encoder.tag(Tag(3))?;
             encoder.count(Length(proof.records().len()))?;
             for record in proof.records() {
@@ -303,8 +303,8 @@ pub(super) fn encode(answer: &Answer) -> Result<WireImage, StreamError>
     };
     held(&mut encoder, answer)?;
     match encoder.destination {
-        | Destination::Image(image) => Ok(image),
-        | Destination::Count => Err(WireError::Tag.into()),
+        Destination::Image(image) => Ok(image),
+        Destination::Count => Err(WireError::Tag.into()),
     }
 }
 
@@ -319,12 +319,12 @@ pub(super) fn request(request: &Request) -> Result<WireImage, StreamError>
         destination: Destination::Image(WireImage::default()),
     };
     encoder.bytes(Body(request.digest.as_ref()))?;
-    match &request.query {
-        | &Query::Key(ref key) => {
+    match request.query {
+        Query::Key(ref key) => {
             encoder.tag(Tag(1))?;
             encoder.framed(Body(key.as_ref()))?;
         },
-        | &Query::Range(ref range) => {
+        Query::Range(ref range) => {
             encoder.tag(Tag(2))?;
             let range = range.as_range().map_err(ProveError::from)?;
             encoder.bound(range.start())?;
@@ -332,8 +332,8 @@ pub(super) fn request(request: &Request) -> Result<WireImage, StreamError>
         },
     }
     match encoder.destination {
-        | Destination::Image(image) => Ok(image),
-        | Destination::Count => Err(WireError::Tag.into()),
+        Destination::Image(image) => Ok(image),
+        Destination::Count => Err(WireError::Tag.into()),
     }
 }
 
@@ -345,8 +345,8 @@ fn bound(cursor: &mut Cursor<'_>) -> Result<OwnedKeyBound, WireError>
 {
     let Fixed([tag]) = cursor.fixed::<1>()?;
     match tag {
-        | 0 => Ok(OwnedKeyBound::Unbounded),
-        | 1 | 2 => {
+        0 => Ok(OwnedKeyBound::Unbounded),
+        1 | 2 => {
             let body = cursor.framed()?;
             let key = body.0.into();
             Ok(if tag == 1 {
@@ -356,7 +356,7 @@ fn bound(cursor: &mut Cursor<'_>) -> Result<OwnedKeyBound, WireError>
                 OwnedKeyBound::Excluded(key)
             })
         },
-        | _unknown => Err(WireError::Tag),
+        _unknown => Err(WireError::Tag),
     }
 }
 
@@ -380,18 +380,18 @@ pub(super) fn read_request(image: &WireImage) -> Result<Request, StreamError>
     let Fixed(digest) = cursor.fixed::<32>()?;
     let Fixed([tag]) = cursor.fixed::<1>()?;
     let query = match tag {
-        | 1 => {
+        1 => {
             let key = cursor.framed()?;
             Query::Key(key.0.into())
         },
-        | 2 => {
+        2 => {
             let start = bound(&mut cursor)?;
             let end = bound(&mut cursor)?;
             let range =
                 KeyRange::new(start.as_bound(), end.as_bound()).map_err(ProveError::from)?;
             Query::Range(OwnedKeyRange::from_range(range))
         },
-        | _unknown => return Err(WireError::Tag.into()),
+        _unknown => return Err(WireError::Tag.into()),
     };
     cursor.finish()?;
     Ok(Request {
@@ -428,12 +428,12 @@ fn neighbour(cursor: &mut Cursor<'_>) -> Result<Neighbour, WireError>
 {
     let Fixed([tag]) = cursor.fixed::<1>()?;
     match tag {
-        | 0 => Ok(Neighbour::None),
-        | 1 => {
+        0 => Ok(Neighbour::None),
+        1 => {
             let record = record(cursor)?;
             Ok(Neighbour::Record(record))
         },
-        | _unknown => Err(WireError::Tag),
+        _unknown => Err(WireError::Tag),
     }
 }
 
@@ -496,17 +496,17 @@ pub(super) fn decode(
     let mut cursor = Cursor::new(Body(image.as_ref()));
     let Fixed([tag]) = cursor.fixed::<1>()?;
     match tag {
-        | 0 => {
+        0 => {
             cursor.finish()?;
             return Err(StreamError::Unheld(request.digest));
         },
-        | 2 => {
+        2 => {
             let Fixed(size) = cursor.fixed::<8>()?;
             cursor.finish()?;
             return Err(StreamError::Oversize(ByteSize(u64::from_le_bytes(size))));
         },
-        | 1 => {},
-        | _unknown => return Err(WireError::Tag.into()),
+        1 => {},
+        _unknown => return Err(WireError::Tag.into()),
     }
     let image = cursor.framed()?;
     let manifest = Manifest::decode(&WireImage(image.0.to_vec()), kind)?;
@@ -518,7 +518,7 @@ pub(super) fn decode(
     let node = manifest.node();
     let Fixed([tag]) = cursor.fixed::<1>()?;
     let proof = match (tag, &request.query) {
-        | (1, &Query::Key(ref key)) => {
+        (1, &Query::Key(ref key)) => {
             let value = cursor.framed()?;
             let nodes = nodes(&mut cursor)?;
             Proof::Present(MembershipProof::new(
@@ -529,17 +529,17 @@ pub(super) fn decode(
                 nodes,
             ))
         },
-        | (2, &Query::Key(ref key)) => {
+        (2, &Query::Key(ref key)) => {
             let predecessor = neighbour(&mut cursor)?;
             let successor = neighbour(&mut cursor)?;
             let nodes = nodes(&mut cursor)?;
             let predecessor = match predecessor {
-                | Neighbour::None => None,
-                | Neighbour::Record(record) => Some(record),
+                Neighbour::None => None,
+                Neighbour::Record(record) => Some(record),
             };
             let successor = match successor {
-                | Neighbour::None => None,
-                | Neighbour::Record(record) => Some(record),
+                Neighbour::None => None,
+                Neighbour::Record(record) => Some(record),
             };
             let evidence = NonMembershipEvidence::new(predecessor, successor);
             Proof::Absent(NonMembershipProof::new(
@@ -550,7 +550,7 @@ pub(super) fn decode(
                 nodes,
             ))
         },
-        | (3, &Query::Range(ref range)) => {
+        (3, &Query::Range(ref range)) => {
             let Fixed(count) = cursor.fixed::<4>()?;
             let mut records = Vec::new();
             for _record in 0 .. u32::from_le_bytes(count) {
@@ -566,7 +566,7 @@ pub(super) fn decode(
                 nodes,
             ))
         },
-        | _different => return Err(ProveError::Question.into()),
+        _different => return Err(ProveError::Question.into()),
     };
     cursor.finish()?;
     Ok(Answer { manifest, proof })

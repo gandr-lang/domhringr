@@ -328,8 +328,8 @@ impl Transcript
     {
         let staged = Staged::new(&content)?;
         let held = match String::from_utf8(Vec::from(content)) {
-            | Ok(text) => Held::Text(text),
-            | Err(binary) => Held::Binary(binary.utf8_error()),
+            Ok(text) => Held::Text(text),
+            Err(binary) => Held::Binary(binary.utf8_error()),
         };
         Ok(Self { staged, held })
     }
@@ -377,8 +377,8 @@ impl Transcript
     pub fn text(&self) -> Result<&String, TextError>
     {
         match self.held {
-            | Held::Text(ref text) => Ok(text),
-            | Held::Binary(error) => Err(TextError(error)),
+            Held::Text(ref text) => Ok(text),
+            Held::Binary(error) => Err(TextError(error)),
         }
     }
 }

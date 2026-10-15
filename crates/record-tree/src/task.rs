@@ -322,11 +322,11 @@ impl fmt::Display for Brief
     ) -> fmt::Result
     {
         match *self {
-            | Self::Anchor(ref anchor) => {
+            Self::Anchor(ref anchor) => {
                 f.write_str("anchor ")?;
                 write!(OneLine::new(f, Field::Last), "{anchor}")
             },
-            | Self::Content(hash) => write!(f, "content {hash}"),
+            Self::Content(hash) => write!(f, "content {hash}"),
         }
     }
 }
@@ -626,11 +626,11 @@ impl Progress
     const fn rank(&self) -> Rank
     {
         match *self {
-            | Self::Unchecked => Rank::Unchecked,
-            | Self::Verified(_) => Rank::Verified,
-            | Self::Graded { .. } => Rank::Graded,
-            | Self::Decided { .. } => Rank::Decided,
-            | Self::Landed { .. } => Rank::Landed,
+            Self::Unchecked => Rank::Unchecked,
+            Self::Verified(_) => Rank::Verified,
+            Self::Graded { .. } => Rank::Graded,
+            Self::Decided { .. } => Rank::Decided,
+            Self::Landed { .. } => Rank::Landed,
         }
     }
 }
@@ -749,7 +749,7 @@ impl Attempt
     pub const fn seat(&self) -> PeerKey
     {
         match self.slot {
-            | Slot::Held(seat) | Slot::Retired { by: seat, .. } => seat,
+            Slot::Held(seat) | Slot::Retired { by: seat, .. } => seat,
         }
     }
 
@@ -839,22 +839,22 @@ impl Current
         }
         if let Self::Attempt(ref mut attempt) = *self {
             match *step {
-                | Step::Report { dispatch, .. } if dispatch == attempt.dispatch => {
+                Step::Report { dispatch, .. } if dispatch == attempt.dispatch => {
                     attempt.answer = Answer::Reported(commit);
                 },
-                | Step::Handoff { dispatch, to, .. } if dispatch == attempt.dispatch => {
+                Step::Handoff { dispatch, to, .. } if dispatch == attempt.dispatch => {
                     attempt.slot = Slot::Held(to);
                 },
-                | Step::Retire { dispatch, author } if dispatch == attempt.dispatch => {
+                Step::Retire { dispatch, author } if dispatch == attempt.dispatch => {
                     attempt.slot = Slot::Retired {
                         by: author,
                         at: commit,
                     };
                 },
-                | Step::Verified { dispatch, .. } if dispatch == attempt.dispatch => {
+                Step::Verified { dispatch, .. } if dispatch == attempt.dispatch => {
                     attempt.advance(Progress::Verified(commit));
                 },
-                | Step::Graded {
+                Step::Graded {
                     dispatch, composed, ..
                 } if dispatch == attempt.dispatch => {
                     attempt.advance(Progress::Graded {
@@ -862,7 +862,7 @@ impl Current
                         composed,
                     });
                 },
-                | Step::Decide {
+                Step::Decide {
                     dispatch,
                     ref decision,
                     ..
@@ -872,7 +872,7 @@ impl Current
                         decision: decision.clone(),
                     });
                 },
-                | Step::Landed {
+                Step::Landed {
                     dispatch, merge, ..
                 } if dispatch == attempt.dispatch => {
                     attempt.advance(Progress::Landed {
@@ -880,7 +880,7 @@ impl Current
                         merge,
                     });
                 },
-                | Step::Dispatch { .. }
+                Step::Dispatch { .. }
                 | Step::Report { .. }
                 | Step::Handoff { .. }
                 | Step::Retire { .. }
@@ -929,29 +929,29 @@ impl fmt::Display for Current
         };
         let dispatch = attempt.dispatch;
         match (&attempt.progress, attempt.answer, attempt.slot) {
-            | (&Progress::Landed { landed, merge }, ..) => {
+            (&Progress::Landed { landed, merge }, ..) => {
                 write!(f, "landed {dispatch} {landed} {merge}")
             },
-            | (
+            (
                 &Progress::Decided {
                     decide,
                     ref decision,
                 },
                 ..,
             ) => write!(f, "decided {dispatch} {decide} {decision}"),
-            | (&Progress::Graded { grading, composed }, ..) => {
+            (&Progress::Graded { grading, composed }, ..) => {
                 write!(f, "graded {dispatch} {grading} {composed}")
             },
-            | (&Progress::Verified(verification), ..) => {
+            (&Progress::Verified(verification), ..) => {
                 write!(f, "verified {dispatch} {verification}")
             },
-            | (&Progress::Unchecked, Answer::Reported(report), _) => {
+            (&Progress::Unchecked, Answer::Reported(report), _) => {
                 write!(f, "reported {dispatch} {report}")
             },
-            | (&Progress::Unchecked, Answer::Awaited, Slot::Retired { at, .. }) => {
+            (&Progress::Unchecked, Answer::Awaited, Slot::Retired { at, .. }) => {
                 write!(f, "stalled {dispatch} {at}")
             },
-            | (&Progress::Unchecked, Answer::Awaited, Slot::Held(holder)) => {
+            (&Progress::Unchecked, Answer::Awaited, Slot::Held(holder)) => {
                 write!(f, "dispatched {dispatch} {holder}")
             },
         }
@@ -1055,14 +1055,14 @@ impl Task
         self.steps
             .iter()
             .filter_map(|&(_commit, ref step)| match *step {
-                | Step::Report {
+                Step::Report {
                     author, content, ..
                 } => Some((author, content)),
-                | Step::Verdict {
+                Step::Verdict {
                     judge, transcript, ..
                 } => Some((judge, transcript)),
-                | Step::Verified { runner, output, .. } => Some((runner, output)),
-                | Step::Dispatch { .. }
+                Step::Verified { runner, output, .. } => Some((runner, output)),
+                Step::Dispatch { .. }
                 | Step::Handoff { .. }
                 | Step::Retire { .. }
                 | Step::Pause { .. }
@@ -1225,12 +1225,12 @@ impl fmt::Display for StepLine<'_>
     {
         let commit = self.commit;
         match *self.step {
-            | Step::Dispatch {
+            Step::Dispatch {
                 seat,
                 edition,
                 ref brief,
             } => writeln!(f, "dispatch {commit} {seat} edition {edition} {brief}"),
-            | Step::Report {
+            Step::Report {
                 dispatch,
                 author,
                 content,
@@ -1240,14 +1240,14 @@ impl fmt::Display for StepLine<'_>
                 OneLine::new(f, Field::Last).write_str(summary.as_ref())?;
                 writeln!(f)
             },
-            | Step::Handoff { dispatch, from, to } => {
+            Step::Handoff { dispatch, from, to } => {
                 writeln!(f, "handoff {commit} {dispatch} {from} {to}")
             },
-            | Step::Retire { dispatch, author } => {
+            Step::Retire { dispatch, author } => {
                 writeln!(f, "retire {commit} {dispatch} {author}")
             },
-            | Step::Pause { dispatch, author } => writeln!(f, "pause {commit} {dispatch} {author}"),
-            | Step::Verdict {
+            Step::Pause { dispatch, author } => writeln!(f, "pause {commit} {dispatch} {author}"),
+            Step::Verdict {
                 dispatch,
                 judge,
                 rubric,
@@ -1263,7 +1263,7 @@ impl fmt::Display for StepLine<'_>
                 }
                 Ok(())
             },
-            | Step::Verified {
+            Step::Verified {
                 dispatch,
                 runner,
                 playbook,
@@ -1274,7 +1274,7 @@ impl fmt::Display for StepLine<'_>
                 f,
                 "verified {commit} {dispatch} {runner} {playbook} {step} {output} {status}"
             ),
-            | Step::Graded {
+            Step::Graded {
                 dispatch,
                 verdict,
                 rubric,
@@ -1290,12 +1290,12 @@ impl fmt::Display for StepLine<'_>
                 }
                 Ok(())
             },
-            | Step::Decide {
+            Step::Decide {
                 dispatch,
                 operator,
                 ref decision,
             } => writeln!(f, "decide {commit} {dispatch} {operator} {decision}"),
-            | Step::Landed {
+            Step::Landed {
                 dispatch,
                 decided,
                 operator,

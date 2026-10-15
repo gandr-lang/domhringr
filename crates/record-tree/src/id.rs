@@ -748,8 +748,8 @@ impl Address
     pub(crate) fn direct(address: SocketAddr) -> Self
     {
         match address {
-            | SocketAddr::V4(_) => Self::Direct(address),
-            | SocketAddr::V6(v6) => {
+            SocketAddr::V4(_) => Self::Direct(address),
+            SocketAddr::V6(v6) => {
                 Self::Direct(SocketAddr::V6(SocketAddrV6::new(*v6.ip(), v6.port(), 0, 0)))
             },
         }
@@ -835,8 +835,8 @@ impl fmt::Display for Address
     ) -> fmt::Result
     {
         match *self {
-            | Self::Direct(address) => fmt::Display::fmt(&address, f),
-            | Self::Relay(ref url) => f.write_str(url.as_str()),
+            Self::Direct(address) => fmt::Display::fmt(&address, f),
+            Self::Relay(ref url) => f.write_str(url.as_str()),
         }
     }
 }
@@ -925,14 +925,19 @@ impl Endpoint
     #[spec(ensures: |ref output| output.key.endpoint_id() == addr.id && output.addresses.len() <= addr.addrs.len())]
     pub(crate) fn of(addr: &iroh::EndpointAddr) -> Self
     {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "`iroh::TransportAddr` is non-exhaustive, so a wildcard arm is required; only a \
+                      direct address or a relay is presented"
+        )]
         let addresses = addr
             .addrs
             .iter()
             .filter_map(|transport| match *transport {
-                | iroh::TransportAddr::Ip(direct) => Some(Address::direct(direct)),
+                iroh::TransportAddr::Ip(direct) => Some(Address::direct(direct)),
                 // A relay the record cannot hold is not presented.
-                | iroh::TransportAddr::Relay(ref url) => Address::relay(url.clone()).ok(),
-                | _ => None,
+                iroh::TransportAddr::Relay(ref url) => Address::relay(url.clone()).ok(),
+                _ => None,
             })
             .collect();
         Self {
@@ -970,8 +975,8 @@ impl Endpoint
         iroh::EndpointAddr::from_parts(
             self.key.endpoint_id(),
             self.addresses.iter().map(|address| match *address {
-                | Address::Direct(direct) => iroh::TransportAddr::Ip(direct),
-                | Address::Relay(ref url) => iroh::TransportAddr::Relay(url.clone()),
+                Address::Direct(direct) => iroh::TransportAddr::Ip(direct),
+                Address::Relay(ref url) => iroh::TransportAddr::Relay(url.clone()),
             }),
         )
     }
@@ -1358,8 +1363,8 @@ mod tests
             "a prefix displays as written"
         );
         let whole = |text: String| match text.parse::<CommitDigits>() {
-            | Ok(CommitDigits::Full(commit)) => commit,
-            | other => panic!("not a whole commit id: {text}: {other:?}"),
+            Ok(CommitDigits::Full(commit)) => commit,
+            other => panic!("not a whole commit id: {text}: {other:?}"),
         };
         let (zeros, fs) = ("0".repeat(56), "f".repeat(56));
         let span = prefix.span();
