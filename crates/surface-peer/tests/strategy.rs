@@ -5,6 +5,11 @@
 //! dispatch, and the replay shows them. The rubric set under `rubrics/` is
 //! graded the same way: every rubric validates and grades its fixture pair.
 
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    expect(linear_search_in_loop, reason = "1 cost-shape site; #35 lists it")
+)]
+
 #[cfg(test)]
 mod tests
 {

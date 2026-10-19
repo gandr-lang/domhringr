@@ -171,6 +171,13 @@
     dylint_lib = "quenchant_dylints",
     deny(option_signature, option_field, primitive_arithmetic)
 )]
+#![cfg_attr(
+    all(test, dylint_lib = "quenchant_dylints"),
+    expect(
+        reverse_after_build,
+        reason = "2 cost-shape sites in test modules; #35 lists them"
+    )
+)]
 
 extern crate alloc;
 

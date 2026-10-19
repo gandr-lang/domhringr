@@ -98,6 +98,13 @@
     dylint_lib = "quenchant_dylints",
     deny(option_signature, option_field, primitive_arithmetic)
 )]
+#![cfg_attr(
+    all(test, dylint_lib = "quenchant_dylints"),
+    expect(
+        count_against_constant,
+        reason = "1 cost-shape site in test modules; #35 lists it"
+    )
+)]
 
 extern crate alloc;
 
