@@ -4,6 +4,10 @@ enable_free_tier: true
 
 reviews:
   review_details: true
+  review_status: false
+  review_progress: false
+  commit_status: false
+  high_level_summary: false
   auto_review:
     enabled: false
     base_branches: [".*"]
