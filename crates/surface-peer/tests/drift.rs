@@ -37,7 +37,9 @@ mod tests
     const DRIFTED: i32 = 3_i32;
 
     /// `command`, run in an environment of `PATH` alone, with git reading no
-    /// configuration but the repository's own.
+    /// configuration but the repository's own; under coverage the profile
+    /// path is forwarded too, so an instrumented peer writes its profile
+    /// where the report reads it rather than into the working directory.
     ///
     /// # Specification
     /// trivial.
@@ -46,6 +48,7 @@ mod tests
         command
             .env_clear()
             .envs(std::env::var_os("PATH").map(|path| ("PATH", path)))
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|path| ("LLVM_PROFILE_FILE", path)))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
     }
