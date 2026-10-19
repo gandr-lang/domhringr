@@ -93,6 +93,10 @@
     dylint_lib = "quenchant_dylints",
     deny(option_signature, option_field, primitive_arithmetic)
 )]
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    expect(linear_search_in_loop, reason = "2 cost-shape sites; #35 lists them")
+)]
 
 extern crate alloc;
 

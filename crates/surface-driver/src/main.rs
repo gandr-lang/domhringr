@@ -311,6 +311,10 @@
               transitions; the duplicates are theirs and no version this workspace \
               chooses unifies them"
 )]
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    expect(linear_search_in_loop, reason = "1 cost-shape site; #35 lists it")
+)]
 
 extern crate alloc;
 
