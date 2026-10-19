@@ -19,6 +19,17 @@
 //! | `quenchant-arith` at the storage sibling's pin, with defaults off | Primitive arithmetic loses the nominal boundary; local wrappers duplicate its checked and saturating families | The shared arithmetic contract changes or the dependency is no longer maintained |
 //! | Dedicated proof protocol | Mix derived bytes into receipt sync or evidence transfer | Batching or subscription requires another protocol version |
 
+// Module documentation that predates the shape lint: 1 heading outside the
+// vocabulary and 1 decision record. Each allow leaves with the rewrite that
+// clears its count.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        module_doc_heading,
+        doc_decision_record,
+        reason = "module documentation that predates the shape lint"
+    )
+)]
 #![expect(
     clippy::multiple_crate_versions,
     reason = "iroh and subduction depend on different cryptographic crate majors"

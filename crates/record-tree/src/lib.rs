@@ -145,6 +145,18 @@
 //! | `getrandom`, [crate documentation](https://docs.rs/getrandom/0.4) | Operating-system randomness for operation fences. |
 //! | `blake3`, [crate documentation](https://docs.rs/blake3) | The hash a brief, a playbook, a rubric and a question are named by. |
 
+// Module documentation that predates the shape lint: 7 headings outside the
+// vocabulary, 25 decision records and 11 budgets exceeded. Each allow leaves
+// with the rewrite that clears its count.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        module_doc_heading,
+        doc_decision_record,
+        module_doc_budget,
+        reason = "module documentation that predates the shape lint"
+    )
+)]
 #![expect(
     clippy::multiple_crate_versions,
     reason = "iroh and subduction straddle the RustCrypto and ed25519-dalek major \

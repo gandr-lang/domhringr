@@ -43,6 +43,18 @@
 //! | `domhringr-record-evidence` | The evidence store a report's output is kept in, and the fetch a seat answers. |
 //! | `domhringr-record-index` | Derived-index nodes and authenticated key and range answers. |
 
+// Module documentation that predates the shape lint: 4 headings outside the
+// vocabulary, 9 decision records and 2 budgets exceeded. Each allow leaves with
+// the rewrite that clears its count.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        module_doc_heading,
+        doc_decision_record,
+        module_doc_budget,
+        reason = "module documentation that predates the shape lint"
+    )
+)]
 #![expect(
     clippy::multiple_crate_versions,
     reason = "iroh and subduction straddle the RustCrypto and ed25519-dalek major \

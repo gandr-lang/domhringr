@@ -562,6 +562,18 @@
 //! - `lexopt`, [crate documentation](https://docs.rs/lexopt): command-line
 //!   options and operands.
 
+// Module documentation that predates the shape lint: 9 headings outside the
+// vocabulary, 10 decision records and 11 budgets exceeded. Each allow leaves
+// with the rewrite that clears its count.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        module_doc_heading,
+        doc_decision_record,
+        module_doc_budget,
+        reason = "module documentation that predates the shape lint"
+    )
+)]
 // The opt-in quenchant lints: absence named by `Maybe` in signatures and in
 // fields outside wire form, arithmetic on nominal types. Selected here because
 // Dylint's `-D` cannot reach rustc through `cargo dylint`; see
