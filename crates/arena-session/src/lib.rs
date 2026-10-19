@@ -141,6 +141,17 @@
 //! | Replay does not rewrite the durable record | `domhringr-record-tree`: `store::tests::protocol_editions_replay_one_unchanged_record` |
 //! | Operator and seat processes replay both editions and name a post-end report | `domhringr-surface-peer`: `seat::tests::two_binaries_replay_named_editions_and_transport` |
 
+// Module documentation that predates the shape lint: 4 headings outside the
+// vocabulary and 1 budget exceeded. Each allow leaves with the rewrite that
+// clears its count.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        module_doc_heading,
+        module_doc_budget,
+        reason = "module documentation that predates the shape lint"
+    )
+)]
 #![cfg_attr(
     dylint_lib = "quenchant_dylints",
     deny(option_signature, option_field, primitive_arithmetic)

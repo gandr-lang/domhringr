@@ -72,6 +72,18 @@
 //! | `iroh`, [crate documentation](https://docs.rs/iroh) | The QUIC connection and the bidirectional stream a fetch runs on. |
 //! | `iroh-blobs`, [crate documentation](https://docs.rs/iroh-blobs) | The transport alternative (the `fetch` module). |
 
+// Module documentation that predates the shape lint: 5 headings outside the
+// vocabulary, 6 decision records and 1 budget exceeded. Each allow leaves with
+// the rewrite that clears its count.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        module_doc_heading,
+        doc_decision_record,
+        module_doc_budget,
+        reason = "module documentation that predates the shape lint"
+    )
+)]
 #![expect(
     clippy::multiple_crate_versions,
     reason = "iroh and subduction straddle the RustCrypto and ed25519-dalek major \

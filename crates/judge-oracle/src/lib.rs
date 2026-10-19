@@ -60,6 +60,18 @@
 //! | `reqwest`, [crate documentation](https://docs.rs/reqwest) | The HTTP client. |
 //! | `serde_json`, [crate documentation](https://docs.rs/serde_json) | The request and response bodies. |
 
+// Module documentation that predates the shape lint: 5 headings outside the
+// vocabulary, 6 decision records and 1 budget exceeded. Each allow leaves with
+// the rewrite that clears its count.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        module_doc_heading,
+        doc_decision_record,
+        module_doc_budget,
+        reason = "module documentation that predates the shape lint"
+    )
+)]
 #![expect(
     clippy::multiple_crate_versions,
     reason = "iroh and subduction straddle the RustCrypto and ed25519-dalek major \

@@ -36,11 +36,15 @@ run = "cargo clippy --workspace --all-targets --locked --profile test -- --deny 
 # crate in the graph, hence the encoded rustflags rather than Dylint's own
 # cfg. Incremental compilation is off because the driver reads whole-crate
 # HIR. A toolchain bump invalidates the driver: `rm -rf ~/.dylint_drivers
-# target/dylint` before the wall runs again.
+# target/dylint` before the wall runs again. The module documentation shape
+# (`rustdoc_shape`) is denied for the whole workspace; a crate whose
+# documentation predates it allows each refusing lint on its root, its count
+# in the comment beside the allow. `doc_history_prose` is a report, forced to
+# `warn` so the workspace's denied warnings never make it a refusal.
 ["check:dylint"]
 description = "quenchant's policy library over the workspace"
 env.CARGO_INCREMENTAL = "0"
-env.DYLINT_RUSTFLAGS = "-D spec_attribute_present -D adequacy_present -D maybe_shape -D erased_error_signature -D spec_attribute_unqualified"
+env.DYLINT_RUSTFLAGS = "-D spec_attribute_present -D adequacy_present -D maybe_shape -D erased_error_signature -D spec_attribute_unqualified -D rustdoc_shape --force-warn doc_history_prose"
 # The plugin links through dylint-link, which renames the artifact with the
 # toolchain suffix Dylint loads by; Cargo's linker variable is per target.
 env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "dylint-link"

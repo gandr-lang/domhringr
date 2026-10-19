@@ -67,6 +67,18 @@
 //! | `domhringr-record-tree` | The `Verified` and `Graded` receipts, `StepId`, `Status`, `Grade` and the `Ruling` a grade reads. |
 //! | `domhringr-record-evidence` | The evidence plane a transcript is staged in and a verifier's output is committed to. |
 
+// Module documentation that predates the shape lint: 6 headings outside the
+// vocabulary, 6 decision records and 1 budget exceeded. Each allow leaves with
+// the rewrite that clears its count.
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    allow(
+        module_doc_heading,
+        doc_decision_record,
+        module_doc_budget,
+        reason = "module documentation that predates the shape lint"
+    )
+)]
 #![expect(
     clippy::multiple_crate_versions,
     reason = "iroh and subduction straddle the RustCrypto and ed25519-dalek major \
