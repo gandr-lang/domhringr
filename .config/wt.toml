@@ -2,3 +2,14 @@
 # executable paths. Existing checkouts run the same installer during setup.
 [pre-start]
 hooks = "mise exec -- prek install"
+
+# A new worktree starts warm: every gitignored artifact of the primary
+# worktree — the build directory, the code index — is copied in (a reflink
+# where the filesystem clones). Existing files are never overwritten, so the
+# step is safe to re-run; a mutation run's output stays with the worktree
+# that produced it.
+[post-start]
+copy = "wt step copy-ignored"
+
+[step.copy-ignored]
+exclude = ["mutants.out/"]
