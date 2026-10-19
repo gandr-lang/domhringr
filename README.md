@@ -1,5 +1,7 @@
 # domhringr
 
+[![CI](https://github.com/gandr-lang/domhringr/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gandr-lang/domhringr/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/gandr-lang/domhringr/graph/badge.svg)](https://codecov.io/gh/gandr-lang/domhringr) [![licence](https://img.shields.io/badge/license-Apache--2.0_WITH_LLVM--exception-blue)](LICENSE.Apache-2.0.txt) [![rustc](https://img.shields.io/badge/rustc-nightly--2026--06--25-blue)](rust-toolchain.toml)
+
 A software factory: seats (agent sessions) that talk to each other over [iroh](https://www.iroh.computer/), judges that grade their work against rubrics, and playbooks that say what a seat does. Every step of a task is a signed receipt in a [sedimentree](https://crates.io/crates/sedimentree_core) the peers sync, so the loop runs from the record alone.
 
 ## Status
