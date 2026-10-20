@@ -1,5 +1,8 @@
 //! Fixed receipt shapes and exhaustive extrema witnesses.
 
+use alloc::string::String;
+use core::fmt::Write as _;
+
 use gandr_storage_records::OwnedRecordValue;
 use gandr_storage_records::Record;
 use gandr_storage_records::RecordCount;
@@ -82,6 +85,8 @@ fn index(
 ) -> Index
 {
     let count = usize::try_from(u64::from(count)).unwrap();
+    // Each project key's task name, one buffer refilled per record.
+    let mut name = String::new();
     let records: Vec<_> = shapes
         .iter()
         .cycle()
@@ -94,10 +99,11 @@ fn index(
                     SequenceNumber(u32::try_from(position).unwrap()),
                 )
                 .owned(),
-                IndexKind::Project => format!("task-{position:08}")
-                    .parse::<crate::project::TaskName>()
-                    .unwrap()
-                    .key(),
+                IndexKind::Project => {
+                    name.clear();
+                    write!(name, "task-{position:08}").unwrap();
+                    name.parse::<crate::project::TaskName>().unwrap().key()
+                },
                 IndexKind::Provenance => crate::provenance::Subject::Evidence(testing::evidence())
                     .key(
                         testing::tree(),

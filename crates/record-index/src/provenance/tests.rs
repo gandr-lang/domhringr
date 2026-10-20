@@ -113,6 +113,8 @@ fn provenance_agrees_with_every_tasks_evidence()
         let index = records.build().unwrap();
         let mut actual = BTreeMap::new();
         let mut found_evidence = Vec::new();
+        // Each key with a byte past its end, one buffer refilled per record.
+        let mut trailing: Vec<u8> = Vec::new();
         for record in index.tree.records() {
             let reference = Reference::try_from(record.key().as_ref()).unwrap();
             let attribution =
@@ -140,7 +142,8 @@ fn provenance_agrees_with_every_tasks_evidence()
             if let Subject::Evidence(digest) = reference.subject {
                 found_evidence.push((reference.tree, attribution.holder, digest));
             }
-            let mut trailing = record.key().as_ref().to_vec();
+            trailing.clear();
+            trailing.extend_from_slice(record.key().as_ref());
             trailing.push(0);
             assert!(Reference::try_from(trailing.as_slice()).is_err());
             assert!(Reference::try_from(&record.key().as_ref()[.. 32]).is_err());
