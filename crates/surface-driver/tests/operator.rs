@@ -4,6 +4,14 @@
 //! lands their changes — fetching each report from its seat as evidence — and
 //! lists the project, from its own state directory.
 
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    expect(
+        allocation_in_repeated_body,
+        reason = "1 cost-shape site; #35 lists it"
+    )
+)]
+
 extern crate alloc;
 
 #[cfg(test)]

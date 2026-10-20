@@ -597,7 +597,7 @@ private_intra_doc_links = "allow"
 # ownership cycles. Loaded from the pinned Git source by `mise run check:dylint`.
 [[workspace.metadata.dylint.libraries]]
 git = "https://github.com/gandr-lang/quenchant"
-rev = "9374e344339d25a16c1fab0f05854d01227da3f5"
+rev = "bfbe2b73d2f94494cb6ed0898afc759d67219c5f"
 pattern = "crates/quenchant-dylints"
 
 # Sibling checkouts a path dependency reaches under `vendor/`, each at the
