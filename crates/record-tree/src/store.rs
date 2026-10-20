@@ -2094,9 +2094,9 @@ mod tests
                 "a path bound to a commit in another tree resolves to its anchor"
             );
             let view = peer.view(a).await.unwrap().to_string();
+            let bound = format!("bind x anchor {elsewhere}");
             assert!(
-                view.lines()
-                    .any(|line| line == format!("bind x anchor {elsewhere}")),
+                view.lines().any(|line| line == bound),
                 "the view lists the bind with its target written as an anchor: {view}"
             );
             drop(peer);

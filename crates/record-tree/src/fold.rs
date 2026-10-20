@@ -2360,8 +2360,7 @@ mod tests
             ];
 
             let view = fold(tree(), arrived.clone()).unwrap();
-            let mut reversed = arrived.clone();
-            reversed.reverse();
+            let reversed: Vec<_> = arrived.iter().rev().cloned().collect();
             assert_eq!(
                 fold(tree(), reversed).unwrap(),
                 view,
@@ -3028,8 +3027,7 @@ mod tests
                 by_member,
                 by_stranger.clone(),
             ];
-            let mut reversed = arrived.clone();
-            reversed.reverse();
+            let reversed: Vec<_> = arrived.iter().rev().cloned().collect();
             for order in [arrived, reversed] {
                 let view = fold(tree(), order).unwrap();
                 assert_eq!(
