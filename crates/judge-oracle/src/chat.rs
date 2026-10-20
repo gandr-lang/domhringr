@@ -693,8 +693,10 @@ mod tests
             let (stream, _peer) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let (mut head, mut length) = (String::new(), 0_usize);
+            // Each head line, one buffer refilled per line.
+            let mut line = String::new();
             loop {
-                let mut line = String::new();
+                line.clear();
                 let _read = reader.read_line(&mut line).unwrap();
                 assert!(!line.is_empty(), "the request ends inside its head");
                 if line == "\r\n" {
