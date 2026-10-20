@@ -596,13 +596,13 @@ mod tests
                 assert_eq!(tree, testing::tree());
                 assert_eq!(actual_heads, &heads);
                 assert_eq!(current, expected);
-                assert_eq!(
-                    refused,
-                    &view
-                        .refused()
+                assert_eq!(refused.len(), view.refused().len());
+                assert!(
+                    refused
                         .iter()
-                        .map(super::Refused::from)
-                        .collect::<Vec<_>>()
+                        .zip(view.refused())
+                        .all(|(held, viewed)| *held == super::Refused::from(viewed)),
+                    "the entry holds the view's refusals in order"
                 );
                 assert_eq!(
                     attempts,

@@ -1,6 +1,8 @@
 //! Authenticated membership and protocol admission have different witnesses.
 
 use alloc::borrow::Cow;
+use alloc::string::String;
+use core::fmt::Write as _;
 
 use domhringr_arena_session::Arena;
 use domhringr_arena_session::Movement;
@@ -105,6 +107,13 @@ fn played(receipts: &[Receipt]) -> Result<super::Replayed, ReplayError>
 }
 
 #[test]
+#[cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    expect(
+        linear_search_in_loop,
+        reason = "bounded: the fixture task's few sources and steps, searched once per move of one attempt"
+    )
+)]
 fn proved_attempts_replay_every_standing()
 {
     testing::runtime().block_on(async {
@@ -113,6 +122,8 @@ fn proved_attempts_replay_every_standing()
         let peer = testing::peer(root.path(), fixture.commits).await;
         let arena = Arena::new().unwrap();
         let mut standings = Vec::new();
+        // Each standing's display, one buffer refilled per head.
+        let mut shown = String::new();
         for head in fixture.standings {
             let view = peer
                 .view_at(testing::tree(), &Heads::from_iter([head]))
@@ -150,14 +161,9 @@ fn proved_attempts_replay_every_standing()
                 ));
             }
             assert_eq!(&reached, view.task().current());
-            standings.push(
-                reached
-                    .to_string()
-                    .split_whitespace()
-                    .next()
-                    .unwrap()
-                    .to_owned(),
-            );
+            shown.clear();
+            write!(shown, "{reached}").unwrap();
+            standings.push(shown.split_whitespace().next().unwrap().to_owned());
         }
         drop(peer);
         assert_eq!(standings, [
