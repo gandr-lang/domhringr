@@ -15,6 +15,7 @@ mod tests
     use core::time::Duration;
     use std::ffi::OsStr;
     use std::io::BufRead as _;
+    use std::io::Read as _;
     use std::path::Path;
     use std::process::Child;
     use std::process::Command;
@@ -181,6 +182,16 @@ mod tests
     {
         let socket = std::net::UdpSocket::bind(("0.0.0.0", 0)).unwrap();
         Port(socket.local_addr().unwrap().port().to_string())
+    }
+
+    /// Probed ports, as many as a server may need when other sockets take
+    /// the first ones it is offered.
+    ///
+    /// # Specification
+    /// trivial.
+    fn fresh_ports() -> impl Iterator<Item = Port>
+    {
+        core::iter::repeat_with(free_port).take(8)
     }
 
     /// The peer binary on the state directory `state`.
@@ -398,61 +409,86 @@ mod tests
 
     impl Server
     {
-        /// Start `serve` on `state`, with `options` after the verb.
+        /// Serve `state`, whose `id` printed `ids`, on the first of `ports`
+        /// the peer binds, and read its announcement.
+        ///
+        /// A port the probe found free can be taken by another socket on the
+        /// host before the peer binds it; the peer then exits refusing the
+        /// bind, and the next port is tried.
         ///
         /// # Specification
-        /// - ensures: the process is running with its standard output read line
-        ///   by line; its standard error passes through to the test's.
-        /// - panics: when the process cannot start.
+        /// - ensures: the process is running on the port returned with its
+        ///   standard output read line by line, and has announced `ids`
+        ///   followed by `listening`; its standard error passes through to the
+        ///   test's from then on.
+        /// - panics: when the process cannot start, when it prints nothing
+        ///   within [`DEADLINE`] for any reason but a port another socket holds
+        ///   (its standard error is shown), when its announcement is not `ids`
+        ///   and `listening`, or when `ports` runs out.
         /// - executable: none — process, channel or filesystem effects cannot
         ///   be replayed in a predicate; the process witness checks their
         ///   observable results.
         ///
         /// # Adequacy
-        /// - hypothesis: L3 — the process fixture checks the commands, receipts
-        ///   or findings this helper supplies.
-        /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
-        fn start(
+        /// - hypothesis: L3 — a held port moves the server to the next one and
+        ///   every other failure to start still fails the test.
+        /// - witness: `sync::tests::a_held_port_moves_the_server_to_the_next`
+        fn serve(
             state: &Path,
-            options: &[&OsStr],
-        ) -> Self
+            ids: &Lines,
+            ports: impl IntoIterator<Item = Port>,
+        ) -> (Self, Port)
         {
-            let mut child = peer(state)
-                .arg("serve")
-                .args(options)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
-                .spawn()
-                .unwrap();
-            let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
-            let (sender, lines) = mpsc::channel();
-            drop(std::thread::spawn(move || {
-                for line in stdout.lines() {
-                    if sender.send(line.unwrap()).is_err() {
-                        break;
+            let mut refusal = String::new();
+            for port in ports {
+                let mut child = peer(state)
+                    .arg("serve")
+                    .arg("--port")
+                    .arg(&port.0)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+                let mut stderr = child.stderr.take().unwrap();
+                let (sender, lines) = mpsc::channel();
+                drop(std::thread::spawn(move || {
+                    for line in stdout.lines() {
+                        if sender.send(line.unwrap()).is_err() {
+                            break;
+                        }
                     }
+                }));
+                let server = Self { child, lines };
+                match server.lines.recv_timeout(DEADLINE) {
+                    Ok(first) => {
+                        let rest = core::iter::repeat_with(|| server.line()).take(2);
+                        assert_eq!(
+                            Lines(core::iter::once(first).chain(rest).collect()),
+                            ids.then_listening(),
+                            "serve announces the ids id prints"
+                        );
+                        drop(std::thread::spawn(move || {
+                            std::io::copy(&mut stderr, &mut std::io::stderr()).unwrap();
+                        }));
+                        return (server, port);
+                    },
+                    Err(error) => {
+                        drop(server);
+                        refusal.clear();
+                        let _read = stderr.read_to_string(&mut refusal).unwrap();
+                        assert!(
+                            refusal.contains(
+                                "cannot bind the iroh endpoint: Failed to bind sockets: Address \
+                                 already in use"
+                            ),
+                            "serve printed no line within {DEADLINE:?}: {error}: {refusal}"
+                        );
+                    },
                 }
-            }));
-            Self { child, lines }
-        }
-
-        /// The server's announcement: its two ids and `listening`.
-        ///
-        /// # Specification
-        /// - panics: when the three lines do not arrive within [`DEADLINE`]
-        ///   each.
-        /// - executable: none — process, channel or filesystem effects cannot
-        ///   be replayed in a predicate; the process witness checks their
-        ///   observable results.
-        ///
-        /// # Adequacy
-        /// - hypothesis: L3 — the process fixture checks the commands, receipts
-        ///   or findings this helper supplies.
-        /// - witness: `sync::tests::two_peers_fold_one_tree_to_identical_views`
-        fn announcement(&self) -> Lines
-        {
-            Lines(core::iter::repeat_with(|| self.line()).take(3).collect())
+            }
+            panic!("serve bound none of the ports tried")
         }
 
         /// The server's report of one admission: it admitted the peer whose
@@ -573,14 +609,7 @@ mod tests
             "the note's parent is the Open, so it alone is the head"
         );
 
-        let port = free_port();
-        let options = [OsStr::new("--port"), OsStr::new(&port.0)];
-        let server = Server::start(a, &options);
-        assert_eq!(
-            server.announcement(),
-            a_id.then_listening(),
-            "serve announces the ids id prints"
-        );
+        let (server, port) = Server::serve(a, &a_id, fresh_ports());
         let (synced, _path) = sync(b, &a_id, OsStr::new(&tree), &port);
         assert_eq!(synced, heads, "the dialer prints the server's heads");
         let _admitted = server.admitted(&b_id);
@@ -596,12 +625,9 @@ mod tests
             heads,
             "the killed server's store survives"
         );
-        let server = Server::start(a, &options);
-        assert_eq!(
-            server.announcement(),
-            a_id.then_listening(),
-            "a restarted server keeps its ids"
-        );
+        // The restart serves on the same port unless another socket took it
+        // while no server held it.
+        let (server, port) = Server::serve(a, &a_id, core::iter::once(port).chain(fresh_ports()));
         let (resynced, _path) = sync(b, &a_id, OsStr::new(&tree), &port);
         assert_eq!(resynced, heads, "a second sync leaves the heads unchanged");
         let _admitted = server.admitted(&b_id);
@@ -614,8 +640,8 @@ mod tests
         drop(server);
     }
 
-    /// Serve `state` on the fixed `port` while the peer on `dialer` syncs
-    /// `tree` from it at that port, then stop serving.
+    /// Serve `state` on a fixed port while the peer on `dialer` syncs `tree`
+    /// from it at that port, then stop serving.
     ///
     /// # Specification
     /// - ensures: the server announced `server`'s ids, admitted the dialer and
@@ -635,18 +661,11 @@ mod tests
     fn pull(
         dialer: (&Path, &Lines),
         server: (&Path, &Lines),
-        port: &Port,
         tree: &OsStr,
     ) -> Lines
     {
-        let options = [OsStr::new("--port"), OsStr::new(&port.0)];
-        let serving = Server::start(server.0, &options);
-        assert_eq!(
-            serving.announcement(),
-            server.1.then_listening(),
-            "serve announces its ids"
-        );
-        let (heads, path) = sync(dialer.0, server.1, tree, port);
+        let (serving, port) = Server::serve(server.0, server.1, fresh_ports());
+        let (heads, path) = sync(dialer.0, server.1, tree, &port);
         match path {
             PathLine::Direct(address) => assert_eq!(
                 address.port().to_string(),
@@ -683,7 +702,6 @@ mod tests
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let (a, b) = (a.path(), b.path());
         let (a_id, b_id) = (finish(peer(a).arg("id")), finish(peer(b).arg("id")));
-        let (a_port, b_port) = (free_port(), free_port());
         let tree = open(a);
         let note = |state: &Path, text: &str| {
             let id = finish(peer(state).args(["note", tree.as_str(), text]));
@@ -695,9 +713,9 @@ mod tests
         let folded = OsStr::new(&tree);
 
         let _a1 = note(a, "a1");
-        pull((b, &b_id), (a, &a_id), &a_port, folded);
+        pull((b, &b_id), (a, &a_id), folded);
         let b1 = note(b, "b1 before any grant");
-        pull((a, &a_id), (b, &b_id), &b_port, folded);
+        pull((a, &a_id), (b, &b_id), folded);
         let refused = format!("refused {b1} no authority");
         let unauthorised = Lines(vec![
             owner.clone(),
@@ -718,11 +736,11 @@ mod tests
         let granted = finish(peer(a).args(["grant", tree.as_str(), b_id.peer().as_str()]));
         granted.assert_ids();
         let _a2 = note(a, "a2");
-        pull((b, &b_id), (a, &a_id), &a_port, folded);
+        pull((b, &b_id), (a, &a_id), folded);
         let b2 = note(b, "b2 under the grant");
         let a3 = note(a, "a3");
-        pull((a, &a_id), (b, &b_id), &b_port, folded);
-        let heads = pull((b, &b_id), (a, &a_id), &a_port, folded);
+        pull((a, &a_id), (b, &b_id), folded);
+        let heads = pull((b, &b_id), (a, &a_id), folded);
 
         let mut concurrent = [a3, b2.clone()];
         concurrent.sort();
@@ -773,7 +791,6 @@ mod tests
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let (a, b) = (a.path(), b.path());
         let (a_id, b_id) = (finish(peer(a).arg("id")), finish(peer(b).arg("id")));
-        let (a_port, b_port) = (free_port(), free_port());
         let tree = open(a);
         let (x, y) = (format!("{tree}x"), format!("{tree}y"));
         let anchored = OsStr::new(&tree);
@@ -801,7 +818,7 @@ mod tests
 
         let a1 = note(a, "a1");
         let _bound = bind(a, &a1);
-        pull((b, &b_id), (a, &a_id), &a_port, anchored);
+        pull((b, &b_id), (a, &a_id), anchored);
         let first = format!("anchor {tree}.commit/{a1}");
         assert_eq!(
             whence(b, &x),
@@ -810,7 +827,7 @@ mod tests
         );
 
         let squat = squat_on(b);
-        pull((a, &a_id), (b, &b_id), &b_port, anchored);
+        pull((a, &a_id), (b, &b_id), anchored);
         assert_eq!(
             whence(a, &x),
             first,
@@ -824,10 +841,10 @@ mod tests
 
         let granted = finish(peer(a).args(["grant", tree.as_str(), b_id.peer().as_str()]));
         granted.assert_ids();
-        pull((b, &b_id), (a, &a_id), &a_port, anchored);
+        pull((b, &b_id), (a, &a_id), anchored);
         let b1 = note(b, "b1");
         let _rebound = bind(b, &b1);
-        pull((a, &a_id), (b, &b_id), &b_port, anchored);
+        pull((a, &a_id), (b, &b_id), anchored);
         assert_eq!(
             whence(a, &x),
             format!("anchor {tree}.commit/{b1}"),
@@ -835,7 +852,7 @@ mod tests
         );
         let a2 = note(a, "a2");
         let _rebound = bind(a, &a2);
-        pull((b, &b_id), (a, &a_id), &a_port, anchored);
+        pull((b, &b_id), (a, &a_id), anchored);
         let last = format!("anchor {tree}.commit/{a2}");
         for state in [a, b] {
             assert_eq!(
@@ -876,7 +893,6 @@ mod tests
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let (a, b) = (a.path(), b.path());
         let (a_id, b_id) = (finish(peer(a).arg("id")), finish(peer(b).arg("id")));
-        let (a_port, b_port) = (free_port(), free_port());
         let tree = open(a);
         let claimed = finish(peer(a).args(["claim", tree.as_str(), "example.test"]));
         claimed.assert_ids();
@@ -886,7 +902,7 @@ mod tests
         let commit = format!("{tree}.commit/{}", noted.only());
         let bound = finish(peer(a).args(["bind", x.as_str(), "anchor", commit.as_str()]));
         bound.assert_ids();
-        pull((b, &b_id), (a, &a_id), &a_port, OsStr::new(&tree));
+        pull((b, &b_id), (a, &a_id), OsStr::new(&tree));
 
         let witnessed = |anchor: &str, witness: &str| {
             let witness = format!("example.test={}", tree_id(OsStr::new(witness)));
@@ -940,7 +956,7 @@ mod tests
             "domhringr-peer: unscoped b",
             "a label read in no tree resolves nothing"
         );
-        pull((a, &a_id), (b, &b_id), &b_port, OsStr::new(&fresh));
+        pull((a, &a_id), (b, &b_id), OsStr::new(&fresh));
         assert_eq!(
             refuse(&mut label(&fresh)),
             "domhringr-peer: unintroduced b",
@@ -975,7 +991,6 @@ mod tests
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let (a, b) = (a.path(), b.path());
         let (a_id, b_id) = (finish(peer(a).arg("id")), finish(peer(b).arg("id")));
-        let (a_port, b_port) = (free_port(), free_port());
         let tree = open(a);
         let anchored = OsStr::new(&tree);
         let note = |state: &Path, text: &str| {
@@ -991,7 +1006,7 @@ mod tests
         };
 
         let a1 = note(a, "a1");
-        pull((b, &b_id), (a, &a_id), &a_port, anchored);
+        pull((b, &b_id), (a, &a_id), anchored);
         let prefix = a1.chars().take(12).collect::<String>();
         assert_eq!(
             whence(b, &commit(&prefix)),
@@ -1000,7 +1015,7 @@ mod tests
         );
 
         let b1 = note(b, "b1 before any grant");
-        pull((a, &a_id), (b, &b_id), &b_port, anchored);
+        pull((a, &a_id), (b, &b_id), anchored);
         assert_eq!(
             whence(a, &commit(&b1)),
             format!("commit {b1} refused no authority"),
@@ -1011,7 +1026,7 @@ mod tests
         let target = commit(&a1);
         let bound = finish(peer(a).args(["bind", x.as_str(), "anchor", target.as_str()]));
         bound.assert_ids();
-        pull((b, &b_id), (a, &a_id), &a_port, anchored);
+        pull((b, &b_id), (a, &a_id), anchored);
         let resolved = format!("anchor {target}");
         assert_eq!(
             whence(b, &x),
@@ -1028,5 +1043,38 @@ mod tests
             "unknown",
             "a commit the tree does not hold is unknown"
         );
+    }
+
+    /// A port another socket takes between the probe and the serve moves the
+    /// server to the next port instead of failing the test (#38).
+    ///
+    /// # Specification
+    /// - ensures: with the first port offered held by another socket, A serves
+    ///   on another port, announcing its ids, and B's sync at that port prints
+    ///   A's heads and is admitted.
+    /// - panics: on any contract violation.
+    #[test]
+    fn a_held_port_moves_the_server_to_the_next()
+    {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (a, b) = (a.path(), b.path());
+        let (a_id, b_id) = (finish(peer(a).arg("id")), finish(peer(b).arg("id")));
+        let tree = open(a);
+        let heads = finish(peer(a).args(["heads", tree.as_str()]));
+        let holder = std::net::UdpSocket::bind(("0.0.0.0", 0)).unwrap();
+        let held = Port(holder.local_addr().unwrap().port().to_string());
+        let (server, port) = Server::serve(
+            a,
+            &a_id,
+            core::iter::once(held.clone()).chain(fresh_ports()),
+        );
+        assert_ne!(port, held, "the server leaves the held port");
+        let (synced, _path) = sync(b, &a_id, OsStr::new(&tree), &port);
+        assert_eq!(
+            synced, heads,
+            "the dialer reaches the server where it moved"
+        );
+        let _admitted = server.admitted(&b_id);
+        drop(holder);
     }
 }
