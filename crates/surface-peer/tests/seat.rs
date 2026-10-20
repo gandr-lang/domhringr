@@ -4,6 +4,14 @@
 //! seat's presence in the book — while each side is killed and started again,
 //! holding its state in its store alone.
 
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    expect(
+        allocation_in_repeated_body,
+        reason = "8 cost-shape sites; #35 lists them"
+    )
+)]
+
 #[cfg(test)]
 mod tests
 {

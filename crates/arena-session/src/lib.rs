@@ -160,6 +160,13 @@
     clippy::multiple_crate_versions,
     reason = "the pinned gandr specifications use anodized with syn 2; thiserror uses syn 3"
 )]
+#![cfg_attr(
+    all(test, dylint_lib = "quenchant_dylints"),
+    expect(
+        allocation_in_repeated_body,
+        reason = "2 cost-shape sites in test modules; #35 lists them"
+    )
+)]
 
 extern crate alloc;
 

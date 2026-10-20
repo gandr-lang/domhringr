@@ -9,6 +9,13 @@
     dylint_lib = "quenchant_dylints",
     expect(linear_search_in_loop, reason = "1 cost-shape site; #35 lists it")
 )]
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    expect(
+        allocation_in_repeated_body,
+        reason = "3 cost-shape sites; #35 lists them"
+    )
+)]
 
 #[cfg(test)]
 mod tests

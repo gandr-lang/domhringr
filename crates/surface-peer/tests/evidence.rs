@@ -4,6 +4,14 @@
 //! name, and once the seat has lost a chunk a reader is refused naming that
 //! chunk, printing nothing and keeping nothing.
 
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    expect(
+        allocation_in_repeated_body,
+        reason = "1 cost-shape site; #35 lists it"
+    )
+)]
+
 #[cfg(test)]
 mod tests
 {

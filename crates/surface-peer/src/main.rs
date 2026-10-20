@@ -582,6 +582,13 @@
     dylint_lib = "quenchant_dylints",
     deny(option_signature, option_field, primitive_arithmetic)
 )]
+#![cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    expect(
+        allocation_in_repeated_body,
+        reason = "1 cost-shape site; #35 lists it"
+    )
+)]
 
 extern crate alloc;
 

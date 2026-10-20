@@ -45,6 +45,13 @@
         reason = "2 cost-shape sites in test modules; #35 lists them"
     )
 )]
+#![cfg_attr(
+    all(test, dylint_lib = "quenchant_dylints"),
+    expect(
+        allocation_in_repeated_body,
+        reason = "3 cost-shape sites in test modules; #35 lists them"
+    )
+)]
 
 extern crate alloc;
 
