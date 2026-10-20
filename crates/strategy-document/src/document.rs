@@ -540,6 +540,13 @@ impl<'input> Value<'input>
     ///   a field missing beside it, and a step that is no table at its place.
     /// - witness: `playbook::tests::a_malformed_playbook_is_refused_at_its_field`
     /// - witness: `rubric::tests::a_malformed_rubric_is_refused_at_its_field`
+    #[cfg_attr(
+        dylint_lib = "quenchant_dylints",
+        expect(
+            linear_search_in_loop,
+            reason = "bounded: `keys` is the constant handful of fields one kind of table admits"
+        )
+    )]
     #[spec(ensures: |ref output| output.as_ref().map_or(true, |table| table.entries.len() <= keys.0.len()))]
     pub(crate) fn table(
         self,
