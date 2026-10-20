@@ -4,14 +4,6 @@
 //! lands their changes — fetching each report from its seat as evidence — and
 //! lists the project, from its own state directory.
 
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    expect(
-        allocation_in_repeated_body,
-        reason = "1 cost-shape site; #35 lists it"
-    )
-)]
-
 extern crate alloc;
 
 #[cfg(test)]
@@ -1227,6 +1219,8 @@ rm -rf "$work"
             "landed",
             "refused",
         ];
+        // The listing line of `tasks/alpha` up to its standing.
+        let alpha = format!("task {}tasks/alpha ", Anchor::key(project));
         for stage in stages {
             let (reference, heads) = local_runtime().block_on(async {
                 let identity = Identity::load_or_create(&state).unwrap();
@@ -1345,10 +1339,10 @@ rm -rf "$work"
                     );
                 }
                 else {
-                    assert!(reference.iter().any(|line| line.starts_with(&format!(
-                        "task {}tasks/alpha {stage}",
-                        Anchor::key(project)
-                    ))));
+                    assert!(reference.iter().any(|line| {
+                        line.strip_prefix(alpha.as_str())
+                            .is_some_and(|standing| standing.starts_with(stage))
+                    }));
                 }
                 (reference, peer.heads(project).await.unwrap())
             });

@@ -313,11 +313,6 @@
               transitions; the duplicates are theirs and no version this workspace \
               chooses unifies them"
 )]
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    expect(linear_search_in_loop, reason = "1 cost-shape site; #35 lists it")
-)]
-
 extern crate alloc;
 
 mod change;
@@ -921,6 +916,13 @@ enum Completion
 ///   value are each refused by name.
 /// - witness: `tests::every_verb_reads_its_options`
 /// - witness: `tests::a_malformed_command_line_is_refused`
+#[cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    expect(
+        linear_search_in_loop,
+        reason = "bounded: `verb.flags()` is the constant handful of options one verb takes"
+    )
+)]
 #[spec(ensures: |ref ret| ret.as_ref().map_or(true, |invocation| match invocation.command {
     Command::Decide { ref rubrics, .. } => !rubrics.is_empty(),
     Command::Open | Command::Dispatch { .. } | Command::Verify { .. } | Command::Land { .. } => true,
