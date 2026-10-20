@@ -1,5 +1,9 @@
 //! Directed endpoint traces and independently checked transport evidence.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt::Write as _;
+
 use gandr_core_session::Action;
 use gandr_core_session::Completion;
 use gandr_core_session::Decision;
@@ -238,8 +242,12 @@ fn unknown_editions_never_replay_as_known_protocols()
     else {
         vec![Edition::from(0), Edition::TWO, Edition::from(u64::MAX)]
     };
+    // Each edition's spelling, one buffer refilled per edition.
+    let mut spelled = String::new();
     for edition in unknowns {
-        assert_eq!(edition.to_string().parse::<Edition>().unwrap(), edition);
+        spelled.clear();
+        write!(spelled, "{edition}").unwrap();
+        assert_eq!(spelled.parse::<Edition>().unwrap(), edition);
         assert!(
             matches!(arena.session(edition, Channel::Slot), Err(crate::UnknownEdition(named)) if named == edition)
         );
@@ -296,6 +304,8 @@ fn task_channels_replay_with_their_duals()
     else {
         vec![Edition::ONE]
     };
+    // The dual's moves of each channel's play, one buffer refilled per play.
+    let mut opposite: Vec<Move> = Vec::new();
     for edition in editions {
         for (channel, movements, expected) in [
             (
@@ -331,17 +341,14 @@ fn task_channels_replay_with_their_duals()
             }
             assert_eq!(progress, expected);
             let dual = arena.session(edition, channel).unwrap().dual();
-            let opposite = play
-                .moves()
-                .iter()
-                .map(|movement| match *movement {
-                    Move::Send(payload) => Move::Receive(payload),
-                    Move::Receive(payload) => Move::Send(payload),
-                    Move::Select(ref label) => Move::Offer(label.clone()),
-                    Move::Offer(ref label) => Move::Select(label.clone()),
-                    Move::End => Move::End,
-                })
-                .collect::<Vec<_>>();
+            opposite.clear();
+            opposite.extend(play.moves().iter().map(|movement| match *movement {
+                Move::Send(payload) => Move::Receive(payload),
+                Move::Receive(payload) => Move::Send(payload),
+                Move::Select(ref label) => Move::Offer(label.clone()),
+                Move::Offer(ref label) => Move::Select(label.clone()),
+                Move::End => Move::End,
+            }));
             match expected {
                 Progress::Complete => {
                     assert_eq!(gandr_core_session::replay(&dual, &opposite), Ok(Completion));
