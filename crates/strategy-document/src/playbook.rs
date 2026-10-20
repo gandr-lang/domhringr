@@ -43,6 +43,7 @@
 //! Reversal: a step that a human performs and attests to, which needs a third
 //! binding and a receipt for the attestation.
 
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -144,10 +145,12 @@ impl FromStr for Playbook
         let listed = document.require(Key("steps"))?;
         let field = listed.field().clone();
         let mut steps: Vec<Step> = Vec::new();
+        // The identifiers read so far, so a duplicate is found in one lookup.
+        let mut ids: BTreeSet<StepId> = BTreeSet::new();
         for value in listed.array()? {
             let id = value.field().then(Segment::from("id"));
             let step = Step::read(value)?;
-            if steps.iter().any(|earlier| earlier.id == step.id) {
+            if !ids.insert(step.id.clone()) {
                 return Err(id.refused(Reason::Duplicate));
             }
             steps.push(step);
