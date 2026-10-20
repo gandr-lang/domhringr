@@ -30,6 +30,12 @@
 //! pulls trees over it with `Node::pull` — the other side may pull over the
 //! same link — and drops it with `Node::disconnect`.
 //!
+//! **A peer opened with [`Relay::Off`] binds direct.** Its endpoint reaches
+//! neither n0's relay nor its DNS: it is reached at its direct addresses and
+//! through mDNS, on one host or one network. The process witnesses bind that
+//! way: many endpoints starting at once on one host stall their handshakes on
+//! the public relay, and a witness never depends on public infrastructure.
+//!
 //! **A node accepts other application protocols beside subduction's, routed by
 //! ALPN.** `Peer::bind` takes the `Protocol`s the node accepts; `Node::accept`
 //! yields an `Incoming`: a peer admitted to subduction, or a connection under
@@ -117,8 +123,9 @@ impl Peer
     /// # Specification
     /// - ensures: the returned node's endpoint id is the identity's endpoint
     ///   key; the endpoint accepts subduction's ALPN and each of `protocols`',
-    ///   and publishes and looks up addresses through n0's DNS and through
-    ///   mDNS.
+    ///   and looks up addresses through mDNS; under [`Relay::N0`] it also
+    ///   publishes and looks up addresses through n0's DNS and keeps n0's
+    ///   relays, under [`Relay::Off`] neither.
     /// - ensures: with [`BindPort::Fixed`] the endpoint's IPv4 socket is bound
     ///   on every interface at that port, and its IPv6 socket too where the
     ///   host has IPv6; with [`BindPort::Ephemeral`] the system picks the
@@ -154,10 +161,14 @@ impl Peer
             .chain(protocols.iter().map(|protocol| protocol.0))
             .map(<[u8]>::to_vec)
             .collect();
-        let builder = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
-            .secret_key(self.identity().endpoint_secret().clone())
-            .alpns(alpns)
-            .address_lookup(iroh_mdns_address_lookup::MdnsAddressLookup::builder());
+        let builder = match self.relay() {
+            Relay::N0 => iroh::Endpoint::builder(iroh::endpoint::presets::N0),
+            Relay::Off => iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+                .relay_mode(iroh::RelayMode::Disabled),
+        }
+        .secret_key(self.identity().endpoint_secret().clone())
+        .alpns(alpns)
+        .address_lookup(iroh_mdns_address_lookup::MdnsAddressLookup::builder());
         let builder = match port {
             BindPort::Ephemeral => Ok(builder),
             BindPort::Fixed(port) => port.sockets(builder),
@@ -275,6 +286,18 @@ pub enum BindPort
     Ephemeral,
     /// This port, so a firewall rule can name it.
     Fixed(UdpPort),
+}
+
+/// Whether a peer's endpoint reaches n0's relay and DNS.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Relay
+{
+    /// n0's relays and DNS address publishing and lookup, beside direct
+    /// addresses and mDNS.
+    #[default]
+    N0,
+    /// Direct addresses and mDNS alone: no relay, no DNS.
+    Off,
 }
 
 /// The network path iroh selected for a connection's application data.
@@ -664,12 +687,13 @@ impl Node
     /// in `tree`.
     ///
     /// # Specification
-    /// - ensures: waits until the endpoint has reached its home relay or
-    ///   [`ONLINE`] has elapsed, whichever comes first, then commits to `tree`
-    ///   a presence of the endpoint at the addresses iroh then names for it
-    ///   ([`Endpoint::of`]), proved by the endpoint key for this peer's key
-    ///   ([`EndpointProof::sign`]), under a fresh operation fence; returns the
-    ///   commit's id, which is the presence's `since`.
+    /// - ensures: under [`Relay::N0`], waits until the endpoint has reached its
+    ///   home relay or [`ONLINE`] has elapsed, whichever comes first; under
+    ///   [`Relay::Off`], which has no relay to reach, waits for nothing; then
+    ///   commits to `tree` a presence of the endpoint at the addresses iroh
+    ///   then names for it ([`Endpoint::of`]), proved by the endpoint key for
+    ///   this peer's key ([`EndpointProof::sign`]), under a fresh operation
+    ///   fence; returns the commit's id, which is the presence's `since`.
     /// - ensures: the presence is the one [`View::book`] offers for this peer
     ///   once the fold admits it: from the owner or a member, which it is when
     ///   this peer holds the tree's authority.
@@ -697,7 +721,9 @@ impl Node
         tree: TreeId,
     ) -> Result<CommitId, PresentError>
     {
-        let _online = tokio::time::timeout(ONLINE, self.endpoint.online()).await;
+        if self.peer.relay() == Relay::N0 {
+            let _online = tokio::time::timeout(ONLINE, self.endpoint.online()).await;
+        }
         let endpoint = Endpoint::of(&self.endpoint.addr());
         let identity = self.peer.identity();
         let proof = EndpointProof::sign(identity.endpoint_secret(), identity.peer_key());
@@ -1181,6 +1207,7 @@ mod tests
         let identity = Identity::load_or_create(&state).unwrap();
         Peer::open(&state, identity)
             .unwrap()
+            .with_relay(crate::Relay::Off)
             .bind(port, protocols)
             .await
             .unwrap()

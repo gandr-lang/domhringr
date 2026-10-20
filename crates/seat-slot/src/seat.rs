@@ -927,6 +927,7 @@ mod tests
             let me = identity.peer_key();
             let operator = Peer::open(&operator_state, identity)
                 .unwrap()
+                .with_relay(domhringr_record_tree::Relay::Off)
                 .bind(BindPort::Ephemeral, &[])
                 .await
                 .unwrap();
@@ -945,6 +946,7 @@ mod tests
             let seat = Arc::new(
                 Peer::open(&seat_state, identity)
                     .unwrap()
+                    .with_relay(domhringr_record_tree::Relay::Off)
                     .bind(BindPort::Fixed(port), &[
                         PROTOCOL,
                         domhringr_record_evidence::PROTOCOL,
@@ -1078,6 +1080,7 @@ mod tests
             let seat = Arc::new(
                 Peer::open(&state, identity)
                     .unwrap()
+                    .with_relay(domhringr_record_tree::Relay::Off)
                     .bind(BindPort::Ephemeral, &[
                         PROTOCOL,
                         domhringr_record_evidence::PROTOCOL,

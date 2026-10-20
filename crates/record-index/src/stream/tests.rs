@@ -44,6 +44,7 @@ async fn bound(
     let identity = Identity::load_or_create(&state).unwrap();
     Peer::open(&state, identity)
         .unwrap()
+        .with_relay(domhringr_record_tree::Relay::Off)
         .bind(port, &[PROTOCOL])
         .await
         .unwrap()

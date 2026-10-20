@@ -50,6 +50,12 @@
 //! domhringr-peer --state <dir> rubric grade <file> <tree> [--task-state <dir>] [--static <file>]  # the rubric's rulings, verdict, grades and grading
 //! ```
 //!
+//! `--relay off`, given before the verb, binds every endpoint the command
+//! opens off n0's relay and DNS: it reaches peers at their direct addresses
+//! and through mDNS, on one host or one network. `--relay n0`, the default,
+//! keeps both. The process witnesses run with `--relay off`, so no test
+//! reaches the public relay.
+//!
 //! A tree is named by its anchor, `domhringr://<tree-id>/`, whose tree id is
 //! the tree key's 52 z-base-32 characters; a path in the tree by
 //! `domhringr://<tree-id>/<segment>/…/<segment>`; and a commit in it by
@@ -658,6 +664,7 @@ use domhringr_record_tree::PresentError;
 use domhringr_record_tree::RandomError;
 use domhringr_record_tree::Receipt;
 use domhringr_record_tree::Reference;
+use domhringr_record_tree::Relay;
 use domhringr_record_tree::Resolution;
 use domhringr_record_tree::Route;
 use domhringr_record_tree::RouteError;
@@ -757,6 +764,8 @@ where  <tree>   is domhringr://<tree-id>/
        <dir>    for --task-state is the task's state, where verifiers run and a rubric's
                 state files are read; the working directory by default
 A segment beginning with . is reserved for the forms above: no path holds one.
+Every verb also takes --relay off before it: the endpoint then reaches neither n0's
+relay nor its DNS, only direct addresses and mDNS; --relay n0, the default, reaches both.
 ";
 
 /// The exit status of a command line that cannot be run.
@@ -1411,6 +1420,8 @@ struct Invocation
 {
     /// The peer's state directory.
     state: StateDir,
+    /// Whether the peer's endpoint reaches n0's relay and DNS.
+    relay: Relay,
     /// What to do with it.
     command: Command,
 }
@@ -1437,7 +1448,8 @@ enum UsageError
     /// The protocol edition is not an unsigned number.
     #[error("invalid edition: {0}")]
     Edition(core::num::ParseIntError),
-    /// An option other than `--state`, or `--state` without its value.
+    /// An option other than `--state` and `--relay`, or either without its
+    /// value.
     #[error(transparent)]
     Arguments(#[from] lexopt::Error),
     /// No command follows the options.
@@ -1519,6 +1531,9 @@ enum UsageError
     /// `--port`'s value is not a UDP port.
     #[error("cannot read the port")]
     Port(#[source] ParsePortError),
+    /// `--relay`'s value is neither `n0` nor `off`.
+    #[error("unknown relay {0:?}: expected n0 or off")]
+    Relay(OsString),
     /// `--local` stands beside `--peer` or `--at`: a local resolution reaches
     /// no one.
     #[error("--local reaches no peer: it takes no --peer or --at")]
@@ -1654,22 +1669,24 @@ enum RunError
 ///
 /// # Specification
 /// - ensures: accepts `--state <dir>` (or `--state=<dir>`; the last one given
-///   wins) followed by a verb and exactly the operands that verb takes, or, for
-///   `serve`, `present`, `sync`, `whence`, `dispatch`, `replay`, `evidence`,
-///   `drift`, `judge`, `playbook` and `rubric`, what [`serve_command`],
-///   [`present_command`], [`sync_command`], [`whence_command`],
-///   [`dispatch_command`], [`replay_command`], [`drift_command`],
-///   [`judge_command`] and [`strategy_command`] read. Other verbs' operands are
-///   taken verbatim, so a note's text, a datum or a summary beginning with `-`
-///   is a text, not an option. A tree operand is a bare anchor in the key form,
-///   `bind`'s anchor names a path in the key form, `claim`'s DNS name and
-///   `introduce`'s label are read as [`read_name`] reads them, `bind`'s target
-///   is read as [`read_target`] reads it, `withdraw` withdraws this peer's own
-///   presence unless a peer id follows the tree, `report`'s file is a path and
-///   its summary one line [`Summary`] admits, and `handoff`'s recipient is a
-///   peer id.
-/// - fails: [`UsageError::Arguments`] for any option but `--state` or for
-///   `--state` without a value, [`UsageError::NoCommand`] when no verb follows
+///   wins) and optionally `--relay n0` or `--relay off` (the last one given
+///   wins; [`Relay::N0`] when absent) followed by a verb and exactly the
+///   operands that verb takes, or, for `serve`, `present`, `sync`, `whence`,
+///   `dispatch`, `replay`, `evidence`, `drift`, `judge`, `playbook` and
+///   `rubric`, what [`serve_command`], [`present_command`], [`sync_command`],
+///   [`whence_command`], [`dispatch_command`], [`replay_command`],
+///   [`drift_command`], [`judge_command`] and [`strategy_command`] read. Other
+///   verbs' operands are taken verbatim, so a note's text, a datum or a summary
+///   beginning with `-` is a text, not an option. A tree operand is a bare
+///   anchor in the key form, `bind`'s anchor names a path in the key form,
+///   `claim`'s DNS name and `introduce`'s label are read as [`read_name`] reads
+///   them, `bind`'s target is read as [`read_target`] reads it, `withdraw`
+///   withdraws this peer's own presence unless a peer id follows the tree,
+///   `report`'s file is a path and its summary one line [`Summary`] admits, and
+///   `handoff`'s recipient is a peer id.
+/// - fails: [`UsageError::Arguments`] for any option but `--state` and
+///   `--relay` or for either without a value, [`UsageError::Relay`] for a relay
+///   other than `n0` and `off`, [`UsageError::NoCommand`] when no verb follows
 ///   the options, [`UsageError::Command`] for an unknown verb,
 ///   [`UsageError::State`] when `--state` is absent, [`UsageError::Operands`]
 ///   for too few or too many operands, checked before any operand is read,
@@ -1691,7 +1708,9 @@ enum RunError
 ///   fixtures independently compare accepted operands and named refusals.
 ///
 /// # Errors
-/// - [`UsageError::Arguments`]: an unknown option, or `--state` lacks a value.
+/// - [`UsageError::Arguments`]: an unknown option, or `--state` or `--relay`
+///   lacks a value.
+/// - [`UsageError::Relay`]: `--relay` is neither `n0` nor `off`.
 /// - [`UsageError::NoCommand`]: no verb follows the options.
 /// - [`UsageError::Command`]: the verb is unknown.
 /// - [`UsageError::State`]: `--state` is absent.
@@ -1722,26 +1741,34 @@ enum RunError
 /// # Adequacy
 /// - hypothesis: L3 — each verb with its operands, every bind target kind, a
 ///   bare, a path and a commit anchor to resolve in each of the three forms and
-///   an abbreviated commit, both `--state` spellings, `serve` and `present`
-///   with and without a port, `serve` with a surface, `withdraw` with and
-///   without a peer, `sync` with and without a peer and an endpoint, `whence`
-///   with and without witnesses, a scope, a peer, an endpoint and `--local`,
-///   `dispatch` by anchor and by content with and without `--at`, `report`,
-///   `handoff`, `retire`, `replay` toward the seat, a peer and `--local`,
-///   `drift` with its options before and after its operand, `judge ask` and
-///   `judge verdict`, `playbook validate` and `run` and `rubric validate` and
-///   `grade` with and without their options, and a dash-leading note, datum and
-///   summary separate the accepted lines, and one line per refusal pins which
-///   refusal each malformation gets, including an arity error that wins over a
-///   malformed operand.
+///   an abbreviated commit, both `--state` spellings, `--relay off`, `serve`
+///   and `present` with and without a port, `serve` with a surface, `withdraw`
+///   with and without a peer, `sync` with and without a peer and an endpoint,
+///   `whence` with and without witnesses, a scope, a peer, an endpoint and
+///   `--local`, `dispatch` by anchor and by content with and without `--at`,
+///   `report`, `handoff`, `retire`, `replay` toward the seat, a peer and
+///   `--local`, `drift` with its options before and after its operand, `judge
+///   ask` and `judge verdict`, `playbook validate` and `run` and `rubric
+///   validate` and `grade` with and without their options, and a dash-leading
+///   note, datum and summary separate the accepted lines, and one line per
+///   refusal pins which refusal each malformation gets, including an arity
+///   error that wins over a malformed operand.
 /// - witness: `tests::every_verb_reads_its_operands`
 /// - witness: `tests::a_malformed_command_line_is_refused`
 fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
 {
     let mut state = None;
+    let mut relay = Relay::N0;
     let word = loop {
         match arguments.next()? {
             Some(lexopt::Arg::Long("state")) => state = Some(arguments.value()?),
+            Some(lexopt::Arg::Long("relay")) => {
+                relay = match arguments.value()? {
+                    value if value == "n0" => Relay::N0,
+                    value if value == "off" => Relay::Off,
+                    other => return Err(UsageError::Relay(other)),
+                };
+            },
             Some(lexopt::Arg::Value(word)) => break word,
             Some(other) => return Err(UsageError::from(other.unexpected())),
             None => return Err(UsageError::NoCommand),
@@ -1751,47 +1778,91 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
     let state = StateDir::from(PathBuf::from(state.ok_or(UsageError::State)?));
     if verb == Verb::Index {
         let command = Command::Index(index::parse(&mut arguments)?);
-        return Ok(Invocation { state, command });
+        return Ok(Invocation {
+            state,
+            relay,
+            command,
+        });
     }
     if verb == Verb::Provenance {
         let command = Command::Index(index::parse_provenance(&mut arguments)?);
-        return Ok(Invocation { state, command });
+        return Ok(Invocation {
+            state,
+            relay,
+            command,
+        });
     }
     if verb == Verb::Serve {
         let command = serve_command(&mut arguments)?;
-        return Ok(Invocation { state, command });
+        return Ok(Invocation {
+            state,
+            relay,
+            command,
+        });
     }
     if verb == Verb::Dispatch {
         let command = dispatch_command(&mut arguments)?;
-        return Ok(Invocation { state, command });
+        return Ok(Invocation {
+            state,
+            relay,
+            command,
+        });
     }
     if matches!(verb, Verb::Replay | Verb::Evidence) {
         let command = replay_command(&mut arguments, verb)?;
-        return Ok(Invocation { state, command });
+        return Ok(Invocation {
+            state,
+            relay,
+            command,
+        });
     }
     if verb == Verb::Sync {
         let command = sync_command(&mut arguments)?;
-        return Ok(Invocation { state, command });
+        return Ok(Invocation {
+            state,
+            relay,
+            command,
+        });
     }
     if verb == Verb::Present {
         let command = present_command(&mut arguments)?;
-        return Ok(Invocation { state, command });
+        return Ok(Invocation {
+            state,
+            relay,
+            command,
+        });
     }
     if verb == Verb::Whence {
         let command = whence_command(&mut arguments)?;
-        return Ok(Invocation { state, command });
+        return Ok(Invocation {
+            state,
+            relay,
+            command,
+        });
     }
     if verb == Verb::Drift {
         let command = drift_command(&mut arguments)?;
-        return Ok(Invocation { state, command });
+        return Ok(Invocation {
+            state,
+            relay,
+            command,
+        });
     }
     if verb == Verb::Judge {
         let command = judge_command(&mut arguments)?;
-        return Ok(Invocation { state, command });
+        return Ok(Invocation {
+            state,
+            relay,
+            command,
+        });
     }
     if matches!(verb, Verb::Playbook | Verb::Rubric) {
         let command = strategy_command(&mut arguments, verb)?;
-        return Ok(Invocation { state, command });
+        return Ok(Invocation {
+            state,
+            relay,
+            command,
+        });
     }
     let mut raw = arguments.raw_args()?;
     // One more operand than any verb takes is read, so that a surplus is seen.
@@ -1882,7 +1953,11 @@ fn parse(mut arguments: lexopt::Parser) -> Result<Invocation, UsageError>
         },
         (verb, _) => return Err(UsageError::Operands(verb)),
     };
-    Ok(Invocation { state, command })
+    Ok(Invocation {
+        state,
+        relay,
+        command,
+    })
 }
 
 /// Read `sync`'s operand and options from what follows the verb.
@@ -2990,42 +3065,43 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 ///
 /// # Specification
 /// - requires: called within a Tokio runtime.
-/// - ensures: the identity exists beneath the state directory. `id` writes the
-///   endpoint id line, then the peer id line, and opens no store. `open` opens
-///   the store, mints a tree key beneath the state directory, commits the
-///   tree's Open proved by that key for this peer, and writes the tree's anchor
-///   line. `grant`, `note`, `bind`, `claim`, `introduce` and `withdraw` commit
-///   their receipt, under a fresh operation fence, and write the new commit's
-///   id line. `present` binds the endpoint on its port, commits the presence of
-///   the endpoint ([`Node::present`]), closes the endpoint and writes the
-///   commit's id line. `book` writes the tree's book, one `<peer-id> <endpoint>
-///   <commit-id>` line per present peer in key order. `whence` reaches the
-///   trees the reference reads as [`resolve`] specifies, writes a `source` line
-///   for each tree reached at another peer, then what the reference resolves to
-///   ([`Peer::whence`]), asking DNS for a DNS name's candidate trees unless
-///   `--witness` named them: for a path the target bound to it (`anchor
-///   <anchor>`, `endpoint <endpoint-id>` or `datum <text>`) or `unbound`; for a
-///   bare DNS or label anchor the anchor of the tree it names by key; for a
-///   commit `commit <commit-id> admitted`, `commit <commit-id> refused
-///   <reason>`, or `unknown` when the tree holds none. `view` writes the tree's
-///   view, one line per fact ([`domhringr_record_tree::View`]'s display).
-///   `heads` writes the tree's heads, one sorted hex line each. `sync` routes
-///   the dial ([`Peer::route`]), dials the remote at the route's endpoint, and
-///   writes the route's `source` line, the heads after the sync the same way,
-///   then `path <peer-id> <path>` for the path the connection took, having
-///   closed its endpoint. `dispatch` runs as [`dispatch`] specifies, `replay`
-///   as [`replay`] and `evidence` as [`evidence`]. `report` keeps its file's
-///   content as evidence ([`Evidence::commit`]) before any receipt; `report`,
-///   `handoff` and `retire` commit their receipt on the task's current
-///   dispatch, under a fresh operation fence, and write the new commit's id
-///   line. `serve` runs as [`serve`] specifies. `drift` folds the concepts tree
-///   in the local store, closes the store, and writes [`drift::check`]'s report
-///   of it against the two checkouts, one line per finding. `judge ask` writes
-///   `transcript <digest>` for the transcript [`transcript_of`] names, then
-///   rules on its question as [`rulings`] rules. `judge verdict` runs as
-///   [`verdict`] specifies, this peer the judge. `playbook validate`, `rubric
-///   validate`, `playbook run` and `rubric grade` run as
-///   [`strategy::validate_playbook`], [`strategy::validate_rubric`],
+/// - ensures: the identity exists beneath the state directory, and every store
+///   a command opens binds with the invocation's relay choice ([`Relay`]). `id`
+///   writes the endpoint id line, then the peer id line, and opens no store.
+///   `open` opens the store, mints a tree key beneath the state directory,
+///   commits the tree's Open proved by that key for this peer, and writes the
+///   tree's anchor line. `grant`, `note`, `bind`, `claim`, `introduce` and
+///   `withdraw` commit their receipt, under a fresh operation fence, and write
+///   the new commit's id line. `present` binds the endpoint on its port,
+///   commits the presence of the endpoint ([`Node::present`]), closes the
+///   endpoint and writes the commit's id line. `book` writes the tree's book,
+///   one `<peer-id> <endpoint> <commit-id>` line per present peer in key order.
+///   `whence` reaches the trees the reference reads as [`resolve`] specifies,
+///   writes a `source` line for each tree reached at another peer, then what
+///   the reference resolves to ([`Peer::whence`]), asking DNS for a DNS name's
+///   candidate trees unless `--witness` named them: for a path the target bound
+///   to it (`anchor <anchor>`, `endpoint <endpoint-id>` or `datum <text>`) or
+///   `unbound`; for a bare DNS or label anchor the anchor of the tree it names
+///   by key; for a commit `commit <commit-id> admitted`, `commit <commit-id>
+///   refused <reason>`, or `unknown` when the tree holds none. `view` writes
+///   the tree's view, one line per fact ([`domhringr_record_tree::View`]'s
+///   display). `heads` writes the tree's heads, one sorted hex line each.
+///   `sync` routes the dial ([`Peer::route`]), dials the remote at the route's
+///   endpoint, and writes the route's `source` line, the heads after the sync
+///   the same way, then `path <peer-id> <path>` for the path the connection
+///   took, having closed its endpoint. `dispatch` runs as [`dispatch`]
+///   specifies, `replay` as [`replay`] and `evidence` as [`evidence`]. `report`
+///   keeps its file's content as evidence ([`Evidence::commit`]) before any
+///   receipt; `report`, `handoff` and `retire` commit their receipt on the
+///   task's current dispatch, under a fresh operation fence, and write the new
+///   commit's id line. `serve` runs as [`serve`] specifies. `drift` folds the
+///   concepts tree in the local store, closes the store, and writes
+///   [`drift::check`]'s report of it against the two checkouts, one line per
+///   finding. `judge ask` writes `transcript <digest>` for the transcript
+///   [`transcript_of`] names, then rules on its question as [`rulings`] rules.
+///   `judge verdict` runs as [`verdict`] specifies, this peer the judge.
+///   `playbook validate`, `rubric validate`, `playbook run` and `rubric grade`
+///   run as [`strategy::validate_playbook`], [`strategy::validate_rubric`],
 ///   [`strategy::run_playbook`] and [`strategy::grade_rubric`] specify, this
 ///   peer the runner and the judge. Every command ends in
 ///   [`Completion::Success`] but a `drift` whose report holds a finding, which
@@ -3127,12 +3203,17 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 )]
 async fn execute(invocation: Invocation) -> Result<Completion, RunError>
 {
-    let Invocation { state, command } = invocation;
+    let Invocation {
+        state,
+        relay,
+        command,
+    } = invocation;
     let identity = Identity::load_or_create(&state)?;
     let evidence = Evidence::open(&state);
+    let open = |identity| Peer::open(&state, identity).map(|peer| peer.with_relay(relay));
     let emitted = match command {
         Command::Index(command) => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             #[expect(
                 clippy::large_futures,
                 reason = "one bounded nonrecursive CLI request stays inline rather than adding a heap allocation"
@@ -3147,37 +3228,30 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
         )),
         Command::Serve { port, surface } => {
             let indexes = domhringr_record_index::store::Store::open(&state);
-            serve(
-                Peer::open(&state, identity)?,
-                evidence,
-                indexes,
-                port,
-                surface,
-            )
-            .await
+            serve(open(identity)?, evidence, indexes, port, surface).await
         },
         Command::Open => {
             let owner = identity.peer_key();
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             let key = TreeKey::mint(&state)?;
             peer.commit(key.tree(), Receipt::open(&key, owner)?).await?;
             drop(peer);
             emit(&format_args!("{}\n", Anchor::key(key.tree())))
         },
         Command::Grant { tree, to } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             record(&peer, tree, Receipt::grant(tree, to)?).await
         },
         Command::Note { tree, text } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             record(&peer, tree, Receipt::note(tree, text)?).await
         },
         Command::Bind { tree, path, target } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             record(&peer, tree, Receipt::bind(tree, path, target)?).await
         },
         Command::Claim { tree, domain } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             record(&peer, tree, Receipt::claim(tree, domain)?).await
         },
         Command::Introduce {
@@ -3185,11 +3259,11 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             label,
             introduced,
         } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             record(&peer, tree, Receipt::introduce(tree, label, introduced)?).await
         },
         Command::Present { tree, port } => {
-            let node = Peer::open(&state, identity)?.bind(port, &[]).await?;
+            let node = open(identity)?.bind(port, &[]).await?;
             let presented = node.present(tree).await;
             node.close().await;
             drop(node);
@@ -3200,11 +3274,11 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
                 Withdrawn::Own => identity.peer_key(),
                 Withdrawn::Of(peer) => peer,
             };
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             record(&peer, tree, Receipt::withdraw(tree, of)?).await
         },
         Command::Book { tree } => {
-            let view = Peer::open(&state, identity)?.view(tree).await?;
+            let view = open(identity)?.view(tree).await?;
             view.book()
                 .iter()
                 .try_for_each(|(peer, presence)| emit(&format_args!("{peer} {presence}\n")))
@@ -3215,7 +3289,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             scope,
             reach,
         } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             let (sources, resolution) = match witnessing {
                 Witnessing::Dns => resolve(peer, &reference, &Dns::system(), scope, reach).await?,
                 Witnessing::ByHand(witness) => {
@@ -3225,11 +3299,11 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             emit(&format_args!("{sources}{resolution}\n"))
         },
         Command::View { tree } => {
-            let view = Peer::open(&state, identity)?.view(tree).await?;
+            let view = open(identity)?.view(tree).await?;
             emit(&view)
         },
         Command::Transport { tree, edition } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             let view = peer.view(tree).await?;
             drop(peer);
             let Current::Attempt(ref attempt) = *view.task().current()
@@ -3245,11 +3319,11 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             ))
         },
         Command::Heads { tree } => {
-            let heads = Peer::open(&state, identity)?.heads(tree).await?;
+            let heads = open(identity)?.heads(tree).await?;
             emit(&heads)
         },
         Command::Sync { tree, dial } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             let route = peer.route(tree, dial.aim, dial.at).await?;
             let remote = match route {
                 Route::Itself => {
@@ -3279,7 +3353,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             at,
         } => {
             let operator = identity.peer_key();
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             dispatch(peer, operator, tree, seat, edition, brief, at).await
         },
         Command::Report {
@@ -3289,33 +3363,33 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
         } => {
             let bytes = std::fs::read(file).map_err(RunError::Report)?;
             let content = evidence.commit(&Content::from(bytes))?;
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             on_current(peer, tree, |dispatch| {
                 Receipt::report(tree, dispatch, content, summary)
             })
             .await
         },
         Command::Handoff { tree, to } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             on_current(peer, tree, |dispatch| Receipt::handoff(tree, dispatch, to)).await
         },
         Command::Retire { tree } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             on_current(peer, tree, |dispatch| Receipt::retire(tree, dispatch)).await
         },
         Command::Pause { tree } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             on_current(peer, tree, |dispatch| Receipt::pause(tree, dispatch)).await
         },
         Command::Replay { tree, replaying } => {
-            replay(Peer::open(&state, identity)?, &evidence, tree, replaying).await
+            replay(open(identity)?, &evidence, tree, replaying).await
         },
         Command::Evidence {
             tree,
             digest,
             reaching,
         } => {
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             self::evidence(peer, &evidence, tree, digest, reaching).await
         },
         Command::Drift {
@@ -3323,7 +3397,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             vault,
             tree,
         } => {
-            let view = Peer::open(&state, identity)?.view(tree).await?;
+            let view = open(identity)?.view(tree).await?;
             let report = drift::check(tree, &view, &public, &vault)?;
             emit(&report)?;
             return Ok(if report.findings().is_empty() {
@@ -3352,7 +3426,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             judging,
         } => {
             let judge = identity.peer_key();
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             let on = Stores {
                 peer: &peer,
                 evidence: &evidence,
@@ -3368,7 +3442,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             judging,
         } => {
             let runner = identity.peer_key();
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             let on = Stores {
                 peer: &peer,
                 evidence: &evidence,
@@ -3382,7 +3456,7 @@ async fn execute(invocation: Invocation) -> Result<Completion, RunError>
             judging,
         } => {
             let judge = identity.peer_key();
-            let peer = Peer::open(&state, identity)?;
+            let peer = open(identity)?;
             let on = Stores {
                 peer: &peer,
                 evidence: &evidence,
@@ -4429,6 +4503,7 @@ mod tests
     use domhringr_record_tree::Path;
     use domhringr_record_tree::PeerKey;
     use domhringr_record_tree::Reference;
+    use domhringr_record_tree::Relay;
     use domhringr_record_tree::Scope;
     use domhringr_record_tree::StateDir;
     use domhringr_record_tree::Static;
@@ -5094,7 +5169,26 @@ mod tests
                 invocation,
                 Invocation {
                     state: state.clone(),
+                    relay: Relay::N0,
                     command
+                },
+                "{line:?}"
+            );
+        }
+        for (line, relay) in [
+            (vec!["--relay", "off", "--state", "dir", "id"], Relay::Off),
+            (
+                vec!["--state=dir", "--relay=off", "--relay", "n0", "id"],
+                Relay::N0,
+            ),
+        ] {
+            let invocation = parse(lexopt::Parser::from_args(line.clone())).unwrap();
+            assert_eq!(
+                invocation,
+                Invocation {
+                    state: state.clone(),
+                    relay,
+                    command: Command::Id
                 },
                 "{line:?}"
             );
@@ -5140,6 +5234,13 @@ mod tests
             refused(line(&["--state"])),
             UsageError::Arguments(_)
         ));
+        assert!(matches!(
+            refused(line(&["--state", "dir", "--relay"])),
+            UsageError::Arguments(_)
+        ));
+        assert!(
+            matches!(refused(line(&["--relay", "on", "--state", "dir", "id"])), UsageError::Relay(value) if value == "on")
+        );
         assert!(matches!(
             refused(line(&["--verbose", "id"])),
             UsageError::Arguments(_)

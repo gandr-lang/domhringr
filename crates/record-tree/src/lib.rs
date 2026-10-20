@@ -261,6 +261,7 @@ pub use node::Node;
 pub use node::ParsePortError;
 pub use node::PresentError;
 pub use node::Protocol;
+pub use node::Relay;
 pub use node::SelectedPath;
 pub use node::SyncError;
 pub use node::Synced;
