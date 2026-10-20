@@ -252,9 +252,12 @@ jobs:
 
   # Always trigger the workflow: a skipped workflow supplies no required
   # check, whereas a skipped job succeeds. Formatting sees docs-only changes.
+  # Dependency updates land through a maintainer's pull request, so a
+  # dependabot pull request runs nothing: the entry jobs and formatting skip,
+  # and the rest skip without `changes`' outputs or without the image.
   changes:
     name: detect changed-file categories
-    if: &not-push ${{ !cancelled() && !failure() && github.event_name != 'push' }}
+    if: &checked-event ${{ !cancelled() && !failure() && github.event_name != 'push' && github.actor != 'dependabot[bot]' }}
     runs-on: *linux
     outputs:
       # Missing bases and failed fetches/diffs force Rust checks, never skip
@@ -289,6 +292,7 @@ jobs:
   # which fails the image reference rather than rebuilding.
   ci-image-tag:
     name: find the CI image for this checkout
+    if: ${{ github.actor != 'dependabot[bot]' }}
     runs-on: *linux
     permissions: *image-read-permissions
     outputs:
@@ -344,7 +348,7 @@ jobs:
   ci-image-ref:
     name: resolve the CI image reference
     needs: [ci-image-tag, ci-image]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.actor != 'dependabot[bot]' }}
     runs-on: *linux
     outputs:
       ref: ${{ steps.resolve.outputs.ref }}
@@ -512,7 +516,7 @@ jobs:
   format-gate:
     name: check formatting and lint gates (treefmt)
     needs: ci-image-ref
-    if: *not-push
+    if: *checked-event
     runs-on: *linux
     permissions: *image-read-permissions
     container: *ci-image # zizmor: ignore[unpinned-images]
