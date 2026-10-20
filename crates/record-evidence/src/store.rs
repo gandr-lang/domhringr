@@ -967,7 +967,7 @@ mod tests
         let content = lines();
         let staged = Staged::new(&content).unwrap();
         assert!(
-            staged.chunks().count() > 1,
+            staged.chunks().nth(1).is_some(),
             "the content spans several chunks"
         );
         let digest = Evidence::open(&state).commit(&content).unwrap();
