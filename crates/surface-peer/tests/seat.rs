@@ -45,7 +45,7 @@ mod tests
     fn peer(state: &Path) -> Command
     {
         let mut command = Command::new(env!("CARGO_BIN_EXE_domhringr-peer"));
-        command.arg("--state").arg(state);
+        command.arg("--relay").arg("off").arg("--state").arg(state);
         command
     }
 
@@ -464,7 +464,7 @@ mod tests
         let (o, s) = (o.path(), s.path());
         let old_peer = || {
             let mut command = Command::new(&binary);
-            command.arg("--state").arg(s);
+            command.arg("--relay").arg("off").arg("--state").arg(s);
             command
         };
         let s_id = finish(old_peer().arg("id"));

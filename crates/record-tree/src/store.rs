@@ -45,6 +45,7 @@ use crate::identity::Identity;
 use crate::identity::StateDir;
 use crate::name::Domain;
 use crate::name::Label;
+use crate::node::Relay;
 use crate::presence::Aim;
 use crate::presence::At;
 use crate::presence::Route;
@@ -159,6 +160,8 @@ pub struct Peer
     identity: Identity,
     /// The runtime the engine's tasks and its connections' tasks run on.
     runtime: tokio::runtime::Handle,
+    /// Whether the endpoint it binds reaches n0's relay and DNS.
+    relay: Relay,
 }
 
 impl Peer
@@ -166,11 +169,11 @@ impl Peer
     /// Open the tree store beneath `state` and start its engine.
     ///
     /// # Specification
-    /// - requires: called from within a Tokio runtime, which runs the engine.
     /// - ensures: the store's redb file exists beneath `state` and is held by
     ///   this peer; the engine signs with `identity`'s signer and admits every
     ///   peer and every write (the open policy): authority is the fold's
-    ///   concern ([`Peer::view`]), not storage's.
+    ///   concern ([`Peer::view`]), not storage's. The peer binds with
+    ///   [`Relay::N0`] until [`Peer::with_relay`] says otherwise.
     /// - fails: [`OpenError::Runtime`] outside a Tokio runtime,
     ///   [`OpenError::Storage`] when the store cannot be created or opened,
     ///   including when another process holds it.
@@ -211,7 +214,32 @@ impl Peer
             storage,
             identity,
             runtime,
+            relay: Relay::N0,
         })
+    }
+
+    /// This peer, binding with `relay` ([`Peer::bind`]).
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub const fn with_relay(
+        mut self,
+        relay: Relay,
+    ) -> Self
+    {
+        self.relay = relay;
+        self
+    }
+
+    /// Whether the endpoint this peer binds reaches n0's relay and DNS.
+    ///
+    /// # Specification
+    /// trivial.
+    pub(crate) const fn relay(&self) -> Relay
+    {
+        self.relay
     }
 
     /// The identity this peer signs with and binds its endpoint to.

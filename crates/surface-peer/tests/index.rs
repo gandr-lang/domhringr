@@ -207,6 +207,7 @@ mod tests
             let port = free_port();
             let holder = domhringr_record_tree::Peer::open(&state, identity)
                 .unwrap()
+                .with_relay(domhringr_record_tree::Relay::Off)
                 .bind(
                     domhringr_record_tree::BindPort::Fixed(port.parse().unwrap()),
                     &[domhringr_record_index::stream::PROTOCOL],
@@ -259,7 +260,7 @@ mod tests
     fn peer(state: &Path) -> Command
     {
         let mut command = Command::new(env!("CARGO_BIN_EXE_domhringr-peer"));
-        command.arg("--state").arg(state);
+        command.arg("--relay").arg("off").arg("--state").arg(state);
         command
     }
 

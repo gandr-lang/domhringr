@@ -190,7 +190,7 @@ mod tests
     fn peer(state: &Path) -> Command
     {
         let mut command = Command::new(env!("CARGO_BIN_EXE_domhringr-peer"));
-        command.arg("--state").arg(state);
+        command.arg("--relay").arg("off").arg("--state").arg(state);
         command
     }
 

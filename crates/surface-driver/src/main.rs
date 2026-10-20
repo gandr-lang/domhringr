@@ -20,7 +20,9 @@
 //! and `.`, not beginning with `.` — or the anchor of its path,
 //! `domhringr://<project-id>/tasks/<name>`. The operator's keys and store live
 //! in the state directory `DOMHRINGR_STATE` names, or else in `domhringr`
-//! beneath `XDG_STATE_HOME`, or else beneath `$HOME/.local/state`.
+//! beneath `XDG_STATE_HOME`, or else beneath `$HOME/.local/state`. Its
+//! endpoint reaches n0's relay and DNS unless `DOMHRINGR_RELAY` is `off`:
+//! then it is reached at its direct addresses and through mDNS alone.
 //!
 //! `open` prints `project <anchor>`, then `seat <peer-id> <endpoint>
 //! <commit-id>` for each peer present in the project's book but this one,
@@ -358,6 +360,7 @@ use domhringr_record_tree::Path;
 use domhringr_record_tree::Peer;
 use domhringr_record_tree::PeerKey;
 use domhringr_record_tree::RandomError;
+use domhringr_record_tree::Relay;
 use domhringr_record_tree::Revision;
 use domhringr_record_tree::StateDir;
 use domhringr_record_tree::TreeId;
@@ -395,6 +398,9 @@ const STATE: &str = "DOMHRINGR_STATE";
 
 /// The variable naming the project, when `--project` does not.
 const PROJECT: &str = "DOMHRINGR_PROJECT";
+
+/// The variable that, set to `off`, keeps the endpoint off n0's relay and DNS.
+const RELAY: &str = "DOMHRINGR_RELAY";
 
 /// A command, its operands and its options, read from the command line.
 #[derive(Debug, PartialEq, Eq)]
@@ -715,6 +721,9 @@ enum RunError
     /// `DOMHRINGR_PROJECT` names no project.
     #[error("cannot read {PROJECT}")]
     Project(#[source] ParseProjectError),
+    /// `DOMHRINGR_RELAY` is neither `n0` nor `off`.
+    #[error("{RELAY} must be n0 or off, not {0:?}")]
+    Relay(std::ffi::OsString),
     /// The identity cannot be read or created.
     #[error(transparent)]
     Identity(#[from] IdentityError),
@@ -1142,6 +1151,8 @@ struct Settings
     state: StateDir,
     /// The project.
     project: TreeId,
+    /// Whether the endpoint reaches n0's relay and DNS.
+    relay: Relay,
 }
 
 /// Resolve `project` and the state directory from the environment.
@@ -1150,11 +1161,13 @@ struct Settings
 /// - ensures: the state directory is `DOMHRINGR_STATE`, or else `domhringr`
 ///   beneath `XDG_STATE_HOME`, or else `.local/state/domhringr` beneath `HOME`,
 ///   an empty variable counting as unset; the project is the one `--project`
-///   named, or else the one `DOMHRINGR_PROJECT` names.
+///   named, or else the one `DOMHRINGR_PROJECT` names; the relay is
+///   [`Relay::Off`] when `DOMHRINGR_RELAY` is `off`, else [`Relay::N0`].
 /// - fails: [`RunError::NoState`] when no variable names a state directory,
-///   [`RunError::NoProject`] when nothing names a project, and
+///   [`RunError::NoProject`] when nothing names a project,
 ///   [`RunError::Project`] when `DOMHRINGR_PROJECT` is no bare anchor in the
-///   key form.
+///   key form, and [`RunError::Relay`] when `DOMHRINGR_RELAY` is set to neither
+///   `n0` nor `off`.
 /// - panics: none.
 /// - executable: none — environment precedence depends on process state;
 ///   process witnesses isolate the operator's environment.
@@ -1183,9 +1196,16 @@ fn settings(project: Project) -> Result<Settings, RunError>
             read_project(&text).map_err(RunError::Project)?
         },
     };
+    let relay = match set(RELAY) {
+        None => Relay::N0,
+        Some(value) if value == "n0" => Relay::N0,
+        Some(value) if value == "off" => Relay::Off,
+        Some(other) => return Err(RunError::Relay(other)),
+    };
     Ok(Settings {
         state: StateDir::from(state),
         project,
+        relay,
     })
 }
 
@@ -1241,11 +1261,15 @@ fn run(invocation: Invocation) -> Result<Completion, RunError>
 async fn execute(invocation: Invocation) -> Result<Completion, RunError>
 {
     let Invocation { project, command } = invocation;
-    let Settings { state, project } = settings(project)?;
+    let Settings {
+        state,
+        project,
+        relay,
+    } = settings(project)?;
     let identity = Identity::load_or_create(&state)?;
     let operator = identity.peer_key();
     let evidence = Evidence::open(&state);
-    let peer = Peer::open(&state, identity)?;
+    let peer = Peer::open(&state, identity)?.with_relay(relay);
     Box::pin(act(peer, &state, &evidence, operator, project, command)).await
 }
 

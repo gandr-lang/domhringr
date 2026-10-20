@@ -448,6 +448,7 @@ rm -rf "$work"
             let operator = Arc::new(
                 Peer::open(&operator_state, identity)
                     .unwrap()
+                    .with_relay(domhringr_record_tree::Relay::Off)
                     .bind(BindPort::Fixed(port), &[])
                     .await
                     .unwrap(),
@@ -480,6 +481,7 @@ rm -rf "$work"
                 let node = Arc::new(
                     Peer::open(&state, identity)
                         .unwrap()
+                        .with_relay(domhringr_record_tree::Relay::Off)
                         .bind(BindPort::Fixed(port), &[
                             PROTOCOL,
                             domhringr_record_evidence::PROTOCOL,
@@ -522,6 +524,7 @@ rm -rf "$work"
             let _configured = command
                 .env("DOMHRINGR_STATE", root.join("operator"))
                 .env("DOMHRINGR_PROJECT", Anchor::key(self.project).to_string())
+                .env("DOMHRINGR_RELAY", "off")
                 .env("GIT_CONFIG_GLOBAL", root.join("gitconfig"))
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .env("GIT_AUTHOR_NAME", "operator")

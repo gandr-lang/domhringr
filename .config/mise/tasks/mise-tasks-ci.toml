@@ -174,13 +174,33 @@ done
 
 # Head checks and merge-group checks are separate runs. Watch the queue entry
 # as well as the pull request; green head checks alone do not prove landing.
+# The entry runs every workflow with a merge_group trigger; each is reported.
+#
+# The pull request's title becomes the header of its merge commit on main.
+# Open the pull request with `gh pr create --title '<type>(<scope>):
+# <subject>' --body-file <file>`: a conventional header of at most 72
+# characters, its type and scope from commitlint.config.mjs. Never `--fill` on
+# a branch of several commits: it titles the pull request with the branch
+# name.
+#
+# A stack lands whole: `pr:land --stack` restacks the current branch's stack
+# onto `origin/main` (`gh stack rebase`), pushes every branch it moved
+# (`gh stack push`), and queues the stack as one unit (`gh stack merge`), then
+# waits on the top pull request, as the queue merges the stack all or none.
+# Without `--stack`, a pull request whose base is another branch is refused:
+# it is not the bottom of its stack, and the queue takes main-based ones only.
 ["pr:land"]
 description = "Enable auto-merge and wait for the merge queue outcome"
-usage = 'arg "[number]" help="pull request number; defaults to the current branch"'
+usage = '''
+arg "[number]" help="pull request number; defaults to the current branch"
+flag "--stack" help="restack, push and queue the current branch's whole stack"
+'''
 run = '''
 {% raw %}#!/usr/bin/env bash
 set -euo pipefail
 number=${usage_number:-}
+stack=${usage_stack:-false}
+if [[ "$stack" == true && -n "$number" ]]; then echo '`--stack` lands the current branch'"'"'s stack; run it without a number' >&2; exit 2; fi
 if [[ -z "$number" ]]; then number=$(gh pr view --json number --jq .number); fi
 [[ "$number" =~ ^[1-9][0-9]*$ ]] || { echo 'Expected a pull request number' >&2; exit 2; }
 repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
@@ -204,8 +224,17 @@ queue_state() {
       }
     }" --jq '.data.repository.pullRequest | [.isInMergeQueue, (.mergeQueueEntry.state // "-"), (.mergeQueueEntry.position // 0)] | @tsv'
 }
-group_run() {
-  gh run list -R "$repo" --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url,status --jq "[.[] | select(.headBranch | split(\"/\") | last | startswith(\"pr-$number-\"))][0] // empty | [.databaseId, .url, .status, .conclusion] | @tsv"
+# Every workflow's run for the pull request's newest queue entry, one per line.
+group_runs() {
+  gh run list -R "$repo" --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url,status --jq "[.[] | select(.headBranch | split(\"/\") | last | startswith(\"pr-$number-\"))] | (.[0].headBranch // empty) as \$entry | .[] | select(.headBranch == \$entry) | [.databaseId, .url, .status, .conclusion] | @tsv"
+}
+# Succeeds once the entry has runs and every one of them has completed.
+settled() {
+  local run_id url run_status conclusion
+  [[ -n "$1" ]] || return 1
+  while IFS=$'\t' read -r run_id url run_status conclusion; do
+    [[ "$run_status" == completed ]] || return 1
+  done <<< "$1"
 }
 job_times() {
   gh run view "$1" -R "$repo" --json jobs --jq '.jobs[] | [.name, (if .conclusion == "skipped" then "0s" elif .startedAt == null or .completedAt == null or .startedAt == "" or .completedAt == "" then "pending" else (((.completedAt | fromdateiso8601) - (.startedAt | fromdateiso8601)) | tostring) + "s" end), .conclusion] | @tsv'
@@ -242,14 +271,57 @@ conflicts() {
   echo "rebase onto main once they merge, then run \`pr:land\` again"
 }
 
+# A branch behind main enters the queue only to come back UNMERGEABLE or to
+# fail on what landed ahead of it, so the current branch is rebased onto
+# `origin/main` and pushed before the queue sees it. The queue then runs CI on
+# the merged result, which is the re-verification; a clean rebase runs no
+# local gate again. A rebase that conflicts stops here for a hand. A stack
+# restacks whole, every branch moved with the one below it, or the branches
+# above lose the commits under them and the stack refuses to merge.
+if [[ "$stack" == true ]]; then
+  gh stack rebase || { gh stack rebase --abort; echo 'the restack onto origin/main conflicts; resolve it, run the hooks, and run `pr:land --stack` again' >&2; exit 1; }
+  gh stack push
+  layout=$(gh stack view --json)
+  top=$(jq -r '.branches[-1].name' <<< "$layout")
+  number=$(gh pr view "$top" -R "$repo" --json number --jq .number)
+  # GitHub holds no stack of one branch, so its pull request lands alone.
+  if (( $(jq '[.branches[] | select(.isMerged | not)] | length' <<< "$layout") > 1 )); then
+    gh stack merge --yes --merge
+  else
+    stack=false
+  fi
+else
+  base=$(gh pr view "$number" -R "$repo" --json baseRefName --jq .baseRefName)
+  trunk=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
+  if [[ "$base" != "$trunk" ]]; then
+    echo "PR #$number is not the bottom of the stack: its base is $base; land the stack with \`pr:land --stack\`" >&2
+    exit 2
+  fi
+  if [[ -z "${usage_number:-}" ]]; then
+    layers=$(gh stack view --json 2> /dev/null | jq '[.branches[] | select(.isMerged | not)] | length') || layers=0
+    if (( ${layers:-0} > 1 )); then
+      echo "the current branch is in a stack of $layers; land it with \`pr:land --stack\`" >&2
+      exit 2
+    fi
+    git fetch --quiet origin main
+    if ! git merge-base --is-ancestor origin/main HEAD; then
+      git rebase --quiet --update-refs origin/main || { git rebase --abort; echo 'the rebase onto origin/main conflicts; resolve it, run the hooks, and run `pr:land` again' >&2; exit 1; }
+      git push --quiet --force-with-lease
+    fi
+  fi
+fi
+
 initial=$(pr_state)
 IFS=$'\t' read -r state mergeable merge_status auto commit base check_count <<< "$initial"
 entry=$(queue_state)
 IFS=$'\t' read -r in_queue queue_status position <<< "$entry"
 if [[ "$in_queue" == true ]]; then queued=true; fi
-if [[ "$state" == OPEN && "$auto" == false && "$in_queue" == false ]]; then
+if [[ "$stack" == false && "$state" == OPEN && "$auto" == false && "$in_queue" == false ]]; then
   gh pr merge "$number" -R "$repo" --merge --auto
 fi
+# The seat's wake-up: run as a deferred job, `pr:watch` exits with one line
+# the moment the pull request needs a hand or has landed.
+printf "arm: /bin/bash -c 'mise run pr:watch %s' timer-pr-%s\n" "$number" "$number"
 while (( SECONDS < deadline )); do
   snapshot=$(pr_state)
   IFS=$'\t' read -r state mergeable merge_status auto commit base check_count <<< "$snapshot"
@@ -262,30 +334,34 @@ while (( SECONDS < deadline )); do
   fi
   if [[ "$in_queue" == true ]]; then queued=true; fi
   if [[ "$state" == MERGED ]]; then
-    run=$(group_run)
-    if [[ -n "$run" ]]; then
-      IFS=$'\t' read -r run_id url run_status conclusion <<< "$run"
-      if [[ "$run_status" == completed ]]; then
-        printf 'Merged PR #%s: %s\nMerge-group run: %s\n' "$number" "$commit" "$url"
+    entry_runs=$(group_runs)
+    if settled "$entry_runs"; then
+      printf 'Merged PR #%s: %s\n' "$number" "$commit"
+      while IFS=$'\t' read -r -u 3 run_id url run_status conclusion; do
+        printf 'Merge-group run: %s\n' "$url"
         job_times "$run_id"
-        exit 0
-      fi
+      done 3<<< "$entry_runs"
+      exit 0
     fi
   elif [[ "$queue_status" == UNMERGEABLE ]]; then
     conflicts
     exit 3
   elif [[ "$state" == CLOSED || ( "$queued" == true && "$in_queue" == false && "$auto" == false ) ]]; then
-    run=$(group_run)
-    if [[ -n "$run" ]]; then
-      IFS=$'\t' read -r run_id url run_status conclusion <<< "$run"
-      if [[ "$run_status" == completed ]]; then
-        printf 'PR #%s dequeued or closed. Merge-group run: %s (%s)\n' "$number" "$url" "$conclusion"
-        job_times "$run_id"
-        if [[ "$conclusion" == failure ]]; then
-          gh run view "$run_id" -R "$repo" --log-failed
-        else
-          gh run view "$run_id" -R "$repo" --log
-        fi
+    entry_runs=$(group_runs)
+    if [[ -n "$entry_runs" ]]; then
+      if settled "$entry_runs"; then
+        printf 'PR #%s dequeued or closed.\n' "$number"
+        # A failed run's failed steps explain the removal; with none failed,
+        # every run's whole log does.
+        while IFS=$'\t' read -r -u 3 run_id url run_status conclusion; do
+          printf 'Merge-group run: %s (%s)\n' "$url" "$conclusion"
+          job_times "$run_id"
+          if [[ "$conclusion" == failure ]]; then
+            gh run view "$run_id" -R "$repo" --log-failed
+          elif [[ "$entry_runs" != *$'\t'failure* ]]; then
+            gh run view "$run_id" -R "$repo" --log
+          fi
+        done 3<<< "$entry_runs"
         exit 1
       fi
     else
@@ -318,6 +394,142 @@ while (( SECONDS < deadline )); do
   sleep 30
 done
 printf 'Timed out after 90 minutes: PR #%s %s\n' "$number" "$previous" >&2
+exit 2
+{% endraw %}
+'''
+
+# The wake-up a seat arms after `pr:land`: it polls the pull request and its
+# queue entry and exits the moment one of these holds, printing one line and
+# nothing else on stdout:
+#   pr-merged #n               landed (exit 0)
+#   pr-closed #n               closed without merging
+#   pr-dirty #n                a landing ahead conflicts: rebase, `pr:land`
+#   pr-red #n <job>            a required check, or the queue entry's run,
+#                              concluded failure: read the named job's log
+#   pr-dequeued #n <reason> <above>
+#                              the entry left the queue, or came back
+#                              UNMERGEABLE: read the entry's run. <above>
+#                              names the stack over it: `above-none` with
+#                              nothing stacked on it, else `above-ejected
+#                              #a …` for the open pull requests above that
+#                              left the queue with it and `above-queued #b …`
+#                              for any still in it
+#   pr-timeout #n              the deadline passed (exit 2)
+# The merge-queue entry is the only truth for a dequeue: a stack is queued as a
+# unit and never sets auto-merge, so a pull request not yet seen in the queue
+# is waited on, not reported. A BLOCKED pull request with checks still running
+# is no event. An entry the queue removes because it merged is waited out
+# until the state reads MERGED.
+["pr:watch"]
+description = "Wait for the one event that needs a hand on a pull request"
+quiet = true
+usage = '''
+arg "<number>" help="pull request number"
+flag "--timeout <seconds>" default="10800" help="give up after this many seconds"
+'''
+run = '''
+{% raw %}#!/usr/bin/env bash
+set -euo pipefail
+number=${usage_number:?}
+timeout=${usage_timeout:-10800}
+[[ "$number" =~ ^[1-9][0-9]*$ ]] || { echo 'Expected a pull request number' >&2; exit 2; }
+[[ "$timeout" =~ ^[0-9]+$ ]] || { echo 'Expected --timeout in seconds' >&2; exit 2; }
+repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+owner=${repo%/*}
+name=${repo#*/}
+deadline=$((SECONDS + timeout))
+seen_queued=false
+# A reading out of the queue after one in it counts only when the next poll
+# repeats it, so a moment between readings is no removal.
+gone=0
+
+# State, merge state, queued, the entry's state and head, the last removal.
+snapshot() {
+  gh api graphql -f owner="$owner" -f name="$name" -F number="$number" -f query="
+    query(\$owner: String!, \$name: String!, \$number: Int!) {
+      repository(owner: \$owner, name: \$name) {
+        pullRequest(number: \$number) {
+          state mergeStateStatus isInMergeQueue
+          mergeQueueEntry { state headCommit { oid } }
+          timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {
+            nodes { ... on RemovedFromMergeQueueEvent { reason } }
+          }
+        }
+      }
+    }" --jq '.data.repository.pullRequest | [.state, .mergeStateStatus, .isInMergeQueue, (.mergeQueueEntry.state // "-"), (.mergeQueueEntry.headCommit.oid // "-"), ((.timelineItems.nodes[0].reason // "") | if . == "" then "-" else ascii_downcase end)] | @tsv'
+}
+# The first failed required check on the head, if any.
+red_check() {
+  local status=0 failed
+  failed=$(gh pr checks "$number" -R "$repo" --required --json bucket,name --jq '[.[] | select(.bucket == "fail" or .bucket == "cancel") | .name] | first // empty') || status=$?
+  # 1: some check failed; 8: some check pending.
+  if [[ "$status" != 0 && "$status" != 1 && "$status" != 8 ]]; then return "$status"; fi
+  printf '%s' "$failed"
+}
+# The open pull requests stacked above this one, bottom first: each one's base
+# is the branch of the one below it.
+stacked_above() {
+  local branch next above
+  branch=$(gh pr view "$number" -R "$repo" --json headRefName --jq .headRefName)
+  for _layer in $(seq 64); do
+    next=$(gh pr list -R "$repo" --state open --base "$branch" --json number,headRefName --jq 'first // empty | [.number, .headRefName] | @tsv')
+    [[ -n "$next" ]] || return 0
+    IFS=$'\t' read -r above branch <<< "$next"
+    printf '%s\n' "$above"
+  done
+}
+# Whether the stack above left the queue with this pull request.
+above_word() {
+  local above ejected='' kept='' in_queue
+  while IFS= read -r above; do
+    [[ -n "$above" ]] || continue
+    in_queue=$(gh api graphql -f owner="$owner" -f name="$name" -F number="$above" -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { isInMergeQueue } } }' --jq .data.repository.pullRequest.isInMergeQueue)
+    if [[ "$in_queue" == true ]]; then kept+=" #$above"; else ejected+=" #$above"; fi
+  done <<< "$(stacked_above)"
+  if [[ -z "$ejected$kept" ]]; then printf 'above-none'; return; fi
+  [[ -z "$ejected" ]] || printf 'above-ejected%s' "$ejected"
+  [[ -z "$ejected" || -z "$kept" ]] || printf ' '
+  [[ -z "$kept" ]] || printf 'above-queued%s' "$kept"
+}
+# The first failed job of a run the queue entry's head started, if any.
+red_entry() {
+  local run_id job
+  for run_id in $(gh run list -R "$repo" --event merge_group --commit "$1" --json databaseId,conclusion --jq '.[] | select(.conclusion == "failure") | .databaseId'); do
+    job=$(gh run view "$run_id" -R "$repo" --json jobs --jq '[.jobs[] | select(.conclusion == "failure") | .name] | first // empty')
+    if [[ -n "$job" ]]; then printf '%s' "$job"; return; fi
+  done
+}
+
+while (( SECONDS < deadline )); do
+  # A failed read is no event; the next poll reads again.
+  if ! reading=$(snapshot) || [[ -z "$reading" ]]; then sleep 60; continue; fi
+  IFS=$'\t' read -r state merge_status in_queue entry_state entry_head removed <<< "$reading"
+  if [[ "$in_queue" == true ]]; then seen_queued=true; fi
+  case "$state" in
+    MERGED) echo "pr-merged #$number"; exit 0 ;;
+    CLOSED) echo "pr-closed #$number"; exit 1 ;;
+    OPEN) ;;
+    *) echo "unexpected pull request state: $state" >&2; exit 2 ;;
+  esac
+  if [[ "$merge_status" == DIRTY ]]; then echo "pr-dirty #$number"; exit 1; fi
+  job=$(red_check) || job=
+  if [[ -z "$job" && "$entry_head" != - ]]; then job=$(red_entry "$entry_head") || job=; fi
+  if [[ -n "$job" ]]; then echo "pr-red #$number $job"; exit 1; fi
+  if [[ "$entry_state" == UNMERGEABLE ]]; then echo "pr-dequeued #$number unmergeable $(above_word)"; exit 1; fi
+  # Out of the queue after it was in it; a removal because it merged settles
+  # to MERGED on a later poll.
+  if [[ "$seen_queued" == true && "$in_queue" == false && "$removed" != merged ]]; then
+    gone=$((gone + 1))
+  else
+    gone=0
+  fi
+  if (( gone >= 2 )); then
+    echo "pr-dequeued #$number ${removed/#-/removed} $(above_word)"
+    exit 1
+  fi
+  sleep 60
+done
+echo "pr-timeout #$number"
 exit 2
 {% endraw %}
 '''

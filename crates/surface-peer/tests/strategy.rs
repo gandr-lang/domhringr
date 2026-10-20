@@ -121,7 +121,7 @@ question = { rubric = "rubric.toml", question = "tested" }
     fn peer(state: &Path) -> Command
     {
         let mut command = Command::new(env!("CARGO_BIN_EXE_domhringr-peer"));
-        let _command = command.arg("--state").arg(state);
+        let _command = command.arg("--relay").arg("off").arg("--state").arg(state);
         command
     }
 
