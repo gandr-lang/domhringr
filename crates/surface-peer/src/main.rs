@@ -588,14 +588,6 @@
     dylint_lib = "quenchant_dylints",
     deny(option_signature, option_field, primitive_arithmetic)
 )]
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    expect(
-        allocation_in_repeated_body,
-        reason = "1 cost-shape site; #35 lists it"
-    )
-)]
-
 extern crate alloc;
 
 mod drift;
@@ -3602,6 +3594,13 @@ where
 /// - hypothesis: L3 — book routing supplies the source line and ceases to reach
 ///   a peer after withdrawal.
 /// - witness: `presence::tests::a_peer_is_reached_through_the_book_until_it_withdraws`
+#[cfg_attr(
+    dylint_lib = "quenchant_dylints",
+    expect(
+        allocation_in_repeated_body,
+        reason = "bounded: one source line per tree one reference's resolution reaches, a handful per path"
+    )
+)]
 async fn sync_routes(
     node: &Node,
     routes: Vec<Reached>,

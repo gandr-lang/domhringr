@@ -4,14 +4,6 @@
 //! name, and once the seat has lost a chunk a reader is refused naming that
 //! chunk, printing nothing and keeping nothing.
 
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    expect(
-        allocation_in_repeated_body,
-        reason = "1 cost-shape site; #35 lists it"
-    )
-)]
-
 #[cfg(test)]
 mod tests
 {
@@ -420,7 +412,11 @@ mod tests
         seat.admitted(&o_peer);
         let report_line = replayed
             .iter()
-            .find(|line| line.starts_with(&format!("report {report} ")))
+            .find(|line| {
+                line.strip_prefix("report ")
+                    .and_then(|rest| rest.strip_prefix(report.as_str()))
+                    .is_some_and(|rest| rest.starts_with(' '))
+            })
             .unwrap_or_else(|| panic!("the replay holds the report: {replayed:?}"));
         let fields = report_line.split(' ').collect::<Vec<_>>();
         let ["report", _, on, author, digest, ref summary @ ..] = *fields.as_slice()

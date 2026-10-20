@@ -4,14 +4,6 @@
 //! seat's presence in the book — while each side is killed and started again,
 //! holding its state in its store alone.
 
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    expect(
-        allocation_in_repeated_body,
-        reason = "8 cost-shape sites; #35 lists them"
-    )
-)]
-
 #[cfg(test)]
 mod tests
 {
@@ -462,6 +454,16 @@ mod tests
             .expect("mise run test builds and signs the edition-1-only binary");
         let (o, s) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let (o, s) = (o.path(), s.path());
+        // Whether a line begins with `pieces` written one after another, and
+        // whether it is exactly them: matched in place, never formatted.
+        let rest = |line: &String, pieces: &[&str]| {
+            pieces
+                .iter()
+                .try_fold(line.as_str(), |rest, piece| rest.strip_prefix(piece))
+                .map(str::len)
+        };
+        let begins = |line: &String, pieces: &[&str]| rest(line, pieces).is_some();
+        let spells = |line: &String, pieces: &[&str]| rest(line, pieces) == Some(0);
         let old_peer = || {
             let mut command = Command::new(&binary);
             command.arg("--relay").arg("off").arg("--state").arg(s);
@@ -510,33 +512,37 @@ mod tests
             let b = finish(old_peer().args(["replay", &tree, "--local"]));
             assert!(
                 a.iter()
-                    .any(|line| line.starts_with(&format!("report {report} {dispatch} ")))
+                    .any(|line| begins(line, &["report ", &report, " ", dispatch, " "]))
             );
             assert!(
-                a.iter()
-                    .any(|line| line == &format!("retire {retire} {dispatch} {}", s_id[1]))
+                a.iter().any(|line| {
+                    spells(line, &["retire ", &retire, " ", dispatch, " ", &s_id[1]])
+                })
             );
-            assert!(a.iter().any(|line| line.starts_with(&format!(
-                "refused {late} protocol edition {edition} report:"
-            ))));
-            assert!(
-                !a.iter()
-                    .any(|line| line.starts_with(&format!("report {late} ")))
-            );
+            assert!(a.iter().any(|line| {
+                begins(line, &[
+                    "refused ",
+                    &late,
+                    " protocol edition ",
+                    edition,
+                    " report:",
+                ])
+            }));
+            assert!(!a.iter().any(|line| begins(line, &["report ", &late, " "])));
             if edition == "1" {
                 for replayed in [&a, &b] {
                     assert!(replayed.iter().any(|line| {
-                        line.starts_with(&format!("refused {pause} protocol edition 1 pause:"))
+                        begins(line, &["refused ", &pause, " protocol edition 1 pause:"])
                     }));
                     assert!(
-                        replayed
-                            .iter()
-                            .any(|line| line.starts_with(&format!("report {report} {dispatch} ")))
+                        replayed.iter().any(|line| {
+                            begins(line, &["report ", &report, " ", dispatch, " "])
+                        })
                     );
                     assert!(
                         !replayed
                             .iter()
-                            .any(|line| line.starts_with(&format!("pause {pause} ")))
+                            .any(|line| begins(line, &["pause ", &pause, " "]))
                     );
                 }
                 let heads = finish(peer(o).args(["heads", &tree]));
@@ -548,10 +554,9 @@ mod tests
                 assert_eq!(finish(peer(o).args(["replay", &tree, "--local"])), b);
             }
             else {
-                assert!(
-                    a.iter()
-                        .any(|line| line == &format!("pause {pause} {dispatch} {}", s_id[1]))
-                );
+                assert!(a.iter().any(|line| {
+                    spells(line, &["pause ", &pause, " ", dispatch, " ", &s_id[1]])
+                }));
                 for (commit, movement) in [
                     (dispatch, "dispatch"),
                     (&pause, "pause"),
