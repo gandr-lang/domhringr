@@ -5,25 +5,12 @@
 //! dispatch, and the replay shows them. The rubric set under `rubrics/` is
 //! graded the same way: every rubric validates and grades its fixture pair.
 
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    expect(linear_search_in_loop, reason = "1 cost-shape site; #35 lists it")
-)]
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    expect(
-        allocation_in_repeated_body,
-        reason = "3 cost-shape sites; #35 lists them"
-    )
-)]
-#![cfg_attr(
-    dylint_lib = "quenchant_dylints",
-    expect(clone_in_loop, reason = "2 cost-shape sites; #35 lists them")
-)]
+extern crate alloc;
 
 #[cfg(test)]
 mod tests
 {
+    use alloc::collections::BTreeSet;
     use core::time::Duration;
     use std::io::BufRead as _;
     use std::path::Path;
@@ -353,8 +340,9 @@ question = { rubric = "rubric.toml", question = "tested" }
         let questions = listed
             .iter()
             .map(|line| {
-                let fields = line.split(' ').collect::<Vec<_>>();
-                let ["question", question, hash] = *fields.as_slice()
+                let mut fields = line.split(' ');
+                let (Some("question"), Some(question), Some(hash), None) =
+                    (fields.next(), fields.next(), fields.next(), fields.next())
                 else {
                     panic!("{name}: a question line: {line:?}");
                 };
@@ -954,6 +942,8 @@ question = { rubric = "rubric.toml", question = "tested" }
         )];
         let mut standing = format!("dispatched {} {}", task.dispatch, task.seat);
         let mut held = Vec::new();
+        // The transcripts whose evidence `held` already names.
+        let mut transcripts = BTreeSet::new();
         for file in rubric_files() {
             let Validated {
                 name,
@@ -1000,11 +990,16 @@ question = { rubric = "rubric.toml", question = "tested" }
             let answers = files.join(&name);
             std::fs::write(&answers, table).unwrap();
 
+            // Each member's answers and expected grading lines, refilled per
+            // member.
+            let (mut answered, mut expected) = (Vec::new(), Vec::new());
             for &(member, ref transcript, composed) in &members {
-                let answered = questions
-                    .iter()
-                    .map(|asked| (asked.hash.as_str(), answer(member, &asked.name)))
-                    .collect::<Vec<_>>();
+                answered.clear();
+                answered.extend(
+                    questions
+                        .iter()
+                        .map(|asked| (asked.hash.as_str(), answer(member, &asked.name))),
+                );
                 let graded = finish(
                     peer(o)
                         .args(["rubric", "grade"])
@@ -1020,20 +1015,17 @@ question = { rubric = "rubric.toml", question = "tested" }
                     .and_then(|line| line.strip_prefix("verdict "))
                     .unwrap_or_else(|| {
                         panic!("{name} over its {member} state commits a verdict: {graded:?}")
-                    })
-                    .to_owned();
+                    });
                 let grading = graded
                     .last()
                     .and_then(|line| line.strip_prefix("graded "))
                     .and_then(|rest| rest.split(' ').next())
                     .unwrap_or_else(|| {
                         panic!("{name} is graded over its {member} state: {graded:?}")
-                    })
-                    .to_owned();
-                let mut expected = vec![
-                    format!("rubric {rubric} {name}"),
-                    format!("transcript {transcript}"),
-                ];
+                    });
+                expected.clear();
+                expected.push(format!("rubric {rubric} {name}"));
+                expected.push(format!("transcript {transcript}"));
                 expected.extend(
                     answered
                         .iter()
@@ -1070,9 +1062,8 @@ question = { rubric = "rubric.toml", question = "tested" }
                         .map(|&(hash, (_, grade))| format!("grade {grading} {hash} {grade}")),
                 );
                 standing = format!("graded {} {grading} {composed}", task.dispatch);
-                let line = format!("evidence {transcript} held");
-                if !held.contains(&line) {
-                    held.push(line);
+                if transcripts.insert(transcript.clone()) {
+                    held.push(format!("evidence {transcript} held"));
                 }
             }
         }
