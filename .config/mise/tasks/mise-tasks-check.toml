@@ -292,9 +292,9 @@ fi
 
 # The claim lifecycle (`.config/claims/decide.jq`, gandr-lang/gandr#1270)
 # picks the claims that come off. Each case in `.config/claims/cases.json`
-# holds an input and the removals it must give: a merge's `Advances` targets,
-# the tracking and epic sweep, 24 hours of silence, and an open pull request
-# that keeps a claim.
+# holds an input and the removals it must give: a merge's `Advances` and
+# closing targets, the closed, tracking and epic sweep, 24 hours of silence,
+# and an open pull request that keeps a claim.
 ["check:claims"]
 description = "The claim lifecycle gives each recorded case its removals"
 tools.jq = "1.8.1"

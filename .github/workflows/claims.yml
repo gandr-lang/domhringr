@@ -6,12 +6,13 @@
 # </critical>
 name: claims
 
-# `status:claimed` means a seat is on the issue now (gandr-lang/gandr#1270). The claim comes
-# off when a merged pull request's body says `Advances #n`, on 24 hours of
-# silence with no open pull request naming the issue, and always on a
-# `kind:tracking` or `kind:epic` issue. `.config/claims/claims.sh` reads,
-# decides (`decide.jq`) and removes; the removals are printed in the run log
-# and nothing is posted on an issue.
+# `status:claimed` means a seat is on the issue now (gandr-lang/gandr#1270). The
+# claim comes off when a merged pull request's body says `Advances #n` or
+# closes the issue, when the issue is closed, on 24 hours of silence with no
+# open pull request naming the issue, and always on a `kind:tracking` or
+# `kind:epic` issue. `.config/claims/claims.sh` reads, decides (`decide.jq`)
+# and removes; the removals are printed in the run log and nothing is posted
+# on an issue.
 on:
   pull_request:
     types: [closed]
