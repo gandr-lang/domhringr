@@ -1,21 +1,24 @@
 [
   {
-    "name": "a merge unclaims the issues it advances and no other",
+    "name": "a merge unclaims the issues it advances or closes and no other",
     "input": {
       "now": 1760000000,
       "claimed": [
         {
           "number": 1250,
+          "state": "open",
           "labels": ["kind:feature", "status:claimed"],
           "updated_at": "2025-10-09T06:53:20Z"
         },
         {
           "number": 1264,
+          "state": "closed",
           "labels": ["kind:feature", "status:claimed"],
           "updated_at": "2025-10-09T06:53:20Z"
         },
         {
           "number": 1263,
+          "state": "open",
           "labels": ["kind:feature", "status:claimed"],
           "updated_at": "2025-10-08T07:53:20Z"
         }
@@ -23,7 +26,65 @@
       "open_prs": [],
       "merged_body": "The pool.\n\nAdvances #1250\nAdvances #1252\nCloses #1264\n"
     },
-    "output": "1250\tadvanced"
+    "output": "1250\tadvanced\n1264\tclosed"
+  },
+  {
+    "name": "a merge reads every closing keyword, and a target both advanced and closed is advanced",
+    "input": {
+      "now": 1760000000,
+      "claimed": [
+        {
+          "number": 5,
+          "state": "closed",
+          "labels": ["status:claimed"],
+          "updated_at": "2025-10-09T06:53:20Z"
+        },
+        {
+          "number": 6,
+          "state": "closed",
+          "labels": ["status:claimed"],
+          "updated_at": "2025-10-09T06:53:20Z"
+        },
+        {
+          "number": 7,
+          "state": "open",
+          "labels": ["status:claimed"],
+          "updated_at": "2025-10-09T06:53:20Z"
+        },
+        {
+          "number": 8,
+          "state": "open",
+          "labels": ["status:claimed"],
+          "updated_at": "2025-10-09T06:53:20Z"
+        }
+      ],
+      "open_prs": [],
+      "merged_body": "fixes #5, Resolved #6\nAdvances #7 closes #7\nsee #8"
+    },
+    "output": "5\tclosed\n6\tclosed\n7\tadvanced"
+  },
+  {
+    "name": "the sweep takes the claim off a closed issue however fresh",
+    "input": {
+      "now": 1760000000,
+      "claimed": [
+        {
+          "number": 40,
+          "state": "closed",
+          "labels": ["status:claimed"],
+          "updated_at": "2025-10-09T06:53:20Z"
+        },
+        {
+          "number": 41,
+          "state": "open",
+          "labels": ["status:claimed"],
+          "updated_at": "2025-10-09T06:53:20Z"
+        }
+      ],
+      "open_prs": [{ "number": 9, "body": "Closes #40", "head": "lane-40" }],
+      "merged_body": null
+    },
+    "output": "40\tclosed"
   },
   {
     "name": "a merge reads the keyword in any case and the number whole",
