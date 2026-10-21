@@ -1,0 +1,60 @@
+# <critical>
+# MUST preserve anchor-first CI: maximal sharing, no copied orchestration.
+# New functionality MUST reuse template anchors or add anchors for likely reuse.
+# MUST parameterize differences; performance exceptions require measured evidence.
+# Share exceptional logic through actions; preserve parallelism, caches, and gates.
+# </critical>
+name: claims
+
+# `status:claimed` means a seat is on the issue now (gandr-lang/gandr#1270). The claim comes
+# off when a merged pull request's body says `Advances #n`, on 24 hours of
+# silence with no open pull request naming the issue, and always on a
+# `kind:tracking` or `kind:epic` issue. `.config/claims/claims.sh` reads,
+# decides (`decide.jq`) and removes; the removals are printed in the run log
+# and nothing is posted on an issue.
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Runs never overlap, so a sweep and a merge never remove the same label
+# twice; neither is cancelled.
+concurrency:
+  group: claims
+  cancel-in-progress: false
+
+jobs:
+  claims:
+    name: take stale claims off
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.merged }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      # The script runs from the default branch, never from the pull request
+      # that triggered the run.
+      - name: git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          ref: ${{ github.event.repository.default_branch }}
+      - name: unclaim what a merge advanced
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAIMS_MERGED_BODY: ${{ github.event.pull_request.body }}
+        run: .config/claims/claims.sh merged
+      - name: sweep tracking, epic and silent claims
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .config/claims/claims.sh sweep

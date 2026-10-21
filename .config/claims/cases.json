@@ -1,0 +1,103 @@
+[
+  {
+    "name": "a merge unclaims the issues it advances and no other",
+    "input": {
+      "now": 1760000000,
+      "claimed": [
+        {
+          "number": 1250,
+          "labels": ["kind:feature", "status:claimed"],
+          "updated_at": "2025-10-09T06:53:20Z"
+        },
+        {
+          "number": 1264,
+          "labels": ["kind:feature", "status:claimed"],
+          "updated_at": "2025-10-09T06:53:20Z"
+        },
+        {
+          "number": 1263,
+          "labels": ["kind:feature", "status:claimed"],
+          "updated_at": "2025-10-08T07:53:20Z"
+        }
+      ],
+      "open_prs": [],
+      "merged_body": "The pool.\n\nAdvances #1250\nAdvances #1252\nCloses #1264\n"
+    },
+    "output": "1250\tadvanced"
+  },
+  {
+    "name": "a merge reads the keyword in any case and the number whole",
+    "input": {
+      "now": 1760000000,
+      "claimed": [
+        { "number": 12, "labels": ["status:claimed"], "updated_at": "2025-10-09T06:53:20Z" },
+        { "number": 123, "labels": ["status:claimed"], "updated_at": "2025-10-09T06:53:20Z" }
+      ],
+      "open_prs": [],
+      "merged_body": "advances #123"
+    },
+    "output": "123\tadvanced"
+  },
+  {
+    "name": "a tracking issue and an epic lose the claim however fresh",
+    "input": {
+      "now": 1760000000,
+      "claimed": [
+        {
+          "number": 1,
+          "labels": ["kind:tracking", "status:claimed"],
+          "updated_at": "2025-10-09T08:53:20Z"
+        },
+        {
+          "number": 2,
+          "labels": ["kind:epic", "status:claimed"],
+          "updated_at": "2025-10-09T08:53:20Z"
+        }
+      ],
+      "open_prs": [{ "number": 9, "body": "Advances #1\nAdvances #2", "head": "lane-1" }],
+      "merged_body": null
+    },
+    "output": "1\ttracking\n2\tepic"
+  },
+  {
+    "name": "a claim silent for 24 hours with no pull request naming it comes off; a fresher one stays",
+    "input": {
+      "now": 1760000000,
+      "claimed": [
+        {
+          "number": 20,
+          "labels": ["kind:defect", "status:claimed"],
+          "updated_at": "2025-10-08T08:53:20Z"
+        },
+        {
+          "number": 21,
+          "labels": ["kind:defect", "status:claimed"],
+          "updated_at": "2025-10-09T06:53:20Z"
+        }
+      ],
+      "open_prs": [],
+      "merged_body": null
+    },
+    "output": "20\tsilent"
+  },
+  {
+    "name": "an open pull request naming the issue in its body or its branch keeps a silent claim",
+    "input": {
+      "now": 1760000000,
+      "claimed": [
+        { "number": 30, "labels": ["status:claimed"], "updated_at": "2025-10-08T07:53:20Z" },
+        { "number": 31, "labels": ["status:claimed"], "updated_at": "2025-10-08T07:53:20Z" },
+        { "number": 32, "labels": ["status:claimed"], "updated_at": "2025-10-08T07:53:20Z" },
+        { "number": 33, "labels": ["status:claimed"], "updated_at": "2025-10-08T07:53:20Z" }
+      ],
+      "open_prs": [
+        { "number": 40, "body": "Fixes #30", "head": "defect-fix" },
+        { "number": 41, "body": "No keyword.", "head": "triage-31-pool" },
+        { "number": 42, "body": "See #32 for the background.", "head": "triage-3201-other" },
+        { "number": 43, "body": "Advances #33", "head": "lane" }
+      ],
+      "merged_body": null
+    },
+    "output": "32\tsilent"
+  }
+]
