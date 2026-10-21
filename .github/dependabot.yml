@@ -1,18 +1,14 @@
 # One grouped pull request per ecosystem per week, for releases at least a
 # week old. CI skips dependabot's pull requests; the updates land through a
 # maintainer's pull request.
+#
+# Cargo is not listed: the workspace depends on gandr crates by path into
+# vendor/gandr, a gitignored clone dependabot cannot fetch, so every cargo
+# update fails before it resolves anything. Cargo updates and advisories are
+# checked by hand against Cargo.lock until the gandr crates come from Git or
+# the registry, when the cargo entry returns.
 version: 2
 updates:
-  - package-ecosystem: cargo
-    directory: /
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 2
-    groups:
-      cargo:
-        patterns: ["*"]
   - package-ecosystem: github-actions
     directories: ["/", "/.github/actions/*"]
     schedule:
