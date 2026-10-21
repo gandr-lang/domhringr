@@ -289,3 +289,28 @@ if [[ -n $stray ]]; then
   exit 1
 fi
 '''
+
+# The claim lifecycle (`.config/claims/decide.jq`, gandr-lang/gandr#1270)
+# picks the claims that come off. Each case in `.config/claims/cases.json`
+# holds an input and the removals it must give: a merge's `Advances` targets,
+# the tracking and epic sweep, 24 hours of silence, and an open pull request
+# that keeps a claim.
+["check:claims"]
+description = "The claim lifecycle gives each recorded case its removals"
+tools.jq = "1.8.1"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+failed=0
+while IFS= read -r case; do
+  name=$(jq -r .name <<< "$case")
+  got=$(jq .input <<< "$case" | jq -r -f .config/claims/decide.jq)
+  want=$(jq -r .output <<< "$case")
+  if [[ "$got" != "$want" ]]; then
+    printf 'claims case FAILED: %s\n  gave:\n%s\n  wanted:\n%s\n' "$name" "$got" "$want" >&2
+    failed=1
+  fi
+done < <(jq -c '.[]' .config/claims/cases.json)
+(( failed == 0 )) || exit 1
+echo "claims check OK: $(jq length .config/claims/cases.json) cases gave their removals"
+'''
