@@ -53,14 +53,13 @@ data Outcome : Type {
   Fail : (refusal : Refusal) --> Outcome;
 }
 
-/// Whether `x` is in `xs`. A failing comparison answers for itself where
-/// `false` would stand (gandr #1831).
+/// Whether `x` is in `xs`.
 @[ checks ]
 def rec member(x : Integer, xs : List(Integer)) -> -F Bool {
   case xs {
-    Nil => x < x,
+    Nil => false,
     Cons(y, rest) => case x == y {
-      true => x == y,
+      true => true,
       false => become member[<](x, rest)
     }
   }
