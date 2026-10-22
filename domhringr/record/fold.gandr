@@ -33,6 +33,9 @@ import "./receipt.gandr" ;
 // The checks and their refusals.
 import "./authority.gandr" ;
 
+// The channels' moves and the monitor that replays them.
+import "../arena/protocol.gandr" ;
+
 /// A list with `x` after its last element.
 @[ checks ]
 def rec append(a : Type, xs : List(a), x : a) -> -F List(a) {
@@ -483,7 +486,7 @@ def advance(
     Pass => case slotOf(dispatch, slots) {
       None => Halted(NotCurrent),
       Some(play) => case play {
-        SlotOf(held, edition, slotPhase) => case replay(edition, phase, move) {
+        SlotOf(held, edition, slotPhase) => case monitor(edition, phase, move) {
           Moved(next) => Went(next),
           Stuck(reason) => Halted(Protocol(edition, move, reason))
         }
@@ -524,7 +527,7 @@ def slotMove(
   case slotOf(dispatch, slots) {
     None => Halted(NotCurrent),
     Some(play) => case play {
-      SlotOf(held, edition, phase) => case replay(edition, phase, move) {
+      SlotOf(held, edition, phase) => case monitor(edition, phase, move) {
         Stuck(reason) => Halted(Protocol(edition, move, reason)),
         Moved(next) => case authority {
           Pass => Went(next),
@@ -956,7 +959,7 @@ def dispatchMove(
   brief : Brief
 ) -> -F Admission {
   case ledger {
-    Ledger(count, pasts, fences, slots, judges, choices, decided) => case replay(
+    Ledger(count, pasts, fences, slots, judges, choices, decided) => case monitor(
       edition,
       SlotFresh,
       DispatchMove

@@ -1,0 +1,879 @@
+// The arena's channels, each a binary session type from its mover's side
+// (Honda, Vasconcelos and Kubo, _Language Primitives and Type Discipline for
+// Structured Communication-Based Programming_, doi:10.1007/BFb0053567): the
+// slot and the operator's decision of each attempt, the judge's channel of
+// each verdict and the runner's of each runner. It follows
+// `domhringr-arena-session` (`crates/arena-session/src/lib.rs`): `Base`
+// holds edition 1's protocols and `Paused` edition 2's, whose slot offers a
+// pause; the slot's widening is a simulation the kernel certifies, and a
+// complete play of edition 1 rides forward along it unchanged.
+//
+// A move's payload is its receipt's commit, at a type of its own per kind,
+// as each kind is a payload identity of its own in the crate; a payload of
+// the wrong kind is a type mismatch where the crate's monitor names a wrong
+// payload identity. A play is a recorded run, and `Run(S)` checks it by the
+// session monitor the crate replays it with (`gandr-core-session`).
+//
+// A run is judged when its source is checked: no program replays a list of
+// moves against a session type (gandr #1860), so the channels are also
+// written as the state machine below, one transition per action the session
+// types offer, which replay (`./replay.gandr`) and the record's fold run.
+// Every play of the crate's tests is stated through the machine; each one
+// the session types can state is also a run here, checked by the monitor.
+// A refused run cannot be stated, as the strict root admits no `refuses`; a
+// play still open — every runner play — is no run, as `Run(S)` classifies
+// complete runs (gandr #1861); and the operator's side of a recursive
+// channel is a loop over an endpoint no function parameter holds (gandr
+// #1862), so the duals are driven for the judge's and the decision's
+// channels. A list passed to `played` is written inline: a bound annotation
+// is refused (gandr #1543).
+
+// Lists.
+import "../strategy/rubric.gandr" ;
+
+// The editions.
+import "./edition.gandr" ;
+
+/// A dispatch's commit, the slot's first payload.
+@[ checks ]
+data DispatchCommit : Type {
+  DispatchAt : (commit : Integer) --> DispatchCommit;
+}
+
+/// A report's commit.
+@[ checks ]
+data ReportCommit : Type {
+  ReportAt : (commit : Integer) --> ReportCommit;
+}
+
+/// A handoff's commit.
+@[ checks ]
+data HandoffCommit : Type {
+  HandoffAt : (commit : Integer) --> HandoffCommit;
+}
+
+/// A retirement's commit.
+@[ checks ]
+data RetireCommit : Type {
+  RetireAt : (commit : Integer) --> RetireCommit;
+}
+
+/// A pause's commit.
+@[ checks ]
+data PauseCommit : Type {
+  PauseAt : (commit : Integer) --> PauseCommit;
+}
+
+/// A verdict's commit.
+@[ checks ]
+data VerdictCommit : Type {
+  VerdictAt : (commit : Integer) --> VerdictCommit;
+}
+
+/// A grading's commit.
+@[ checks ]
+data GradedCommit : Type {
+  GradedAt : (commit : Integer) --> GradedCommit;
+}
+
+/// A verification's commit.
+@[ checks ]
+data VerifiedCommit : Type {
+  VerifiedAt : (commit : Integer) --> VerifiedCommit;
+}
+
+/// A decision's commit.
+@[ checks ]
+data DecideCommit : Type {
+  DecideAt : (commit : Integer) --> DecideCommit;
+}
+
+/// A landing's commit.
+@[ checks ]
+data LandedCommit : Type {
+  LandedAt : (commit : Integer) --> LandedCommit;
+}
+
+/// Edition 1's protocols. The slot receives its dispatch and owes a report;
+/// after a report it reports again, hands off or retires, and either ending
+/// closes it. The judge sends its verdict, then its grading; the runner
+/// sends verifications for as long as it runs; the operator selects once,
+/// and only a decision to land continues to its landing.
+module Base {
+  type SlotEnd = ?DispatchCommit. mu owed. +{
+    report : !ReportCommit. mu open. +{
+      report : !ReportCommit. open,
+      handoff : !HandoffCommit. end,
+      retire : !RetireCommit. end
+    }
+  };
+  type JudgeEnd = !VerdictCommit. !GradedCommit. end;
+  type RunnerEnd = mu more. !VerifiedCommit. more;
+  type DecisionEnd = +{
+    land : !DecideCommit. !LandedCommit. end,
+    rework : !DecideCommit. end,
+    abandon : !DecideCommit. end
+  };
+}
+
+/// Edition 2's protocols: the slot offers a pause before and between
+/// reports, and the pause keeps the phase it was made in; the other
+/// channels are edition 1's.
+module Paused {
+  type SlotEnd = ?DispatchCommit. mu owed. +{
+    report : !ReportCommit. mu open. +{
+      report : !ReportCommit. open,
+      handoff : !HandoffCommit. end,
+      retire : !RetireCommit. end,
+      pause : !PauseCommit. open
+    },
+    pause : !PauseCommit. owed
+  };
+  type JudgeEnd = Base.JudgeEnd;
+  type RunnerEnd = Base.RunnerEnd;
+  type DecisionEnd = Base.DecisionEnd;
+}
+
+/// Edition 1's slot flows to edition 2's: every action it offers, edition 2
+/// offers, so the base protocol is simulated by the paused one.
+@[ checks ]
+def widened : Flow(Type, Base.SlotEnd, Paused.SlotEnd) ;
+def widened = sim(Base.SlotEnd, Paused.SlotEnd) ;
+
+/// The decision widened by a `defer` label, as the crate's fixture widens
+/// it: a label no production receipt carries.
+module Deferred {
+  type DecisionEnd = +{
+    land : !DecideCommit. !LandedCommit. end,
+    rework : !DecideCommit. end,
+    abandon : !DecideCommit. end,
+    defer : !DecideCommit. end
+  };
+}
+
+/// The decision flows to the one with `defer`.
+@[ checks ]
+def deferrable : Flow(Type, Base.DecisionEnd, Deferred.DecisionEnd) ;
+def deferrable = sim(Base.DecisionEnd, Deferred.DecisionEnd) ;
+
+/// `named_refusal_preserves_the_prefix`: a dispatch, two reports and a
+/// retirement close the slot.
+@[ checks ]
+def reportedTwice : Run(Base.SlotEnd) ;
+def reportedTwice = recorded(
+  received(DispatchAt(1)),
+  selected(report),
+  sent(ReportAt(2)),
+  selected(report),
+  sent(ReportAt(3)),
+  selected(retire),
+  sent(RetireAt(4)),
+  closed
+) ;
+
+/// A dispatch, a report and a handoff close the slot.
+@[ checks ]
+def handedOff : Run(Base.SlotEnd) ;
+def handedOff = recorded(
+  received(DispatchAt(1)),
+  selected(report),
+  sent(ReportAt(2)),
+  selected(handoff),
+  sent(HandoffAt(3)),
+  closed
+) ;
+
+/// `pause_is_certified_and_old_runs_transport`: edition 1's dispatch, report
+/// and retirement.
+@[ checks ]
+def retired : Run(Base.SlotEnd) ;
+def retired = recorded(
+  received(DispatchAt(8)),
+  selected(report),
+  sent(ReportAt(9)),
+  selected(retire),
+  sent(RetireAt(10)),
+  closed
+) ;
+
+/// A play of edition 1 ridden forward to edition 2.
+@[ checks ]
+def transported(play : Run(Base.SlotEnd)) -> -F Run(Paused.SlotEnd) {
+  become ride(\X. Run(X), widened, play)
+}
+
+/// The ridden play keeps every move and every payload.
+@[ runs("recorded(received(DispatchAt(8)), selected(report), sent(ReportAt(9)), selected(retire), sent(RetireAt(10)), closed)") ]
+def retiredForward : () => Run(Paused.SlotEnd) ;
+def retiredForward = thunk { become transported(retired) } ;
+
+/// Edition 2 pauses before the first report and after it, and retires.
+@[ checks ]
+def pausedTwice : Run(Paused.SlotEnd) ;
+def pausedTwice = recorded(
+  received(DispatchAt(8)),
+  selected(pause),
+  sent(PauseAt(9)),
+  selected(report),
+  sent(ReportAt(10)),
+  selected(pause),
+  sent(PauseAt(11)),
+  selected(retire),
+  sent(RetireAt(12)),
+  closed
+) ;
+
+/// `task_channels_replay_with_their_duals`: a verdict, then its grading.
+@[ checks ]
+def graded : Run(Base.JudgeEnd) ;
+def graded = recorded(sent(VerdictAt(11)), sent(GradedAt(12)), closed) ;
+
+/// A decision to land, then the landing.
+@[ checks ]
+def landed : Run(Base.DecisionEnd) ;
+def landed = recorded(selected(land), sent(DecideAt(11)), sent(LandedAt(12)), closed) ;
+
+/// A decision to rework closes the channel.
+@[ checks ]
+def reworked : Run(Base.DecisionEnd) ;
+def reworked = recorded(selected(rework), sent(DecideAt(11)), closed) ;
+
+/// A decision to abandon closes the channel.
+@[ checks ]
+def abandoned : Run(Base.DecisionEnd) ;
+def abandoned = recorded(selected(abandon), sent(DecideAt(11)), closed) ;
+
+/// Edition 2's judge is edition 1's: the same run.
+@[ checks ]
+def gradedPaused : Run(Paused.JudgeEnd) ;
+def gradedPaused = recorded(sent(VerdictAt(11)), sent(GradedAt(12)), closed) ;
+
+/// Edition 2's decision is edition 1's: the same run.
+@[ checks ]
+def landedPaused : Run(Paused.DecisionEnd) ;
+def landedPaused = recorded(selected(land), sent(DecideAt(11)), sent(LandedAt(12)), closed) ;
+
+/// `decision_label_widening_transports_complete_plays`: a deferral is a
+/// play of the widened decision.
+@[ checks ]
+def deferred : Run(Deferred.DecisionEnd) ;
+def deferred = recorded(selected(defer), sent(DecideAt(15)), closed) ;
+
+/// A complete decision ridden forward to the widened one.
+@[ checks ]
+def deferredForward(play : Run(Base.DecisionEnd)) -> -F Run(Deferred.DecisionEnd) {
+  become ride(\X. Run(X), deferrable, play)
+}
+
+/// A landing rides forward unchanged.
+@[ runs("recorded(selected(land), sent(DecideAt(11)), sent(LandedAt(12)), closed)") ]
+def landedForward : () => Run(Deferred.DecisionEnd) ;
+def landedForward = thunk { become deferredForward(landed) } ;
+
+/// A rework rides forward unchanged.
+@[ runs("recorded(selected(rework), sent(DecideAt(11)), closed)") ]
+def reworkedForward : () => Run(Deferred.DecisionEnd) ;
+def reworkedForward = thunk { become deferredForward(reworked) } ;
+
+/// An abandonment rides forward unchanged.
+@[ runs("recorded(selected(abandon), sent(DecideAt(11)), closed)") ]
+def abandonedForward : () => Run(Deferred.DecisionEnd) ;
+def abandonedForward = thunk { become deferredForward(abandoned) } ;
+
+/// The judge and the operator who receives its verdict and its grading: the
+/// operator's end is the judge's dual.
+@[ checks ]
+def judgeDual() -> -F Unit {
+  fork (judge : Base.JudgeEnd) {
+    send(judge, VerdictAt(11));
+    send(judge, GradedAt(12));
+    close(judge)
+  } as operator;
+  recv(operator) as verdict;
+  recv(operator) as grading;
+  close(operator)
+}
+
+/// The operator deciding to land and the arena following each branch it
+/// may select: the arena's end is the decision's dual.
+@[ checks ]
+def decisionDual() -> -F Unit {
+  fork (operator : Base.DecisionEnd) {
+    select(operator, land);
+    send(operator, DecideAt(11));
+    send(operator, LandedAt(12));
+    close(operator)
+  } as arena;
+  offer(arena) {
+    land => { recv(arena) as decision; recv(arena) as landing; close(arena) },
+    rework => { recv(arena) as decision; close(arena) },
+    abandon => { recv(arena) as decision; close(arena) }
+  }
+}
+
+/// The operator's choice on a decision channel.
+@[ checks ]
+data Choice : Type {
+  ToLand : Choice;
+  ToRework : Choice;
+  ToAbandon : Choice;
+}
+
+/// A receipt's move on a channel: a dispatch received, a report, handoff,
+/// retirement or pause selected and sent, a verdict, grading, verification
+/// or landing sent, or a choice selected and its decision sent.
+@[ checks ]
+data Move : Type {
+  DispatchMove : Move;
+  ReportMove : Move;
+  HandoffMove : Move;
+  RetireMove : Move;
+  PauseMove : Move;
+  VerdictMove : Move;
+  GradedMove : Move;
+  VerifiedMove : Move;
+  DecideMove : (choice : Choice) --> Move;
+  LandedMove : Move;
+}
+
+/// Why the monitor refuses a move: its edition unknown, a label the state
+/// does not offer, a move after the channel closed, another payload's send
+/// where the state sends one, or an action in the other direction.
+@[ checks ]
+data Reason : Type {
+  UnknownEdition : Reason;
+  WrongLabel : Reason;
+  ResumeAfterEnd : Reason;
+  WrongPayloadIdentity : Reason;
+  WrongDirection : Reason;
+}
+
+/// Where a channel's play stands: a slot before its dispatch, owing its
+/// first report, or open to another report or an ending; a judge's channel
+/// before its verdict or owing its grading; a runner's, always open; an
+/// operator's before its choice or owing the landing a choice to land
+/// requires; or ended.
+@[ checks ]
+data Phase : Type {
+  SlotFresh : Phase;
+  SlotOwed : Phase;
+  SlotOpen : Phase;
+  JudgeFresh : Phase;
+  JudgeRuled : Phase;
+  RunnerOpen : Phase;
+  DecisionFresh : Phase;
+  DecisionLanding : Phase;
+  Ended : Phase;
+}
+
+/// A move replayed: the phase it leaves the play in, or why the monitor
+/// refuses it, leaving the play where it was.
+@[ checks ]
+data Replayed : Type {
+  Moved : (phase : Phase) --> Replayed;
+  Stuck : (reason : Reason) --> Replayed;
+}
+
+/// Why a state offering a selection refuses `move`: a move that selects
+/// takes a label the state does not offer; any other goes the other way.
+@[ checks ]
+def unoffered(move : Move) -> -F Reason {
+  case move {
+    ReportMove => WrongLabel,
+    HandoffMove => WrongLabel,
+    RetireMove => WrongLabel,
+    PauseMove => WrongLabel,
+    DecideMove(_) => WrongLabel,
+    _ => WrongDirection
+  }
+}
+
+/// Why a state sending a payload refuses `move`: a bare send carries
+/// another payload; a receipt or a selection goes the other way.
+@[ checks ]
+def unsent(move : Move) -> -F Reason {
+  case move {
+    VerdictMove => WrongPayloadIdentity,
+    GradedMove => WrongPayloadIdentity,
+    VerifiedMove => WrongPayloadIdentity,
+    LandedMove => WrongPayloadIdentity,
+    _ => WrongDirection
+  }
+}
+
+/// A pause under `edition` at `phase`: edition 2 offers it in both slot
+/// phases and keeps the phase; edition 1 offers no such label.
+@[ checks ]
+def paused(edition : Edition, phase : Phase) -> -F Replayed {
+  case edition {
+    EditionOne => Stuck(WrongLabel),
+    EditionTwo => Moved(phase)
+  }
+}
+
+/// A move replayed against its channel's play under a known edition, one
+/// arm per state of the session types above: the slot's `?Dispatch`, its
+/// owed `report` and its open `report`, `handoff` and `retire`, edition 2's
+/// `pause` in both; the judge's two sends; the runner's repeated send; the
+/// operator's choice and the landing a land owes. An ended play refuses
+/// every move, as resuming after its end.
+@[ checks ]
+def transition(edition : Edition, phase : Phase, move : Move) -> -F Replayed {
+  case phase {
+    SlotFresh => case move {
+      DispatchMove => Moved(SlotOwed),
+      _ => Stuck(WrongDirection)
+    },
+    SlotOwed => case move {
+      ReportMove => Moved(SlotOpen),
+      PauseMove => become paused(edition, phase),
+      _ => {
+        run reason <- unoffered(move);
+        Stuck(reason)
+      }
+    },
+    SlotOpen => case move {
+      ReportMove => Moved(SlotOpen),
+      HandoffMove => Moved(Ended),
+      RetireMove => Moved(Ended),
+      PauseMove => become paused(edition, phase),
+      _ => {
+        run reason <- unoffered(move);
+        Stuck(reason)
+      }
+    },
+    JudgeFresh => case move {
+      VerdictMove => Moved(JudgeRuled),
+      _ => {
+        run reason <- unsent(move);
+        Stuck(reason)
+      }
+    },
+    JudgeRuled => case move {
+      GradedMove => Moved(Ended),
+      _ => {
+        run reason <- unsent(move);
+        Stuck(reason)
+      }
+    },
+    RunnerOpen => case move {
+      VerifiedMove => Moved(RunnerOpen),
+      _ => {
+        run reason <- unsent(move);
+        Stuck(reason)
+      }
+    },
+    DecisionFresh => case move {
+      DecideMove(choice) => case choice {
+        ToLand => Moved(DecisionLanding),
+        _ => Moved(Ended)
+      },
+      _ => {
+        run reason <- unoffered(move);
+        Stuck(reason)
+      }
+    },
+    DecisionLanding => case move {
+      LandedMove => Moved(Ended),
+      _ => {
+        run reason <- unsent(move);
+        Stuck(reason)
+      }
+    },
+    Ended => Stuck(ResumeAfterEnd)
+  }
+}
+
+/// A move replayed under the edition a dispatch names: an unknown edition
+/// refuses every move by name, before any state is read.
+@[ checks ]
+def monitor(edition : Integer, phase : Phase, move : Move) -> -F Replayed {
+  case catalogued(edition) {
+    Unknown(named) => Stuck(UnknownEdition),
+    Known(known) => become transition(known, phase, move)
+  }
+}
+
+/// A play's moves replayed from a phase: the phase the last leaves, or the
+/// first refused move, by its position from zero, and the monitor's reason.
+@[ checks ]
+data Played : Type {
+  Reached : (phase : Phase) --> Played;
+  Broke : (position : Integer, move : Move, reason : Reason) --> Played;
+}
+
+/// `moves` replayed in order under `edition` from `phase`, the first at
+/// `position`.
+@[ checks ]
+def rec played(
+  edition : Integer,
+  phase : Phase,
+  position : Integer,
+  moves : List(Move)
+) -> -F Played {
+  case moves {
+    Nil => Reached(phase),
+    Cons(move, rest) => case monitor(edition, phase, move) {
+      Stuck(reason) => Broke(position, move, reason),
+      Moved(next) => {
+        run later <- position + 1;
+        become played[<](edition, next, later, rest)
+      }
+    }
+  }
+}
+
+/// `named_refusal_preserves_the_prefix`: a report before any dispatch goes
+/// the other way from the slot's receipt of it.
+@[ runs("Broke(0, ReportMove, WrongDirection)") ]
+def undispatchedReport : () => Played ;
+def undispatchedReport = thunk {
+  become played(1, SlotFresh, 0, (Cons(ReportMove, Nil) : List(Move)))
+} ;
+
+/// A dispatch, two reports and a retirement end the slot: `reportedTwice`.
+@[ runs("Reached(Ended)") ]
+def twiceRetired : () => Played ;
+def twiceRetired = thunk {
+  become played(1, SlotFresh, 0, (Cons(
+    DispatchMove,
+    Cons(ReportMove, Cons(ReportMove, Cons(RetireMove, Nil)))
+  ) : List(Move)))
+} ;
+
+/// A report after the retirement resumes the ended slot.
+@[ runs("Broke(4, ReportMove, ResumeAfterEnd)") ]
+def lateReport : () => Played ;
+def lateReport = thunk {
+  become played(1, SlotFresh, 0, (Cons(
+    DispatchMove,
+    Cons(ReportMove, Cons(ReportMove, Cons(RetireMove, Cons(ReportMove, Nil))))
+  ) : List(Move)))
+} ;
+
+/// A dispatch leaves the slot owing its first report.
+@[ runs("Reached(SlotOwed)") ]
+def unreported : () => Played ;
+def unreported = thunk {
+  become played(1, SlotFresh, 0, (Cons(DispatchMove, Nil) : List(Move)))
+} ;
+
+/// A retirement before the first report takes a label the slot does not
+/// yet offer.
+@[ runs("Broke(1, RetireMove, WrongLabel)") ]
+def earlyRetire : () => Played ;
+def earlyRetire = thunk {
+  become played(1, SlotFresh, 0, (Cons(DispatchMove, Cons(RetireMove, Nil)) : List(Move)))
+} ;
+
+/// A handoff before the first report likewise.
+@[ runs("Broke(1, HandoffMove, WrongLabel)") ]
+def earlyHandoff : () => Played ;
+def earlyHandoff = thunk {
+  become played(1, SlotFresh, 0, (Cons(DispatchMove, Cons(HandoffMove, Nil)) : List(Move)))
+} ;
+
+/// A dispatch, a report and a handoff end the slot: `handedOff`.
+@[ runs("Reached(Ended)") ]
+def handoffEnds : () => Played ;
+def handoffEnds = thunk {
+  become played(
+    1,
+    SlotFresh,
+    0,
+    (Cons(DispatchMove, Cons(ReportMove, Cons(HandoffMove, Nil))) : List(Move))
+  )
+} ;
+
+/// A second handoff resumes the ended slot.
+@[ runs("Broke(3, HandoffMove, ResumeAfterEnd)") ]
+def secondHandoff : () => Played ;
+def secondHandoff = thunk {
+  become played(1, SlotFresh, 0, (Cons(
+    DispatchMove,
+    Cons(ReportMove, Cons(HandoffMove, Cons(HandoffMove, Nil)))
+  ) : List(Move)))
+} ;
+
+/// A second dispatch on an open slot goes the other way from the
+/// selection it owes.
+@[ runs("Broke(1, DispatchMove, WrongDirection)") ]
+def secondDispatch : () => Played ;
+def secondDispatch = thunk {
+  become played(1, SlotFresh, 0, (Cons(DispatchMove, Cons(DispatchMove, Nil)) : List(Move)))
+} ;
+
+/// `pause_is_certified_and_old_runs_transport`: edition 1 offers no pause.
+@[ runs("Broke(1, PauseMove, WrongLabel)") ]
+def pauseUnoffered : () => Played ;
+def pauseUnoffered = thunk {
+  become played(1, SlotFresh, 0, (Cons(DispatchMove, Cons(PauseMove, Nil)) : List(Move)))
+} ;
+
+/// Edition 2 pauses before and after the report and retires:
+/// `pausedTwice`.
+@[ runs("Reached(Ended)") ]
+def pausedRetired : () => Played ;
+def pausedRetired = thunk {
+  become played(2, SlotFresh, 0, (Cons(
+    DispatchMove,
+    Cons(PauseMove, Cons(ReportMove, Cons(PauseMove, Cons(RetireMove, Nil))))
+  ) : List(Move)))
+} ;
+
+/// A pause before the first report keeps the report owed.
+@[ runs("Broke(2, RetireMove, WrongLabel)") ]
+def pauseKeepsOwed : () => Played ;
+def pauseKeepsOwed = thunk {
+  become played(
+    2,
+    SlotFresh,
+    0,
+    (Cons(DispatchMove, Cons(PauseMove, Cons(RetireMove, Nil))) : List(Move))
+  )
+} ;
+
+/// A pause never reopens an ended slot.
+@[ runs("Broke(3, PauseMove, ResumeAfterEnd)") ]
+def pauseAfterEnd : () => Played ;
+def pauseAfterEnd = thunk {
+  become played(2, SlotFresh, 0, (Cons(
+    DispatchMove,
+    Cons(ReportMove, Cons(RetireMove, Cons(PauseMove, Nil)))
+  ) : List(Move)))
+} ;
+
+/// `unknown_editions_never_replay_as_known_protocols`: under edition 0 the
+/// dispatch is refused by its edition's name.
+@[ runs("Broke(0, DispatchMove, UnknownEdition)") ]
+def zeroDispatch : () => Played ;
+def zeroDispatch = thunk {
+  become played(0, SlotFresh, 0, (Cons(DispatchMove, Nil) : List(Move)))
+} ;
+
+/// Every slot move under an unknown edition is refused alike: a pause.
+@[ runs("Broke(0, PauseMove, UnknownEdition)") ]
+def largestPause : () => Played ;
+def largestPause = thunk {
+  become played(18446744073709551615, SlotOwed, 0, (Cons(PauseMove, Nil) : List(Move)))
+} ;
+
+/// A report.
+@[ runs("Broke(0, ReportMove, UnknownEdition)") ]
+def largestReport : () => Played ;
+def largestReport = thunk {
+  become played(18446744073709551615, SlotOwed, 0, (Cons(ReportMove, Nil) : List(Move)))
+} ;
+
+/// A retirement.
+@[ runs("Broke(0, RetireMove, UnknownEdition)") ]
+def largestRetire : () => Played ;
+def largestRetire = thunk {
+  become played(18446744073709551615, SlotOpen, 0, (Cons(RetireMove, Nil) : List(Move)))
+} ;
+
+/// The other channels share the dispatch's edition: a verdict.
+@[ runs("Broke(0, VerdictMove, UnknownEdition)") ]
+def zeroVerdict : () => Played ;
+def zeroVerdict = thunk {
+  become played(0, JudgeFresh, 0, (Cons(VerdictMove, Nil) : List(Move)))
+} ;
+
+/// A verification.
+@[ runs("Broke(0, VerifiedMove, UnknownEdition)") ]
+def zeroVerified : () => Played ;
+def zeroVerified = thunk {
+  become played(0, RunnerOpen, 0, (Cons(VerifiedMove, Nil) : List(Move)))
+} ;
+
+/// A decision to land.
+@[ runs("Broke(0, DecideMove(ToLand), UnknownEdition)") ]
+def zeroDecide : () => Played ;
+def zeroDecide = thunk {
+  become played(0, DecisionFresh, 0, (Cons(DecideMove(ToLand), Nil) : List(Move)))
+} ;
+
+/// `task_channels_replay_with_their_duals`: a verdict and its grading end
+/// the judge's channel: `graded`.
+@[ runs("Reached(Ended)") ]
+def judged : () => Played ;
+def judged = thunk {
+  become played(1, JudgeFresh, 0, (Cons(VerdictMove, Cons(GradedMove, Nil)) : List(Move)))
+} ;
+
+/// Two verifications leave the runner's channel open for a third.
+@[ runs("Reached(RunnerOpen)") ]
+def verifiedTwice : () => Played ;
+def verifiedTwice = thunk {
+  become played(1, RunnerOpen, 0, (Cons(VerifiedMove, Cons(VerifiedMove, Nil)) : List(Move)))
+} ;
+
+/// A decision to land and its landing end the operator's channel:
+/// `landed`.
+@[ runs("Reached(Ended)") ]
+def landingEnds : () => Played ;
+def landingEnds = thunk {
+  become played(
+    1,
+    DecisionFresh,
+    0,
+    (Cons(DecideMove(ToLand), Cons(LandedMove, Nil)) : List(Move))
+  )
+} ;
+
+/// A decision to rework ends it at once: `reworked`.
+@[ runs("Reached(Ended)") ]
+def reworkEnds : () => Played ;
+def reworkEnds = thunk {
+  become played(1, DecisionFresh, 0, (Cons(DecideMove(ToRework), Nil) : List(Move)))
+} ;
+
+/// A decision to abandon likewise: `abandoned`.
+@[ runs("Reached(Ended)") ]
+def abandonEnds : () => Played ;
+def abandonEnds = thunk {
+  become played(1, DecisionFresh, 0, (Cons(DecideMove(ToAbandon), Nil) : List(Move)))
+} ;
+
+/// Under edition 2 the judge's play is the same: `gradedPaused`.
+@[ runs("Reached(Ended)") ]
+def judgedPaused : () => Played ;
+def judgedPaused = thunk {
+  become played(2, JudgeFresh, 0, (Cons(VerdictMove, Cons(GradedMove, Nil)) : List(Move)))
+} ;
+
+/// Under edition 2 the operator's landing is the same: `landedPaused`.
+@[ runs("Reached(Ended)") ]
+def landingPaused : () => Played ;
+def landingPaused = thunk {
+  become played(
+    2,
+    DecisionFresh,
+    0,
+    (Cons(DecideMove(ToLand), Cons(LandedMove, Nil)) : List(Move))
+  )
+} ;
+
+/// `task_channels_refuse_missing_and_repeated_moves`: a grading with no
+/// verdict sends another payload than the verdict the channel owes.
+@[ runs("Broke(0, GradedMove, WrongPayloadIdentity)") ]
+def ungradedVerdict : () => Played ;
+def ungradedVerdict = thunk {
+  become played(1, JudgeFresh, 0, (Cons(GradedMove, Nil) : List(Move)))
+} ;
+
+/// A landing with no decision goes the other way from the choice owed.
+@[ runs("Broke(0, LandedMove, WrongDirection)") ]
+def undecidedLanding : () => Played ;
+def undecidedLanding = thunk {
+  become played(1, DecisionFresh, 0, (Cons(LandedMove, Nil) : List(Move)))
+} ;
+
+/// A second grading resumes the ended judge's channel.
+@[ runs("Broke(2, GradedMove, ResumeAfterEnd)") ]
+def secondGrading : () => Played ;
+def secondGrading = thunk {
+  become played(
+    1,
+    JudgeFresh,
+    0,
+    (Cons(VerdictMove, Cons(GradedMove, Cons(GradedMove, Nil))) : List(Move))
+  )
+} ;
+
+/// A second decision, to rework, goes the other way from the landing a
+/// decision to land owes.
+@[ runs("Broke(1, DecideMove(ToRework), WrongDirection)") ]
+def secondDecision : () => Played ;
+def secondDecision = thunk {
+  become played(
+    1,
+    DecisionFresh,
+    0,
+    (Cons(DecideMove(ToLand), Cons(DecideMove(ToRework), Nil)) : List(Move))
+  )
+} ;
+
+/// A second landing resumes the ended channel.
+@[ runs("Broke(2, LandedMove, ResumeAfterEnd)") ]
+def secondLanding : () => Played ;
+def secondLanding = thunk {
+  become played(1, DecisionFresh, 0, (Cons(
+    DecideMove(ToLand),
+    Cons(LandedMove, Cons(LandedMove, Nil))
+  ) : List(Move)))
+} ;
+
+/// A landing after a rework resumes the channel the rework ended.
+@[ runs("Broke(1, LandedMove, ResumeAfterEnd)") ]
+def reworkLanding : () => Played ;
+def reworkLanding = thunk {
+  become played(
+    1,
+    DecisionFresh,
+    0,
+    (Cons(DecideMove(ToRework), Cons(LandedMove, Nil)) : List(Move))
+  )
+} ;
+
+/// A decision to land after an abandonment likewise.
+@[ runs("Broke(1, DecideMove(ToLand), ResumeAfterEnd)") ]
+def abandonLanding : () => Played ;
+def abandonLanding = thunk {
+  become played(
+    1,
+    DecisionFresh,
+    0,
+    (Cons(DecideMove(ToAbandon), Cons(DecideMove(ToLand), Nil)) : List(Move))
+  )
+} ;
+
+/// A move of another channel's kind is refused by the same rule as any
+/// other action a state does not offer: a verdict where the open slot owes
+/// a selection goes the other way.
+@[ runs("Broke(2, VerdictMove, WrongDirection)") ]
+def verdictOnSlot : () => Played ;
+def verdictOnSlot = thunk {
+  become played(
+    1,
+    SlotFresh,
+    0,
+    (Cons(DispatchMove, Cons(ReportMove, Cons(VerdictMove, Nil))) : List(Move))
+  )
+} ;
+
+/// A report where the judge's channel owes its verdict goes the other way.
+@[ runs("Broke(0, ReportMove, WrongDirection)") ]
+def reportToJudge : () => Played ;
+def reportToJudge = thunk {
+  become played(1, JudgeFresh, 0, (Cons(ReportMove, Nil) : List(Move)))
+} ;
+
+/// A grading on a runner's channel sends another payload than its
+/// verification.
+@[ runs("Broke(0, GradedMove, WrongPayloadIdentity)") ]
+def gradedByRunner : () => Played ;
+def gradedByRunner = thunk {
+  become played(1, RunnerOpen, 0, (Cons(GradedMove, Nil) : List(Move)))
+} ;
+
+/// A report on the decision channel takes a label the operator's choice
+/// does not offer.
+@[ runs("Broke(0, ReportMove, WrongLabel)") ]
+def reportToDecision : () => Played ;
+def reportToDecision = thunk {
+  become played(1, DecisionFresh, 0, (Cons(ReportMove, Nil) : List(Move)))
+} ;
+
+/// A verdict where a decision to land owes its landing sends another
+/// payload.
+@[ runs("Broke(1, VerdictMove, WrongPayloadIdentity)") ]
+def verdictForLanding : () => Played ;
+def verdictForLanding = thunk {
+  become played(
+    1,
+    DecisionFresh,
+    0,
+    (Cons(DecideMove(ToLand), Cons(VerdictMove, Nil)) : List(Move))
+  )
+} ;

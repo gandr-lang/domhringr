@@ -54,6 +54,8 @@ mise exec -- cargo nextest run -p domhringr-record-index
 | The proof protocol | [`src/stream.rs`](src/stream.rs) |
 | Measurements and their pinned crossings | [`src/measure.rs`](src/measure.rs) |
 
+Attested replay is also written in gandr, in [`domhringr/arena/replay.gandr`](../../domhringr/arena/replay.gandr), whose exemplars give the refusals and standings this crate's replay tests give.
+
 ## License
 
 `Apache-2.0 WITH LLVM-exception`; see the workspace [Apache-2.0 license](../../LICENSE.Apache-2.0.txt) and [LLVM exception](../../LICENSE.LLVM-exception.txt).

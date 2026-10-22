@@ -71,6 +71,8 @@ The protocol of each channel, replay and its refusal witnesses, certified wideni
 
 The refused slot moves whose disposition is not yet decided, each with its proposed disposition, are tracked in [#21](https://github.com/gandr-lang/domhringr/issues/21).
 
+The channels are also written in gandr. [`domhringr/arena/`](../../domhringr/arena/) states the editions, the four channels as session types with edition 2's widening and the plays that ride it, the state machine replay runs, and an attested attempt's replay; their exemplars give the admissions and refusals this crate's tests give. `mise run check:gandr` checks and runs them with the driver built from the gandr sibling at its pin.
+
 ## License
 
 Apache-2.0 WITH LLVM-exception. See the workspace licenses at the repository root.

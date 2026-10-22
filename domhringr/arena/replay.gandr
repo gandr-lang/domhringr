@@ -1,0 +1,696 @@
+// Replay: an attested attempt's moves admitted against the arena's channels,
+// apart from any receipt's authority. It follows `replay` of
+// `domhringr-record-index` (`crates/record-index/src/replay.rs`): one
+// attempt's moves, in `(attempt, seq)` order, are fed to the monitor under
+// the edition the attempt's dispatch names — one slot and one decision
+// channel per attempt, one judge's channel per verdict, one runner's per
+// runner — and the first move a channel refuses is refused at its
+// coordinate with its movement named. A grading and a landing resolve the
+// verdict and the decision they name from the attempt's earlier moves;
+// every step must answer the attempt's dispatch; the admitted steps project
+// the task's standing through the fold's `standing`.
+//
+// A move is its coordinate, its commit, its author and its receipt's kind:
+// the range proof that attests it, and the receipt bytes it carries, are
+// checked before replay and stand outside it. A runner's channel never
+// leaves its open state (`../arena/protocol.gandr`), so a verification
+// replays there and no state is kept per runner.
+
+// Lists, and the rubric the grades come from.
+import "../strategy/rubric.gandr" ;
+
+// Rulings and grades.
+import "../strategy/grade.gandr" ;
+
+// The receipt kinds.
+import "../record/receipt.gandr" ;
+
+// The fold's steps, the task they project and its standing.
+import "../record/fold.gandr" ;
+
+// The channels' moves and the monitor that replays them.
+import "./protocol.gandr" ;
+
+/// An attested move: its attempt, its sequence number in the attempt, its
+/// commit, its author and its receipt's kind.
+@[ checks ]
+data Attested : Type {
+  AttestedMove : (
+    attempt : Integer,
+    sequence : Integer,
+    commit : Integer,
+    author : Integer,
+    kind : Kind
+  ) --> Attested;
+}
+
+/// Why a move cannot be replayed: no dispatch opens the attempt at sequence
+/// zero; the monitor refuses the move under the dispatch's edition; the
+/// move names no earlier move of this dispatch; or its receipt is no task
+/// move.
+@[ checks ]
+data Cause : Type {
+  NoDispatch : Cause;
+  Breaks : (edition : Integer, move : Move, reason : Reason) --> Cause;
+  Unreferenced : (move : Move) --> Cause;
+  NotMove : Cause;
+}
+
+/// An attempt replayed: no move was attested in it, its first inadmissible
+/// move at its coordinate, or the task its admitted steps project.
+@[ checks ]
+data Replay : Type {
+  Absent : (attempt : Integer) --> Replay;
+  RefusedMove : (attempt : Integer, sequence : Integer, cause : Cause) --> Replay;
+  Conformed : (task : Task) --> Replay;
+}
+
+/// The channel a move is on: the slot, the judge's of a verdict, a
+/// runner's, or the operator's decision.
+@[ checks ]
+data Channel : Type {
+  OnSlot : Channel;
+  OnJudge : (verdict : Integer) --> Channel;
+  OnRunner : Channel;
+  OnDecision : Channel;
+}
+
+/// A verdict's judge channel and where its play stands.
+@[ checks ]
+data Judging : Type {
+  JudgingOf : (verdict : Integer, phase : Phase) --> Judging;
+}
+
+/// The attempt's channels: its slot's phase, its judges' channels and its
+/// decision's phase.
+@[ checks ]
+data Plays : Type {
+  PlaysAt : (slot : Phase, judges : List(Judging), decision : Phase) --> Plays;
+}
+
+/// An earlier move of the attempt: its commit and its receipt's kind.
+@[ checks ]
+data Related : Type {
+  RelatedAt : (commit : Integer, kind : Kind) --> Related;
+}
+
+/// A move resolved to the step it records, or why it cannot be.
+@[ checks ]
+data Resolved : Type {
+  ResolvedAs : (step : Step) --> Resolved;
+  Unresolvable : (cause : Cause) --> Resolved;
+}
+
+/// The move a receipt's kind makes, a decision keeping its branch; none for
+/// a kind outside the task's moves.
+@[ checks ]
+def action(kind : Kind) -> -F Maybe(Move) {
+  case kind {
+    Dispatch(edition, seat, brief) => (Some(DispatchMove) : Maybe(Move)),
+    Report(dispatch, content, summary) => (Some(ReportMove) : Maybe(Move)),
+    Handoff(dispatch, to) => (Some(HandoffMove) : Maybe(Move)),
+    Retire(dispatch) => (Some(RetireMove) : Maybe(Move)),
+    Pause(dispatch) => (Some(PauseMove) : Maybe(Move)),
+    Verdict(dispatch, judge, rubric, transcript, answers) => (Some(VerdictMove) : Maybe(Move)),
+    Verified(
+      dispatch,
+      runner,
+      playbook,
+      step,
+      output,
+      status
+    ) => (Some(VerifiedMove) : Maybe(Move)),
+    Graded(verdict, grades, composed) => (Some(GradedMove) : Maybe(Move)),
+    Decide(dispatch, operator, decision) => {
+      run chosen <- choice(decision);
+      (Some(DecideMove(chosen)) : Maybe(Move))
+    },
+    Landed(decided, merge) => (Some(LandedMove) : Maybe(Move)),
+    _ => (None : Maybe(Move))
+  }
+}
+
+/// The channel a move with this commit and kind is on: a verdict opens its
+/// own judge's channel, a grading is on its verdict's.
+@[ checks ]
+def channel(commit : Integer, kind : Kind) -> -F Channel {
+  case kind {
+    Verdict(dispatch, judge, rubric, transcript, answers) => OnJudge(commit),
+    Graded(verdict, grades, composed) => OnJudge(verdict),
+    Verified(dispatch, runner, playbook, step, output, status) => OnRunner,
+    Decide(dispatch, operator, decision) => OnDecision,
+    Landed(decided, merge) => OnDecision,
+    _ => OnSlot
+  }
+}
+
+/// Where a verdict's judge channel stands: fresh until its verdict.
+@[ checks ]
+def rec judging(verdict : Integer, judges : List(Judging)) -> -F Phase {
+  case judges {
+    Nil => JudgeFresh,
+    Cons(held, rest) => case held {
+      JudgingOf(of, phase) => case of == verdict {
+        true => phase,
+        false => become judging[<](verdict, rest)
+      }
+    }
+  }
+}
+
+/// The judges' channels with a verdict's at `phase`, replaced where held
+/// and added otherwise.
+@[ checks ]
+def rec rejudged(verdict : Integer, phase : Phase, judges : List(Judging)) -> -F List(Judging) {
+  case judges {
+    Nil => (Cons(JudgingOf(verdict, phase), Nil) : List(Judging)),
+    Cons(held, rest) => case held {
+      JudgingOf(of, was) => case of == verdict {
+        true => (Cons(JudgingOf(verdict, phase), rest) : List(Judging)),
+        false => {
+          run later <- rejudged[<](verdict, phase, rest);
+          (Cons(held, later) : List(Judging))
+        }
+      }
+    }
+  }
+}
+
+/// Where a channel's play stands.
+@[ checks ]
+def phaseOn(on : Channel, plays : Plays) -> -F Phase {
+  case plays {
+    PlaysAt(slot, judges, decision) => case on {
+      OnSlot => slot,
+      OnJudge(verdict) => become judging(verdict, judges),
+      OnRunner => RunnerOpen,
+      OnDecision => decision
+    }
+  }
+}
+
+/// The channels with one channel's play moved to `phase`.
+@[ checks ]
+def movedOn(on : Channel, plays : Plays, phase : Phase) -> -F Plays {
+  case plays {
+    PlaysAt(slot, judges, decision) => case on {
+      OnSlot => PlaysAt(phase, judges, decision),
+      OnJudge(verdict) => {
+        run held <- rejudged(verdict, phase, judges);
+        PlaysAt(slot, held, decision)
+      },
+      OnRunner => plays,
+      OnDecision => PlaysAt(slot, judges, phase)
+    }
+  }
+}
+
+/// The kind of an earlier move by its commit, if the attempt holds it.
+@[ checks ]
+def rec relatedKind(commit : Integer, related : List(Related)) -> -F Maybe(Kind) {
+  case related {
+    Nil => (None : Maybe(Kind)),
+    Cons(entry, rest) => case entry {
+      RelatedAt(held, kind) => case held == commit {
+        true => (Some(kind) : Maybe(Kind)),
+        false => become relatedKind[<](commit, rest)
+      }
+    }
+  }
+}
+
+/// A grading resolved through the verdict it names: refused as unreferenced
+/// unless an earlier move is that verdict and the grading grades each of its
+/// questions.
+@[ checks ]
+def gradingStep(
+  verdict : Integer,
+  grades : List(Grade),
+  composed : Grade,
+  related : List(Related)
+) -> -F Resolved {
+  case relatedKind(verdict, related) {
+    None => Unresolvable(Unreferenced(GradedMove)),
+    Some(kind) => case kind {
+      Verdict(dispatch, judge, rubric, transcript, answers) => {
+        run graded <- size(Grade, grades);
+        run asked <- size(Ruled, answers);
+        case graded == asked {
+          false => Unresolvable(Unreferenced(GradedMove)),
+          true => {
+            run marked <- marks(answers, grades);
+            ResolvedAs(GradedStep(dispatch, verdict, rubric, marked, composed))
+          }
+        }
+      },
+      _ => Unresolvable(Unreferenced(GradedMove))
+    }
+  }
+}
+
+/// A landing resolved through the decision it names: refused as
+/// unreferenced unless an earlier move is that decision.
+@[ checks ]
+def landingStep(decided : Integer, merge : String, related : List(Related)) -> -F Resolved {
+  case relatedKind(decided, related) {
+    None => Unresolvable(Unreferenced(LandedMove)),
+    Some(kind) => case kind {
+      Decide(
+        dispatch,
+        operator,
+        decision
+      ) => ResolvedAs(LandedStep(dispatch, decided, operator, merge)),
+      _ => Unresolvable(Unreferenced(LandedMove))
+    }
+  }
+}
+
+/// The step a move by `author` records, its fields from its receipt or from
+/// the verdict or decision it names.
+@[ checks ]
+def resolve(kind : Kind, author : Integer, related : List(Related)) -> -F Resolved {
+  case kind {
+    Dispatch(edition, seat, brief) => ResolvedAs(DispatchStep(edition, seat, brief)),
+    Report(
+      dispatch,
+      content,
+      summary
+    ) => ResolvedAs(ReportStep(dispatch, author, content, summary)),
+    Handoff(dispatch, to) => ResolvedAs(HandoffStep(dispatch, author, to)),
+    Retire(dispatch) => ResolvedAs(RetireStep(dispatch, author)),
+    Pause(dispatch) => ResolvedAs(PauseStep(dispatch, author)),
+    Verdict(
+      dispatch,
+      judge,
+      rubric,
+      transcript,
+      answers
+    ) => ResolvedAs(VerdictStep(dispatch, judge, rubric, transcript, answers)),
+    Verified(
+      dispatch,
+      runner,
+      playbook,
+      step,
+      output,
+      status
+    ) => ResolvedAs(VerifiedStep(dispatch, runner, playbook, step, output, status)),
+    Graded(verdict, grades, composed) => become gradingStep(verdict, grades, composed, related),
+    Decide(dispatch, operator, decision) => ResolvedAs(DecideStep(dispatch, operator, decision)),
+    Landed(decided, merge) => become landingStep(decided, merge, related),
+    _ => Unresolvable(NotMove)
+  }
+}
+
+/// The dispatch a step answers: a dispatch answers itself, at `commit`.
+@[ checks ]
+def answered(commit : Integer, step : Step) -> -F Integer {
+  case step {
+    DispatchStep(edition, seat, brief) => commit,
+    ReportStep(dispatch, author, content, summary) => dispatch,
+    HandoffStep(dispatch, giver, to) => dispatch,
+    RetireStep(dispatch, author) => dispatch,
+    PauseStep(dispatch, author) => dispatch,
+    VerdictStep(dispatch, judge, rubric, transcript, answers) => dispatch,
+    VerifiedStep(dispatch, runner, playbook, name, output, status) => dispatch,
+    GradedStep(dispatch, verdict, rubric, grades, composed) => dispatch,
+    DecideStep(dispatch, operator, decision) => dispatch,
+    LandedStep(dispatch, decided, operator, merge) => dispatch
+  }
+}
+
+/// A resolved step admitted when it answers `dispatch`: its channel moved,
+/// the move related, the step recorded, and the rest replayed.
+@[ checks ]
+def rec admit(
+  dispatch : Integer,
+  edition : Integer,
+  plays : Plays,
+  related : List(Related),
+  task : Task,
+  moves : List(Attested)
+) -> -F Replay {
+  case moves {
+    Nil => Conformed(task),
+    Cons(attested, rest) => case attested {
+      AttestedMove(attempt, sequence, commit, author, kind) => case action(kind) {
+        None => RefusedMove(attempt, sequence, NotMove),
+        Some(move) => {
+          run on <- channel(commit, kind);
+          run phase <- phaseOn(on, plays);
+          case monitor(edition, phase, move) {
+            Stuck(reason) => RefusedMove(attempt, sequence, Breaks(edition, move, reason)),
+            Moved(next) => case resolve(kind, author, related) {
+              Unresolvable(cause) => RefusedMove(attempt, sequence, cause),
+              ResolvedAs(step) => {
+                run answers <- answered(commit, step);
+                case answers == dispatch {
+                  false => RefusedMove(attempt, sequence, Unreferenced(move)),
+                  true => {
+                    run later <- movedOn(on, plays, next);
+                    run recorded <- record(task, commit, step);
+                    become admit[<](
+                      dispatch,
+                      edition,
+                      later,
+                      (Cons(RelatedAt(commit, kind), related) : List(Related)),
+                      recorded,
+                      rest
+                    )
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// An attempt's attested moves replayed: absent with no move; refused
+/// unless a dispatch opens it at sequence zero; otherwise every move replayed
+/// under that dispatch's edition from fresh channels and an empty task.
+@[ checks ]
+def replay(attempt : Integer, moves : List(Attested)) -> -F Replay {
+  case moves {
+    Nil => Absent(attempt),
+    Cons(first, rest) => case first {
+      AttestedMove(numbered, sequence, commit, author, kind) => case kind {
+        Dispatch(edition, seat, brief) => case sequence == 0 {
+          false => RefusedMove(numbered, sequence, NoDispatch),
+          true => become admit(
+            commit,
+            edition,
+            PlaysAt(SlotFresh, (Nil : List(Judging)), DecisionFresh),
+            (Nil : List(Related)),
+            Task((Nil : List(Stepped)), Undispatched),
+            moves
+          )
+        },
+        _ => RefusedMove(numbered, sequence, NoDispatch)
+      }
+    }
+  }
+}
+
+/// The standing a replay reaches, when it conforms.
+@[ checks ]
+def standingOf(replayed : Replay) -> -F Maybe(Current) {
+  case replayed {
+    Conformed(task) => case task {
+      Task(steps, current) => (Some(current) : Maybe(Current))
+    },
+    _ => (None : Maybe(Current))
+  }
+}
+
+/// A move of the tests' attempt 1.
+@[ checks ]
+def inFirst(sequence : Integer, commit : Integer, author : Integer, kind : Kind) -> -F Attested {
+  AttestedMove(1, sequence, commit, author, kind)
+}
+
+/// A move of the tests' attempt 2.
+@[ checks ]
+def inSecond(sequence : Integer, commit : Integer, author : Integer, kind : Kind) -> -F Attested {
+  AttestedMove(2, sequence, commit, author, kind)
+}
+
+/// The tests' dispatch: edition 1, to seat 20, of a brief by its hash.
+@[ checks ]
+def dispatched = (Dispatch(1, 20, BriefHashed(5)) : Kind);
+
+/// `proof_membership_does_not_admit_a_play`: a report after the retirement
+/// resumes the ended slot, refused at sequence 3.
+@[ runs("RefusedMove(1, 3, Breaks(1, ReportMove, ResumeAfterEnd))") ]
+def reportAfterRetire : () => Replay ;
+def reportAfterRetire = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run reported <- inFirst(1, 2, 20, Report(1, 701, "first"));
+  run retired <- inFirst(2, 3, 20, Retire(1));
+  run late <- inFirst(3, 4, 20, Report(1, 701, "late"));
+  become replay(
+    1,
+    (Cons(opened, Cons(reported, Cons(retired, Cons(late, Nil)))) : List(Attested))
+  )
+} ;
+
+/// A landing with no decision goes the other way from the choice the
+/// decision channel owes: the monitor refuses it before its reference is
+/// resolved.
+@[ runs("RefusedMove(1, 1, Breaks(1, LandedMove, WrongDirection))") ]
+def landingUndecided : () => Replay ;
+def landingUndecided = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run landing <- inFirst(1, 2, 10, Landed(9, revision));
+  become replay(1, (Cons(opened, Cons(landing, Nil)) : List(Attested)))
+} ;
+
+/// A grading of no verdict sends another payload than the verdict its fresh
+/// judge's channel owes.
+@[ runs("RefusedMove(1, 1, Breaks(1, GradedMove, WrongPayloadIdentity))") ]
+def gradingUnjudged : () => Replay ;
+def gradingUnjudged = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run grading <- inFirst(1, 3, 10, Graded(2, (Nil : List(Grade)), Met));
+  become replay(1, (Cons(opened, Cons(grading, Nil)) : List(Attested)))
+} ;
+
+/// A second grading of one verdict resumes its ended judge's channel.
+@[ runs("RefusedMove(1, 3, Breaks(1, GradedMove, ResumeAfterEnd))") ]
+def gradedTwice : () => Replay ;
+def gradedTwice = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run judged <- inFirst(1, 2, 10, Verdict(1, 10, 903, 705, (Nil : List(Ruled))));
+  run grading <- inFirst(2, 3, 10, Graded(2, (Nil : List(Grade)), Met));
+  run again <- inFirst(3, 3, 10, Graded(2, (Nil : List(Grade)), Met));
+  become replay(
+    1,
+    (Cons(opened, Cons(judged, Cons(grading, Cons(again, Nil)))) : List(Attested))
+  )
+} ;
+
+/// A second decision goes the other way from the landing the first owes.
+@[ runs("RefusedMove(1, 2, Breaks(1, DecideMove(ToLand), WrongDirection))") ]
+def decidedTwice : () => Replay ;
+def decidedTwice = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run decided <- inFirst(1, 2, 10, Decide(1, 10, Land));
+  run again <- inFirst(2, 2, 10, Decide(1, 10, Land));
+  become replay(1, (Cons(opened, Cons(decided, Cons(again, Nil))) : List(Attested)))
+} ;
+
+/// A second landing of one decision resumes the ended decision channel.
+@[ runs("RefusedMove(1, 3, Breaks(1, LandedMove, ResumeAfterEnd))") ]
+def landedTwice : () => Replay ;
+def landedTwice = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run decided <- inFirst(1, 2, 10, Decide(1, 10, Land));
+  run landing <- inFirst(2, 3, 10, Landed(2, revision));
+  run again <- inFirst(3, 3, 10, Landed(2, revision));
+  become replay(
+    1,
+    (Cons(opened, Cons(decided, Cons(landing, Cons(again, Nil)))) : List(Attested))
+  )
+} ;
+
+/// A decision to rework conforms, the attempt decided.
+@[ runs("Some(Attempt(1, 1, BriefHashed(5), Held(20), Awaited, DecidedBy(2, Rework(\"again\"))))") ]
+def reworkDecided : () => Maybe(Current) ;
+def reworkDecided = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run decided <- inFirst(1, 2, 10, Decide(1, 10, Rework("again")));
+  run replayed <- replay(1, (Cons(opened, Cons(decided, Nil)) : List(Attested)));
+  become standingOf(replayed)
+} ;
+
+/// A landing after the rework resumes the channel the rework ended.
+@[ runs("RefusedMove(1, 2, Breaks(1, LandedMove, ResumeAfterEnd))") ]
+def reworkLanded : () => Replay ;
+def reworkLanded = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run decided <- inFirst(1, 2, 10, Decide(1, 10, Rework("again")));
+  run landing <- inFirst(2, 3, 10, Landed(2, revision));
+  become replay(1, (Cons(opened, Cons(decided, Cons(landing, Nil))) : List(Attested)))
+} ;
+
+/// A decision to abandon conforms, the attempt decided.
+@[ runs("Some(Attempt(1, 1, BriefHashed(5), Held(20), Awaited, DecidedBy(2, Abandon)))") ]
+def abandonDecided : () => Maybe(Current) ;
+def abandonDecided = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run decided <- inFirst(1, 2, 10, Decide(1, 10, Abandon));
+  run replayed <- replay(1, (Cons(opened, Cons(decided, Nil)) : List(Attested)));
+  become standingOf(replayed)
+} ;
+
+/// A landing after the abandonment likewise.
+@[ runs("RefusedMove(1, 2, Breaks(1, LandedMove, ResumeAfterEnd))") ]
+def abandonLanded : () => Replay ;
+def abandonLanded = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run decided <- inFirst(1, 2, 10, Decide(1, 10, Abandon));
+  run landing <- inFirst(2, 3, 10, Landed(2, revision));
+  become replay(1, (Cons(opened, Cons(decided, Cons(landing, Nil))) : List(Attested)))
+} ;
+
+/// A dispatch naming edition 99 is refused at sequence 0 by the edition's
+/// name.
+@[ runs("RefusedMove(1, 0, Breaks(99, DispatchMove, UnknownEdition))") ]
+def unknownEdition : () => Replay ;
+def unknownEdition = thunk {
+  run opened <- inFirst(0, 1, 10, Dispatch(99, 20, BriefHashed(5)));
+  become replay(1, (Cons(opened, Nil) : List(Attested)))
+} ;
+
+/// An attempt opened by a report has no dispatch at sequence zero.
+@[ runs("RefusedMove(1, 0, NoDispatch)") ]
+def openedByReport : () => Replay ;
+def openedByReport = thunk {
+  run reported <- inFirst(0, 2, 20, Report(1, 701, "first"));
+  become replay(1, (Cons(reported, Nil) : List(Attested)))
+} ;
+
+/// A report on another dispatch names no move of this one: the monitor
+/// admits it, and the reference refuses it.
+@[ runs("RefusedMove(1, 1, Unreferenced(ReportMove))") ]
+def foreignReport : () => Replay ;
+def foreignReport = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run foreign <- inFirst(1, 2, 20, Report(8, 701, "foreign"));
+  become replay(1, (Cons(opened, Cons(foreign, Nil)) : List(Attested)))
+} ;
+
+/// An attempt with no attested move is absent.
+@[ runs("Absent(1)") ]
+def noMoves : () => Replay ;
+def noMoves = thunk { become replay(1, (Nil : List(Attested))) } ;
+
+/// A receipt outside the task's moves in the range is no move.
+@[ runs("RefusedMove(1, 1, NotMove)") ]
+def noted : () => Replay ;
+def noted = thunk {
+  run opened <- inFirst(0, 1, 10, dispatched);
+  run note <- inFirst(1, 2, 10, Note("aside"));
+  become replay(1, (Cons(opened, Cons(note, Nil)) : List(Attested)))
+} ;
+
+/// `proved_attempts_replay_every_standing`: the fixture's second attempt,
+/// under edition 2 — its dispatch, a pause, a report, a handoff to member
+/// 30, a verification, a verdict, its grading, a decision to land and the
+/// landing — replayed to each standing in turn. The attempt's moves.
+@[ checks ]
+def lifecycle() -> -F List(Attested) {
+  run opened <- inSecond(0, 11, 10, Dispatch(2, 20, BriefHashed(5)));
+  run held <- inSecond(1, 12, 20, Pause(11));
+  run reported <- inSecond(2, 13, 20, Report(11, 701, "reported"));
+  run passed <- inSecond(3, 14, 20, Handoff(11, 30));
+  run verified <- inSecond(4, 15, 10, Verified(11, 10, 904, "test", 706, Exited(0)));
+  run judged <- inSecond(
+    5,
+    16,
+    10,
+    Verdict(11, 10, 903, 705, (Cons(OnQuestion(901, Unread(Tied)), Nil) : List(Ruled)))
+  );
+  run graded <- inSecond(
+    6,
+    17,
+    10,
+    Graded(16, (Cons(Refused, Nil) : List(Grade)), Refused)
+  );
+  run decided <- inSecond(7, 18, 10, Decide(11, 10, Land));
+  run landing <- inSecond(8, 19, 10, Landed(18, revision));
+  (Cons(
+    opened,
+    Cons(
+      held,
+      Cons(
+        reported,
+        Cons(
+          passed,
+          Cons(verified, Cons(judged, Cons(graded, Cons(decided, Cons(landing, Nil)))))
+        )
+      )
+    )
+  ) : List(Attested))
+}
+
+/// The first `count` moves of a list.
+@[ checks ]
+def rec prefix(count : Integer, moves : List(Attested)) -> -F List(Attested) {
+  case count == 0 {
+    true => (Nil : List(Attested)),
+    false => case moves {
+      Nil => moves,
+      Cons(move, rest) => {
+        run fewer <- count - 1;
+        run later <- prefix[<](fewer, rest);
+        (Cons(move, later) : List(Attested))
+      }
+    }
+  }
+}
+
+/// The standing the lifecycle's first `count` moves reach.
+@[ checks ]
+def reached(count : Integer) -> -F Maybe(Current) {
+  run moves <- lifecycle();
+  run played <- prefix(count, moves);
+  run replayed <- replay(2, played);
+  become standingOf(replayed)
+}
+
+/// Dispatched: the attempt awaits its report.
+@[ runs("Some(Attempt(11, 2, BriefHashed(5), Held(20), Awaited, Unchecked))") ]
+def dispatchedStanding : () => Maybe(Current) ;
+def dispatchedStanding = thunk { become reached(1) } ;
+
+/// Paused: the pause moves nothing.
+@[ runs("Some(Attempt(11, 2, BriefHashed(5), Held(20), Awaited, Unchecked))") ]
+def pausedStanding : () => Maybe(Current) ;
+def pausedStanding = thunk { become reached(2) } ;
+
+/// Reported.
+@[ runs("Some(Attempt(11, 2, BriefHashed(5), Held(20), ReportedBy(13), Unchecked))") ]
+def reportedStanding : () => Maybe(Current) ;
+def reportedStanding = thunk { become reached(3) } ;
+
+/// Verified, the slot handed to member 30.
+@[ runs("Some(Attempt(11, 2, BriefHashed(5), Held(30), ReportedBy(13), VerifiedBy(15)))") ]
+def verifiedStanding : () => Maybe(Current) ;
+def verifiedStanding = thunk { become reached(5) } ;
+
+/// Graded.
+@[ runs("Some(Attempt(11, 2, BriefHashed(5), Held(30), ReportedBy(13), GradedBy(17, Refused)))") ]
+def gradedStanding : () => Maybe(Current) ;
+def gradedStanding = thunk { become reached(7) } ;
+
+/// Decided.
+@[ runs("Some(Attempt(11, 2, BriefHashed(5), Held(30), ReportedBy(13), DecidedBy(18, Land)))") ]
+def decidedStanding : () => Maybe(Current) ;
+def decidedStanding = thunk { become reached(8) } ;
+
+/// Landed, every move admitted.
+@[ runs("Some(Attempt(11, 2, BriefHashed(5), Held(30), ReportedBy(13), LandedBy(19, \"0123456789abcdef0123456789abcdef01234567\")))") ]
+def landedStanding : () => Maybe(Current) ;
+def landedStanding = thunk { become reached(9) } ;
+
+/// The landed attempt's steps: each move recorded at its commit, the
+/// grading's marks read from its verdict and the landing's operator from its
+/// decision.
+@[ runs("Conformed(Task(Cons(StepAt(11, DispatchStep(2, 20, BriefHashed(5))), Cons(StepAt(12, PauseStep(11, 20)), Cons(StepAt(13, ReportStep(11, 20, 701, \"reported\")), Cons(StepAt(14, HandoffStep(11, 20, 30)), Cons(StepAt(15, VerifiedStep(11, 10, 904, \"test\", 706, Exited(0))), Cons(StepAt(16, VerdictStep(11, 10, 903, 705, Cons(OnQuestion(901, Unread(Tied)), Nil))), Cons(StepAt(17, GradedStep(11, 16, 903, Cons(MarkedAs(901, Refused), Nil), Refused)), Cons(StepAt(18, DecideStep(11, 10, Land)), Cons(StepAt(19, LandedStep(11, 18, 10, \"0123456789abcdef0123456789abcdef01234567\")), Nil))))))))), Attempt(11, 2, BriefHashed(5), Held(30), ReportedBy(13), LandedBy(19, \"0123456789abcdef0123456789abcdef01234567\"))))") ]
+def landedSteps : () => Replay ;
+def landedSteps = thunk {
+  run moves <- lifecycle();
+  become replay(2, moves)
+} ;
+
+/// The same moves under edition 1 refuse the pause, which edition 1 does
+/// not offer.
+@[ runs("RefusedMove(2, 1, Breaks(1, PauseMove, WrongLabel))") ]
+def pausedUnderOne : () => Replay ;
+def pausedUnderOne = thunk {
+  run held <- inSecond(1, 12, 20, Pause(11));
+  run opened <- inSecond(0, 11, 10, Dispatch(1, 20, BriefHashed(5)));
+  become replay(2, (Cons(opened, Cons(held, Nil)) : List(Attested)))
+} ;

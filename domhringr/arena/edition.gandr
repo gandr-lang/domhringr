@@ -1,0 +1,62 @@
+// Editions: the number a dispatch names its protocols by. It follows
+// `Edition` and `Arena::session` of `domhringr-arena-session`
+// (`crates/arena-session/src/lib.rs`): a peer knows the editions compiled
+// into it, editions 1 and 2 as in the peer's build, and reads every other
+// number, zero included, as an unknown edition named by that number — never
+// as a protocol of its own choosing. Edition 1 is the base protocols;
+// edition 2 widens the slot with a pause (`./protocol.gandr`).
+//
+// An unknown edition's number is bound as `named`: a pattern binder spelled
+// `number` is refused as a literal (gandr #1863).
+
+/// The editions this peer knows.
+@[ checks ]
+data Edition : Type {
+  EditionOne : Edition;
+  EditionTwo : Edition;
+}
+
+/// A dispatch's edition number read against the editions this peer knows:
+/// a known edition, or the unknown number itself.
+@[ checks ]
+data Catalogued : Type {
+  Known : (edition : Edition) --> Catalogued;
+  Unknown : (named : Integer) --> Catalogued;
+}
+
+/// The edition a number names, or the number as unknown.
+@[ checks ]
+def catalogued(named : Integer) -> -F Catalogued {
+  case named == 1 {
+    true => Known(EditionOne),
+    false => case named == 2 {
+      true => Known(EditionTwo),
+      false => Unknown(named)
+    }
+  }
+}
+
+/// `unknown_editions_never_replay_as_known_protocols`: edition 1 is known.
+@[ runs("Known(EditionOne)") ]
+def editionOneKnown : () => Catalogued ;
+def editionOneKnown = thunk { become catalogued(1) } ;
+
+/// Edition 2 is known: this peer's build carries the pause.
+@[ runs("Known(EditionTwo)") ]
+def editionTwoKnown : () => Catalogued ;
+def editionTwoKnown = thunk { become catalogued(2) } ;
+
+/// Zero is a number like any other, unknown and named, never a default.
+@[ runs("Unknown(0)") ]
+def editionZeroUnknown : () => Catalogued ;
+def editionZeroUnknown = thunk { become catalogued(0) } ;
+
+/// The largest edition the crate's number holds stays a name.
+@[ runs("Unknown(18446744073709551615)") ]
+def editionLargestUnknown : () => Catalogued ;
+def editionLargestUnknown = thunk { become catalogued(18446744073709551615) } ;
+
+/// The edition the replay tests' unknown dispatch names.
+@[ runs("Unknown(99)") ]
+def editionNinetyNineUnknown : () => Catalogued ;
+def editionNinetyNineUnknown = thunk { become catalogued(99) } ;
