@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Run `mise run <task> -- <args>` inside the pinned Linux CI image, for a
+# macOS host: `test` and `check:coverage`, the tasks that run the suite. The
+# image is `.github/docker/ci.Dockerfile` built locally and tagged with the
+# hash `image-tag.sh` gives CI, so it is rebuilt only when its pins change;
+# the build context holds the pin files alone, never the tree.
+#
+# The tree and its Git directory are mounted at their host paths, so every
+# path a task reads resolves alike inside. Build output never crosses the
+# mount: the target directory the caller selected (`target`, or
+# `target/enforcing` under `check:tests-enforcing`) maps to the same relative
+# directory in a named volume, one per checkout, and Cargo's registry and Git
+# checkouts live in volumes of their own. All three outlive the container, so
+# a later run reuses the build.
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+common=$(cd "$(git rev-parse --git-common-dir)" && pwd)
+cd "$root"
+(( $# > 0 )) || { echo 'linux-tests: name the task to run' >&2; exit 2; }
+task=$1
+shift
+command -v docker > /dev/null \
+  || { echo 'linux-tests: docker is not installed; run `mise run test --native -- …` to test on the host' >&2; exit 2; }
+
+tag=$(.github/docker/image-tag.sh)
+image=domhringr-ci:${tag#tag=}
+if ! docker image inspect "$image" > /dev/null 2>&1; then
+  context=$(mktemp -d)
+  trap 'rm -rf "$context"' EXIT
+  git ls-files -z -- rust-toolchain.toml mise.toml mise.lock .mise/locks .github/workflows/ci.yml \
+      .config/mise/tasks/mise-tasks-fmt.toml .config/mise/tasks/mise-tasks-check.toml \
+    | tar --null -T - -cf - | tar -xf - -C "$context"
+  secret=()
+  if token=$(gh auth token 2> /dev/null) && [[ -n $token ]]; then
+    export GITHUB_TOKEN=$token
+    secret=(--secret id=github_token,env=GITHUB_TOKEN)
+  fi
+  echo "linux-tests: building $image" >&2
+  docker build ${secret[@]+"${secret[@]}"} -f .github/docker/ci.Dockerfile -t "$image" "$context"
+fi
+
+host_target=${CARGO_TARGET_DIR:-$root/target}
+relative=${host_target#"$root"/}
+[[ $relative != /* ]] || { echo "linux-tests: CARGO_TARGET_DIR $host_target lies outside $root" >&2; exit 2; }
+checkout=$(printf '%s' "$root" | shasum -a 256 | cut -c 1-16)
+# A sibling linked with `sibling:sync --link` points outside the tree, so its
+# checkout is mounted at its own path too.
+mounts=(--volume "$root:$root" --volume "$common:$common")
+if [[ -L vendor/gandr ]]; then
+  sibling=$(cd vendor/gandr && pwd -P)
+  mounts+=(--volume "$sibling:$sibling")
+fi
+
+exec docker run --rm --init \
+  "${mounts[@]}" --workdir "$root" \
+  --volume domhringr-tests-target:/var/cache/domhringr-target \
+  --volume domhringr-tests-registry:/opt/ci/.cargo/registry \
+  --volume domhringr-tests-git:/opt/ci/.cargo/git \
+  --env CARGO_TARGET_DIR="/var/cache/domhringr-target/$checkout/$relative" \
+  --env MISE_TRUSTED_CONFIG_PATHS="$root" \
+  --env RUSTFLAGS --env NEXTEST_PROFILE --env CARGO_TERM_COLOR \
+  "$image" mise run "$task" ${@+-- "$@"}

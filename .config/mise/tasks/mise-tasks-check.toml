@@ -268,10 +268,12 @@ echo 'markdown check OK: every tracked markdown file is on the README allowlist'
   "git ls-files -z -- '*.md' | xargs -0 sizelint check",
 ]
 
-# On macOS the application firewall keys its "allow incoming connections"
-# decision on the code signature, and cargo's ad-hoc signature changes with
-# every build, so an unsigned run prompts for each executable that binds a
-# socket and stalls an unattended run. When CODESIGN_IDENTITY names an
+# On macOS the suite runs in the pinned Linux CI image (`test`), where no
+# application firewall sees its binaries. A native run on macOS, asked for by
+# hand with `mise run test --native -- …`, meets the firewall: it keys its
+# "allow incoming connections" decision on the code signature, and cargo's
+# ad-hoc signature changes with every build, so an unsigned run prompts for
+# each executable that binds a socket. When CODESIGN_IDENTITY names an
 # identity in the login keychain, every executable cargo built is re-signed
 # with it under one identifier before the run, so one allow covers every
 # build. Both the `deps/` outputs and the uplifted binaries are signed: cargo
@@ -321,14 +323,25 @@ elif [[ "$(uname -s)" == "Darwin" ]]; then
 fi
 '''
 
+# On a macOS workstation the suite runs in the pinned Linux CI image
+# (`.config/mise/linux-tests`): no firewall keys on a binary inside the
+# container, so no dialogue stalls an unattended run. `--native` runs it on
+# the host instead, signed as `build:tests` describes. CI's macOS lane (`CI`
+# set) and every other host run it natively.
 [test]
 description = "Build, sign, and run tests with nextest arguments"
-usage = 'arg "[args]" var=#true double_dash="required"'
+usage = '''
+flag "--native" help="on macOS, run on the host, signed, instead of in the Linux image"
+arg "[args]" var=#true double_dash="required"
+'''
 tools.jq = "1.8.1"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 eval "args=(${usage_args:-})"
+if [[ "$(uname -s)" == Darwin && -z ${CI:-} && ${usage_native:-false} != true ]]; then
+  exec .config/mise/linux-tests test ${args[@]+"${args[@]}"}
+fi
 mise run build:tests -- ${args[@]+"${args[@]}"}
 target=$(cargo metadata --manifest-path Cargo.toml --locked --no-deps --format-version 1 | jq -r '.target_directory')
 export DOMHRINGR_EDITION_ONE="$target/debug/domhringr-peer-edition-one"
@@ -414,18 +427,24 @@ run = "mise install --locked npm:oxfmt npm:@commitlint/cli"
 
 # The enforcing suite, instrumented into target/coverage so it never shares
 # the cached enforcing state. The edition-1 peer is the binary the suite
-# spawns; it is not part of the instrumented graph.
+# spawns; it is not part of the instrumented graph. On a macOS workstation it
+# runs in the Linux image, as `test` does, so the target directory is the one
+# the caller selected, never the tree's own.
 ["check:coverage"]
 description = "Enforcing line coverage of the workspace, as coverage.lcov"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 root="{{ config_root }}"
+if [[ "$(uname -s)" == Darwin && -z ${CI:-} ]]; then
+  exec .config/mise/linux-tests check:coverage
+fi
+target=${CARGO_TARGET_DIR:-$root/target}
 export NEXTEST_PROFILE=ci-enforcing
-cargo build --package domhringr-surface-peer --bin domhringr-peer --no-default-features --locked
-cp "$root/target/debug/domhringr-peer" "$root/target/debug/domhringr-peer-edition-one"
-export DOMHRINGR_EDITION_ONE="$root/target/debug/domhringr-peer-edition-one"
-RUSTFLAGS="--cfg anodized_panic" CARGO_TARGET_DIR="$root/target/coverage" \
+CARGO_TARGET_DIR=$target cargo build --package domhringr-surface-peer --bin domhringr-peer --no-default-features --locked
+cp "$target/debug/domhringr-peer" "$target/debug/domhringr-peer-edition-one"
+export DOMHRINGR_EDITION_ONE="$target/debug/domhringr-peer-edition-one"
+RUSTFLAGS="--cfg anodized_panic" CARGO_TARGET_DIR="$target/coverage" \
   cargo llvm-cov nextest --workspace --locked --lcov --output-path "$root/coverage.lcov"
 # An instrumented binary run with its profile path cleared writes its
 # profile into its working directory, out of the report; none may remain.
