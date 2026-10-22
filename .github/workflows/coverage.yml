@@ -116,7 +116,7 @@ jobs:
       - &install-policy-tools
         name: install mise-managed policy tools
         if: ${{ needs.ci-image-ref.outputs.ref == '' }}
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           version: 2026.10.3
           cache: true
@@ -153,7 +153,7 @@ jobs:
           key: ${{ steps.coverage-state-restore.outputs.cache-primary-key }}
       - &upload-coverage
         name: upload coverage
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.lcov
