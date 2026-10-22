@@ -1,17 +1,13 @@
 // The checks the fold applies to a receipt and the refusal each yields: the
-// causal past a commit reads its authority from, the slot it holds, the
-// replay of each task channel's moves, and the grading and landing checks.
-// It follows `fold.rs` of `domhringr-record-tree`
+// causal past a commit reads its authority from, the slot it holds, and the
+// grading and landing checks. It follows `fold.rs` of `domhringr-record-tree`
 // (`crates/record-tree/src/fold.rs`: `Refusal`, `Course`, `Past`,
-// `grading`, `landing`) and the channel protocols of
-// `domhringr-arena-session` (`crates/arena-session/src/lib.rs`).
+// `grading`, `landing`); each task channel's moves replay through the arena's
+// monitor (`../arena/protocol.gandr`).
 //
 // A refusal is data the fold returns, never a fault. A protocol refusal names
 // the dispatch's edition, the move and the reason the monitor gives; the
-// monitor's endpoint index and expected action are not kept. The channels
-// replay as the session types the arena compiles, written here as their
-// states: editions 1 and 2 are known, as in the peer's build, and every move
-// under another edition is refused by name.
+// monitor's endpoint index and expected action are not kept.
 
 // Lists, and the rubric the grades come from.
 import "../strategy/rubric.gandr" ;
@@ -25,38 +21,8 @@ import "../strategy/compose.gandr" ;
 // The receipt kinds.
 import "./receipt.gandr" ;
 
-/// The operator's choice on a decision channel.
-@[ checks ]
-data Choice : Type {
-  ToLand : Choice;
-  ToRework : Choice;
-  ToAbandon : Choice;
-}
-
-/// A receipt's move on a task channel.
-@[ checks ]
-data Move : Type {
-  DispatchMove : Move;
-  ReportMove : Move;
-  HandoffMove : Move;
-  RetireMove : Move;
-  PauseMove : Move;
-  VerdictMove : Move;
-  GradedMove : Move;
-  VerifiedMove : Move;
-  DecideMove : (choice : Choice) --> Move;
-  LandedMove : Move;
-}
-
-/// Why the monitor refuses a move.
-@[ checks ]
-data Reason : Type {
-  UnknownEdition : Reason;
-  WrongLabel : Reason;
-  ResumeAfterEnd : Reason;
-  WrongPayloadIdentity : Reason;
-  WrongDirection : Reason;
-}
+// The channels' moves and the monitor that replays them.
+import "../arena/protocol.gandr" ;
 
 /// Why the fold gives a commit no meaning.
 @[ checks ]
@@ -243,104 +209,6 @@ def merge(a : Past, b : Past) -> -F Past {
         run c <- later(course, otherCourse);
         Past(g, s, v, d, c)
       }
-    }
-  }
-}
-
-/// Where a channel's play stands: a slot before its dispatch, owing its
-/// first report, or open to another report or an ending; a judge's channel
-/// before its verdict or owing its grading; a runner's, always open; an
-/// operator's before its choice or owing the landing a choice to land
-/// requires; or ended.
-@[ checks ]
-data Phase : Type {
-  SlotFresh : Phase;
-  SlotOwed : Phase;
-  SlotOpen : Phase;
-  JudgeFresh : Phase;
-  JudgeRuled : Phase;
-  RunnerOpen : Phase;
-  DecisionFresh : Phase;
-  DecisionLanding : Phase;
-  Ended : Phase;
-}
-
-/// A move replayed: the phase it leaves the play in, or why the monitor
-/// refuses it, leaving the play where it was.
-@[ checks ]
-data Replayed : Type {
-  Moved : (phase : Phase) --> Replayed;
-  Stuck : (reason : Reason) --> Replayed;
-}
-
-/// Whether the peer knows an edition's protocols: editions 1 and 2.
-@[ checks ]
-def known(edition : Integer) -> -F Bool {
-  case edition == 1 {
-    true => edition == 1,
-    false => edition == 2
-  }
-}
-
-/// A pause under `edition` at `phase`: edition 2 offers it in both slot
-/// phases and keeps the phase; edition 1 offers no such label.
-@[ checks ]
-def paused(edition : Integer, phase : Phase) -> -F Replayed {
-  case edition == 2 {
-    true => Moved(phase),
-    false => Stuck(WrongLabel)
-  }
-}
-
-/// A move replayed against its channel's play under `edition`. The slot is
-/// `?Dispatch . report . μX.(report . X | handoff . end | retire . end)`,
-/// edition 2 adding `pause` in both phases; the judge's `!Verdict . !Graded
-/// . end`; the runner's `μt. !Verified . t`; the operator's a choice of land
-/// (`!Decide . !Landed . end`), rework or abandon (`!Decide . end`). An
-/// ended play refuses every move, as resuming after its end; a fresh slot
-/// play receives only its dispatch.
-@[ checks ]
-def replay(edition : Integer, phase : Phase, move : Move) -> -F Replayed {
-  case known(edition) {
-    false => Stuck(UnknownEdition),
-    true => case phase {
-      SlotFresh => case move {
-        DispatchMove => Moved(SlotOwed),
-        _ => Stuck(WrongDirection)
-      },
-      SlotOwed => case move {
-        ReportMove => Moved(SlotOpen),
-        PauseMove => become paused(edition, phase),
-        _ => Stuck(WrongLabel)
-      },
-      SlotOpen => case move {
-        ReportMove => Moved(SlotOpen),
-        HandoffMove => Moved(Ended),
-        RetireMove => Moved(Ended),
-        PauseMove => become paused(edition, phase),
-        _ => Stuck(WrongLabel)
-      },
-      JudgeFresh => case move {
-        VerdictMove => Moved(JudgeRuled),
-        _ => Stuck(WrongPayloadIdentity)
-      },
-      JudgeRuled => case move {
-        GradedMove => Moved(Ended),
-        _ => Stuck(WrongPayloadIdentity)
-      },
-      RunnerOpen => Moved(RunnerOpen),
-      DecisionFresh => case move {
-        DecideMove(choice) => case choice {
-          ToLand => Moved(DecisionLanding),
-          _ => Moved(Ended)
-        },
-        _ => Stuck(WrongDirection)
-      },
-      DecisionLanding => case move {
-        LandedMove => Moved(Ended),
-        _ => Stuck(WrongDirection)
-      },
-      Ended => Stuck(ResumeAfterEnd)
     }
   }
 }
