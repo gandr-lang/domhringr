@@ -172,35 +172,193 @@ for entry in "$publish/"*; do
 done
 '''
 
+# The pull request's title becomes the header of its merge commit on main: a
+# conventional header of at most 72 characters, its type and scope from
+# commitlint.config.mjs.
+#
+# The body names the issues it works, one per line: `Closes #n` for an issue
+# the pull request finishes (GitHub closes it on merge), `Advances #n` for a
+# slice of a larger one. On merge, `.github/workflows/claims.yml` takes
+# `status:claimed` off every issue the body closes or advances; a seat
+# that goes on to the next slice claims it again when it starts.
+#
+# Every pull request stacks on the server's top (gandr-lang/gandr#1264): when
+# any pull request is open, the branch's own commits are rebased onto the top's
+# branch (`top.jq`: the open pull request no other targets, on the longest chain
+# from main). Its own commits leave out every other open pull request's and
+# every patch the top already carries (`own_fork`, gandr-lang/gandr#1298), so a
+# rerun after the top moved never carries another pull request's change. It
+# opens with the top's branch as its base, linked into the top's stack
+# (`gh stack link`). A chain with a pull request below that lands on its own, in
+# the merge queue or set to auto-merge, cannot take a link
+# (gandr-lang/gandr#1353); the pull request then opens unlinked on the top.
+# GitHub closes an unlinked pull request, unmerged, when a merge deletes its
+# base branch (gandr-lang/gandr#1420), so every open, unlinked pull request on
+# the branch of one that lands on its own is retargeted to main
+# (`retarget_landing`), and `pr:land` from the top waits for that one to merge,
+# then restacks and queues the chain. `decide.jq` reads which, as it does for
+# `pr:land`. The task prints which path it took. With nothing open it opens
+# against main.
+#
+# A pull request that is landing, in the merge queue or set to auto-merge, is
+# never the top (gandr-lang/gandr#1455): its merge deletes its branch, and a
+# queued stack takes no link, so a pull request opened on it would close
+# unmerged. With every open pull request landing, the new one opens on main;
+# `pr:land` waits for the landing heads its branch holds to merge
+# (`carried_queued`).
+#
+# A pull request a `pr:land` is waiting to queue carries the `landing` label
+# (gandr-lang/gandr#1556), and a top carrying it is refused: stacked on, it
+# would stop being the top under the landing, which then refuses and starts
+# again from the new top, a whole checks cycle later. Once the chain is queued,
+# the label is gone and the new pull request opens on the trunk. The top is read
+# at the start and again just before the push (gandr-lang/gandr#1601): a
+# `pr:land` started on the top between the two holds the top. A top held or
+# changed by then is refused. `pr:land` holds its pull request before it reads
+# the chain and reads the chain again before it queues, so an open that read the
+# top before the hold and pushes after it makes the landing refuse instead.
+#
+# The rule runs from the branch the task is run on, so a branch that lacks a
+# change main made to `.config/pr-stack` is refused until it is rebased onto
+# main (`stacking_current`): a branch forked before a fix runs the rule the
+# fix replaced.
+#
+# A fix the open stack waits on cannot stack on it: it would land behind the
+# pull request it unblocks. `--unblocks <n>` names that pull request, and the
+# fix opens as a second bottom on main and is set to auto-merge so it queues on
+# its own (gandr-lang/gandr#1353). The body must name #n. Once it merges,
+# `pr:land` from the stack's top rebases the chain onto it. Every other second
+# bottom is refused.
+["pr:open"]
+description = "Open the pull request on the server's top"
+usage = '''
+arg "<title>" help="the pull request title: a conventional header"
+arg "<body>" help="the body file"
+flag "--unblocks <number>" help="the open pull request this fix unblocks: open on main and queue on its own"
+'''
+run = '''
+{% raw %}#!/usr/bin/env bash
+set -euo pipefail
+body=$(realpath "${usage_body:?}")
+repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+trunk=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
+source "$(git rev-parse --show-toplevel)/.config/pr-stack/stack.bash"
+own=$(git branch --show-current)
+[[ -n "$own" && "$own" != "$trunk" ]] || { echo "pr:open opens the checked-out branch; check out a unit branch, not $trunk" >&2; exit 2; }
+if existing=$(gh pr view "$own" -R "$repo" --json number,state --jq 'select(.state == "OPEN") | .number' 2> /dev/null) && [[ -n "$existing" ]]; then
+  echo "$own already has PR #$existing open; land it with \`pr:land\`" >&2
+  exit 2
+fi
+stacking_current || exit 2
+unblocks=${usage_unblocks:-}
+if [[ -n "$unblocks" ]]; then
+  [[ "$unblocks" =~ ^[0-9]+$ && $(gh pr view "$unblocks" -R "$repo" --json state --jq .state 2> /dev/null) == OPEN ]] \
+    || { echo "--unblocks names #$unblocks, which is not an open pull request" >&2; exit 2; }
+  grep -qE -- "#$unblocks([^0-9]|\$)" "$body" \
+    || { echo "the body must name #$unblocks, the pull request this fix unblocks" >&2; exit 2; }
+  top=null
+else
+  top=$(stack_top "$own")
+  if [[ $(jq -r '.held // false' <<< "$top") == true ]]; then
+    echo "the stack top #$(jq -r .number <<< "$top") is being landed; wait for the queue (the coordinator pages it), then pr:open opens on $trunk" >&2
+    exit 2
+  fi
+fi
+git fetch --quiet origin "$trunk"
+if [[ "$top" == null ]]; then
+  base=$trunk
+  if [[ -z "$unblocks" ]]; then echo "no pull request is open outside the merge queue: opening against $trunk"; fi
+else
+  base=$(jq -r .head <<< "$top")
+  top_number=$(jq -r .number <<< "$top")
+  git fetch --quiet origin "$base"
+  if ! git merge-base --is-ancestor "origin/$base" HEAD; then
+    fork=$(own_fork "$own" "$base")
+    git rebase --quiet --update-refs --onto "origin/$base" "$fork" \
+      || { git rebase --abort; echo "the rebase of $own onto $base (#$top_number, the top) conflicts; resolve it on $own, run the hooks, and run \`pr:open\` again" >&2; exit 1; }
+  fi
+fi
+# A second bottom is refused unless it unblocks the open stack: with any other
+# pull request open and not landing, the base is a branch of the stack.
+if [[ -z "$unblocks" && "$base" == "$trunk" && $(open_prs | jq --arg own "$own" '[.[] | select(.head != $own and (.landing | not))] | length') != 0 ]]; then
+  echo "$own would open a second bottom on $trunk while another pull request is open; run \`pr:open\` again to stack it on the top" >&2
+  exit 2
+fi
+if [[ -z "$unblocks" ]]; then
+  now=$(stack_top "$own")
+  if [[ $(jq -r '.held // false' <<< "$now") == true ]]; then
+    echo "the stack top #$(jq -r .number <<< "$now") began landing while the branch was readied; wait for the queue (the coordinator pages it), then pr:open opens on $trunk" >&2
+    exit 2
+  fi
+  if [[ $(jq -r '.number // empty' <<< "$now") != $(jq -r '.number // empty' <<< "$top") ]]; then
+    echo "the stack top moved from #$(jq -r '.number // "none"' <<< "$top") to #$(jq -r '.number // "none"' <<< "$now") while the branch was readied; run \`pr:open\` again" >&2
+    exit 2
+  fi
+fi
+git push --quiet --force-with-lease -u origin HEAD
+url=$(gh pr create -R "$repo" --base "$base" --head "$own" --title "${usage_title:?}" --body-file "$body")
+echo "$url"
+if [[ -n "$unblocks" ]]; then
+  gh pr merge "${url##*/}" -R "$repo" --merge --auto
+  echo "#${url##*/} opens on $trunk to unblock #$unblocks and queues on its own; once it merges, \`pr:land\` from the stack's top rebases the chain onto it"
+fi
+if [[ "$base" != "$trunk" ]]; then
+  number=${url##*/}
+  stack=$(server_stack "$number")
+  decision=$(jq -rn --argjson server "$stack" --arg own "$own" --argjson queued "$(queued_of "$stack")" \
+    '{server: $server, own: $own, queued: $queued}' | jq -r -f "$pr_stack_dir/decide.jq")
+  case "$decision" in
+    wait$'\t'*)
+      retarget_landing "$(queued_of "$stack")"
+      echo "#${decision#*$'\t'} below lands on its own, so #$number waits unlinked, and every pull request on its branch is retargeted to $trunk; \`pr:land\` from the top lands the chain once #${decision#*$'\t'} has merged"
+      ;;
+    *)
+      stack_link "$stack"
+      echo "#$number stacked on #$top_number: $(jq -r 'map("#\(.number)") | join(" ← ")' <<< "$stack")"
+      ;;
+  esac
+fi
+{% endraw %}'''
+
 # Head checks and merge-group checks are separate runs. Watch the queue entry
 # as well as the pull request; green head checks alone do not prove landing.
 # The entry runs every workflow with a merge_group trigger; each is reported.
+# Open the pull request with `pr:open`; never `gh pr create --fill` on a branch
+# of several commits: it titles the pull request with the branch name.
 #
-# The pull request's title becomes the header of its merge commit on main.
-# Open the pull request with `gh pr create --title '<type>(<scope>):
-# <subject>' --body-file <file>`: a conventional header of at most 72
-# characters, its type and scope from commitlint.config.mjs. Never `--fill` on
-# a branch of several commits: it titles the pull request with the branch
-# name.
+# Every landing is a stack's (gandr-lang/gandr#1264), read from the server, the
+# only record: the pull request's base chain down to main and the open pull
+# requests based on it up to the top (`chain.jq`). A chain of one is a plain
+# landing. A longer chain lands whole from its top: it is restacked onto
+# `origin/main` in a scratch worktree, so a branch another seat has checked out
+# moves only on the server, pushed in one atomic push, linked (`gh stack link`),
+# and queued as one group (`gh stack merge` by the top), and the task waits on
+# the top. A chain whose lower pull request is already queued on its own waits
+# for it to merge and reads the chain again, and so does a chain whose top holds
+# the branch of one queued on its own outside it (`carried_queued`). Before any
+# queueing and before such a wait, every open pull request on a branch the
+# landing deletes, outside it, is retargeted to main (`retarget_landing`):
+# GitHub closes an unlinked pull request, unmerged, when a merge deletes its
+# base branch (gandr-lang/gandr#1420). One linked into the landing's stack is
+# left alone: the stack carries it, and GitHub refuses to change its base
+# (gandr-lang/gandr#1520). Run from a branch that is not the top, the landing is
+# refused, naming the top. `.config/pr-stack/decide.jq` makes the decision and
+# `check:pr-stack` holds its cases.
+
 #
-# A stack lands whole: `pr:land --stack` restacks the current branch's stack
-# onto `origin/main` (`gh stack rebase`), pushes every branch it moved
-# (`gh stack push`), and queues the stack as one unit (`gh stack merge`), then
-# waits on the top pull request, as the queue merges the stack all or none.
-# Without `--stack`, a pull request whose base is another branch is refused:
-# it is not the bottom of its stack, and the queue takes main-based ones only.
+# A queued stack member leaves the queue alone only by being closed and
+# reopened: `dequeuePullRequest` looks for a queue on the member's own base
+# branch and finds none, a push to a queued branch is refused, and a stack
+# member's base cannot be edited. The members below it stay queued.
 ["pr:land"]
-description = "Enable auto-merge and wait for the merge queue outcome"
+description = "Restack, queue and wait for the merge queue outcome of the pull request's stack"
 usage = '''
 arg "[number]" help="pull request number; defaults to the current branch"
-flag "--stack" help="restack, push and queue the current branch's whole stack"
 '''
 run = '''
 {% raw %}#!/usr/bin/env bash
 set -euo pipefail
 number=${usage_number:-}
-stack=${usage_stack:-false}
-if [[ "$stack" == true && -n "$number" ]]; then echo '`--stack` lands the current branch'"'"'s stack; run it without a number' >&2; exit 2; fi
 if [[ -z "$number" ]]; then number=$(gh pr view --json number --jq .number); fi
 [[ "$number" =~ ^[1-9][0-9]*$ ]] || { echo 'Expected a pull request number' >&2; exit 2; }
 repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
@@ -209,6 +367,9 @@ name=${repo#*/}
 deadline=$((SECONDS + 5400))
 queued=false
 previous=
+# Set when the entry first leaves the queue with every run green while the
+# pull request still reads OPEN: the poll waits for MERGED until then.
+merging_until=
 
 pr_state() {
   gh pr view "$number" -R "$repo" --json state,mergeable,mergeStateStatus,autoMergeRequest,mergeCommit,baseRefName,statusCheckRollup --jq '[.state, .mergeable, .mergeStateStatus, (.autoMergeRequest != null), (.mergeCommit.oid // "-"), .baseRefName, (.statusCheckRollup | length)] | @tsv'
@@ -234,6 +395,13 @@ settled() {
   [[ -n "$1" ]] || return 1
   while IFS=$'\t' read -r run_id url run_status conclusion; do
     [[ "$run_status" == completed ]] || return 1
+  done <<< "$1"
+}
+# Succeeds when every run of the entry concluded success.
+succeeded() {
+  local run_id url run_status conclusion
+  while IFS=$'\t' read -r run_id url run_status conclusion; do
+    [[ "$conclusion" == success ]] || return 1
   done <<< "$1"
 }
 job_times() {
@@ -271,44 +439,79 @@ conflicts() {
   echo "rebase onto main once they merge, then run \`pr:land\` again"
 }
 
+# The landing's shape is the server's stack (gandr-lang/gandr#1264): one pull
+# request lands alone, a longer chain lands whole from its top, and a chain
+# whose lower pull request is queued on its own, or whose top holds the branch
+# of one, waits for it to merge, after every pull request on that one's branch
+# is retargeted to main.
+trunk=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
+source "$(git rev-parse --show-toplevel)/.config/pr-stack/stack.bash"
+own_head=$(git branch --show-current)
+# From the moment the landing is this run's until its chain is queued, the
+# chain's pull requests carry the `landing` label, so `pr:open` stacks nothing
+# on the top under it (gandr-lang/gandr#1556); every exit takes the label off.
+# The pull request is held before the chain is first read
+# (gandr-lang/gandr#1601): a land runs from the top, so a `pr:open` whose last
+# read of the top follows this label refuses, and one whose last read came
+# before it opens a pull request the read below, or the one before queueing,
+# finds above the top.
+trap release_landing EXIT
+hold_landing "[$number]"
+while :; do
+  server=$(server_stack "$number")
+  [[ $(jq length <<< "$server") != 0 ]] || { echo "PR #$number is not open" >&2; exit 2; }
+  in_stack=$(queued_of "$server")
+  decision=$(jq -rn --argjson server "$server" --arg own "$own_head" --argjson queued "$in_stack" \
+    --argjson carried "$(carried_queued "$server")" \
+    '{server: $server, own: $own, queued: $queued, carried: $carried}' | jq -r -f "$pr_stack_dir/decide.jq")
+  case "$decision" in
+    wait$'\t'*)
+      (( SECONDS < deadline )) || { echo "timed out waiting on #${decision#*$'\t'} below" >&2; exit 2; }
+      retarget_landing "$in_stack"
+      hold_landing "$(jq -c --argjson queued "$in_stack" '[.[].number | select(IN($queued[]) | not)]' <<< "$server")"
+      echo "#${decision#*$'\t'} below is queued on its own; landing once it merges"
+      sleep 60
+      ;;
+    *) break ;;
+  esac
+done
+case "$decision" in
+  refuse$'\t'*) echo "${decision#*$'\t'}" >&2; exit 2 ;;
+  stack$'\t'*) number=${decision#*$'\t'}; stack=true ;;
+  single) stack=false ;;
+  *) echo "unexpected stack decision: $decision" >&2; exit 2 ;;
+esac
+hold_landing "$(jq -c --argjson queued "$in_stack" '[.[].number | select(IN($queued[]) | not)]' <<< "$server")"
+
 # A branch behind main enters the queue only to come back UNMERGEABLE or to
-# fail on what landed ahead of it, so the current branch is rebased onto
+# fail on what landed ahead of it, so the stack is restacked onto
 # `origin/main` and pushed before the queue sees it. The queue then runs CI on
 # the merged result, which is the re-verification; a clean rebase runs no
-# local gate again. A rebase that conflicts stops here for a hand. A stack
-# restacks whole, every branch moved with the one below it, or the branches
-# above lose the commits under them and the stack refuses to merge.
-if [[ "$stack" == true ]]; then
-  gh stack rebase || { gh stack rebase --abort; echo 'the restack onto origin/main conflicts; resolve it, run the hooks, and run `pr:land --stack` again' >&2; exit 1; }
-  gh stack push
-  layout=$(gh stack view --json)
-  top=$(jq -r '.branches[-1].name' <<< "$layout")
-  number=$(gh pr view "$top" -R "$repo" --json number --jq .number)
-  # GitHub holds no stack of one branch, so its pull request lands alone.
-  if (( $(jq '[.branches[] | select(.isMerged | not)] | length' <<< "$layout") > 1 )); then
-    gh stack merge --yes --merge
-  else
-    stack=false
-  fi
-else
-  base=$(gh pr view "$number" -R "$repo" --json baseRefName --jq .baseRefName)
-  trunk=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
-  if [[ "$base" != "$trunk" ]]; then
-    echo "PR #$number is not the bottom of the stack: its base is $base; land the stack with \`pr:land --stack\`" >&2
-    exit 2
-  fi
-  if [[ -z "${usage_number:-}" ]]; then
-    layers=$(gh stack view --json 2> /dev/null | jq '[.branches[] | select(.isMerged | not)] | length') || layers=0
-    if (( ${layers:-0} > 1 )); then
-      echo "the current branch is in a stack of $layers; land it with \`pr:land --stack\`" >&2
+# local gate again. A rebase that conflicts stops here for a hand, naming the
+# branch. A pull request named by number from elsewhere lands as it stands.
+if [[ "$stack" == true || -z "${usage_number:-}" ]]; then
+  if [[ "$stack" == false ]]; then
+    base=$(gh pr view "$number" -R "$repo" --json baseRefName --jq .baseRefName)
+    if [[ "$base" != "$trunk" ]]; then
+      echo "PR #$number's base is $base, which has no open pull request; retarget it to $trunk or open its base again" >&2
       exit 2
     fi
-    git fetch --quiet origin main
-    if ! git merge-base --is-ancestor origin/main HEAD; then
-      git rebase --quiet --update-refs origin/main || { git rebase --abort; echo 'the rebase onto origin/main conflicts; resolve it, run the hooks, and run `pr:land` again' >&2; exit 1; }
-      git push --quiet --force-with-lease
-    fi
   fi
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "the checkout has uncommitted changes; commit or drop them, then run \`pr:land\` again" >&2
+    exit 2
+  fi
+  if [[ $(in_queue "$number") != true ]]; then
+    restack "$server"
+    git reset --quiet --keep "origin/$own_head"
+  fi
+fi
+
+# The landing runs from the pull request's own branch: a stack's top branch.
+own=$(gh pr view --json number --jq .number 2> /dev/null) || own=
+if [[ "$own" != "$number" ]]; then
+  echo "PR #$number is not the checked-out branch's pull request; run \`pr:land\` from its branch, a stack from its top branch" >&2
+  exit 2
 fi
 
 initial=$(pr_state)
@@ -316,9 +519,19 @@ IFS=$'\t' read -r state mergeable merge_status auto commit base check_count <<< 
 entry=$(queue_state)
 IFS=$'\t' read -r in_queue queue_status position <<< "$entry"
 if [[ "$in_queue" == true ]]; then queued=true; fi
-if [[ "$stack" == false && "$state" == OPEN && "$auto" == false && "$in_queue" == false ]]; then
-  gh pr merge "$number" -R "$repo" --merge --auto
+if [[ "$state" == OPEN && "$auto" == false && "$in_queue" == false ]]; then
+  # A pull request opened on the top after the chain was read, by a
+  # `pr:open` whose last read of the top preceded the hold, would be left out
+  # of the queued chain and closed with its base (gandr-lang/gandr#1601).
+  now=$(server_stack "$number")
+  if [[ $(jq -c 'map(.number)' <<< "$now") != "$(jq -c 'map(.number)' <<< "$server")" ]]; then
+    echo "the stack changed while it was readied to land: $(jq -r 'map("#\(.number)") | join(" ← ")' <<< "$now"); run \`pr:land\` again from its top" >&2
+    exit 2
+  fi
+  queue_stack "$server"
 fi
+# Queued, the chain is landing (`open_prs`), so nothing stacks on it.
+release_landing
 # The seat's wake-up: run as a deferred job, `pr:watch` exits with one line
 # the moment the pull request needs a hand or has landed.
 printf "arm: /bin/bash -c 'mise run pr:watch %s' timer-pr-%s\n" "$number" "$number"
@@ -350,6 +563,13 @@ while (( SECONDS < deadline )); do
     entry_runs=$(group_runs)
     if [[ -n "$entry_runs" ]]; then
       if settled "$entry_runs"; then
+        # The queue drops a merged entry a moment before the pull request
+        # reads MERGED, so an entry gone with every run green while the
+        # pull request reads OPEN is waited on for five minutes.
+        if [[ "$state" == OPEN ]] && succeeded "$entry_runs"; then
+          if [[ -z "$merging_until" ]]; then merging_until=$((SECONDS + 300)); fi
+          if (( SECONDS < merging_until )); then sleep 30; continue; fi
+        fi
         printf 'PR #%s dequeued or closed.\n' "$number"
         # A failed run's failed steps explain the removal; with none failed,
         # every run's whole log does.
@@ -420,6 +640,15 @@ exit 2
 # is waited on, not reported. A BLOCKED pull request with checks still running
 # is no event. An entry the queue removes because it merged is waited out
 # until the state reads MERGED.
+#
+# A dequeue or a conflict with no red check anywhere in the pull request's
+# server stack needs no hand (gandr-lang/gandr#1264): the stack is restacked
+# onto main, linked and queued again (`.config/pr-stack/stack.bash`), what moved
+# is printed on stderr, and the watch goes on, up to three times. A branch the
+# restack moved is moved on the server only; its seat's checkout reads it at its
+# next fetch. A red check, or a restack that conflicts, is the event line as
+# before. A `landing` label `pr:land` left on the pull request, queued or
+# merged, is taken off (gandr-lang/gandr#1556).
 ["pr:watch"]
 description = "Wait for the one event that needs a hand on a pull request"
 quiet = true
@@ -443,7 +672,8 @@ seen_queued=false
 # repeats it, so a moment between readings is no removal.
 gone=0
 
-# State, merge state, queued, the entry's state and head, the last removal.
+# State, merge state, queued, the entry's state and head, the last removal,
+# and whether it carries the `landing` label.
 snapshot() {
   gh api graphql -f owner="$owner" -f name="$name" -F number="$number" -f query="
     query(\$owner: String!, \$name: String!, \$number: Int!) {
@@ -454,17 +684,40 @@ snapshot() {
           timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {
             nodes { ... on RemovedFromMergeQueueEvent { reason } }
           }
+          labels(first: 50) { nodes { name } }
         }
       }
-    }" --jq '.data.repository.pullRequest | [.state, .mergeStateStatus, .isInMergeQueue, (.mergeQueueEntry.state // "-"), (.mergeQueueEntry.headCommit.oid // "-"), ((.timelineItems.nodes[0].reason // "") | if . == "" then "-" else ascii_downcase end)] | @tsv'
+    }" --jq '.data.repository.pullRequest | [.state, .mergeStateStatus, .isInMergeQueue, (.mergeQueueEntry.state // "-"), (.mergeQueueEntry.headCommit.oid // "-"), ((.timelineItems.nodes[0].reason // "") | if . == "" then "-" else ascii_downcase end), any(.labels.nodes[]; .name == "landing")] | @tsv'
 }
-# The first failed required check on the head, if any.
+# The first failed required check on the head of `$1`, this pull request by
+# default, if any.
 red_check() {
   local status=0 failed
-  failed=$(gh pr checks "$number" -R "$repo" --required --json bucket,name --jq '[.[] | select(.bucket == "fail" or .bucket == "cancel") | .name] | first // empty') || status=$?
+  failed=$(gh pr checks "${1:-$number}" -R "$repo" --required --json bucket,name --jq '[.[] | select(.bucket == "fail" or .bucket == "cancel") | .name] | first // empty') || status=$?
   # 1: some check failed; 8: some check pending.
   if [[ "$status" != 0 && "$status" != 1 && "$status" != 8 ]]; then return "$status"; fi
   printf '%s' "$failed"
+}
+trunk=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
+source "$(git rev-parse --show-toplevel)/.config/pr-stack/stack.bash"
+heals=0
+# Restack this pull request's server stack onto main and queue it again, when
+# no pull request in it has a red check; succeeds once it is queued.
+heal() {
+  local stack member red
+  (( heals < 3 )) || return 1
+  stack=$(server_stack "$number")
+  [[ $(jq length <<< "$stack") != 0 ]] || return 1
+  for member in $(jq -r '.[].number' <<< "$stack"); do
+    red=$(red_check "$member") || return 1
+    [[ -z "$red" ]] || return 1
+  done
+  restack "$stack" >&2 || return 1
+  queue_stack "$stack" > /dev/null || return 1
+  heals=$((heals + 1))
+  seen_queued=false
+  gone=0
+  echo "pr-requeued #$number: $(jq -r 'map("#\(.number)") | join(" ← ")' <<< "$stack")" >&2
 }
 # The open pull requests stacked above this one, bottom first: each one's base
 # is the branch of the one below it.
@@ -503,19 +756,33 @@ red_entry() {
 while (( SECONDS < deadline )); do
   # A failed read is no event; the next poll reads again.
   if ! reading=$(snapshot) || [[ -z "$reading" ]]; then sleep 60; continue; fi
-  IFS=$'\t' read -r state merge_status in_queue entry_state entry_head removed <<< "$reading"
+  IFS=$'\t' read -r state merge_status in_queue entry_state entry_head removed held <<< "$reading"
   if [[ "$in_queue" == true ]]; then seen_queued=true; fi
+  # A `landing` label still on a queued or merged pull request was left by a
+  # `pr:land` that never reached its exit (gandr-lang/gandr#1556): it would hold
+  # `pr:open`.
+  if [[ "$held" == true && ( "$in_queue" == true || "$state" == MERGED ) ]]; then
+    gh pr edit "$number" -R "$repo" --remove-label landing > /dev/null 2>&1 || true
+  fi
   case "$state" in
     MERGED) echo "pr-merged #$number"; exit 0 ;;
     CLOSED) echo "pr-closed #$number"; exit 1 ;;
     OPEN) ;;
     *) echo "unexpected pull request state: $state" >&2; exit 2 ;;
   esac
-  if [[ "$merge_status" == DIRTY ]]; then echo "pr-dirty #$number"; exit 1; fi
+  if [[ "$merge_status" == DIRTY ]]; then
+    if heal; then sleep 60; continue; fi
+    echo "pr-dirty #$number"
+    exit 1
+  fi
   job=$(red_check) || job=
   if [[ -z "$job" && "$entry_head" != - ]]; then job=$(red_entry "$entry_head") || job=; fi
   if [[ -n "$job" ]]; then echo "pr-red #$number $job"; exit 1; fi
-  if [[ "$entry_state" == UNMERGEABLE ]]; then echo "pr-dequeued #$number unmergeable $(above_word)"; exit 1; fi
+  if [[ "$entry_state" == UNMERGEABLE ]]; then
+    if heal; then sleep 60; continue; fi
+    echo "pr-dequeued #$number unmergeable $(above_word)"
+    exit 1
+  fi
   # Out of the queue after it was in it; a removal because it merged settles
   # to MERGED on a later poll.
   if [[ "$seen_queued" == true && "$in_queue" == false && "$removed" != merged ]]; then
@@ -524,6 +791,7 @@ while (( SECONDS < deadline )); do
     gone=0
   fi
   if (( gone >= 2 )); then
+    if heal; then sleep 60; continue; fi
     echo "pr-dequeued #$number ${removed/#-/removed} $(above_word)"
     exit 1
   fi
