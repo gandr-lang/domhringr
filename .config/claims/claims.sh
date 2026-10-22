@@ -29,7 +29,7 @@ open_prs=$(gh api --paginate "repos/$repo/pulls?state=open&per_page=100" \
   --jq '[.[] | {number, body: (.body // ""), head: .head.ref}]' | jq -s 'add // []')
 
 removals=$(jq -rn --argjson now "$(date +%s)" --argjson claimed "$claimed" --argjson open_prs "$open_prs" --argjson merged "$merged" \
-  '{now: $now, claimed: $claimed, open_prs: $open_prs, merged_body: $merged}' | jq -r -f "$here/decide.jq")
+  '{now: $now, claimed: $claimed, open_prs: $open_prs, merged_body: $merged}' | jq -r -L "$here" -f "$here/decide.jq")
 
 count=0
 while IFS=$'\t' read -r number reason; do

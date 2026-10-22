@@ -16,9 +16,10 @@
 # claim untouched for 24 hours that no open pull request names (one of those
 # keywords in its body, or the number in its branch) has no seat on it.
 
-def targets($keyword): [match("(?i)\\b\($keyword)\\s+#([0-9]+)\\b"; "g") | .captures[-1].string | tonumber];
+include "targets";
+
 def names($n):
-  (.body | test("(?i)\\b(close[sd]?|fix(e[sd])?|resolve[sd]?|advances)\\s+#\($n)\\b"))
+  (.body | test("(?i)\\b\(working)\\s+#\($n)\\b"))
   or (.head | test("(^|[^0-9])\($n)([^0-9]|$)"));
 def silent($now): ($now - (.updated_at | fromdateiso8601)) >= 86400;
 
@@ -26,7 +27,7 @@ def silent($now): ($now - (.updated_at | fromdateiso8601)) >= 86400;
 | .open_prs as $prs
 | if .merged_body != null then
     (.merged_body | targets("advances")) as $advanced
-    | (.merged_body | targets("(close[sd]?|fix(e[sd])?|resolve[sd]?)")) as $closed
+    | (.merged_body | targets(closing)) as $closed
     | .claimed[]
     | .number as $n
     | if ($advanced | index($n)) then "\($n)\tadvanced"

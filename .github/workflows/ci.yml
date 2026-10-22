@@ -234,7 +234,7 @@ jobs:
       - &download-build-state
         name: download reusable queue build state
         if: ${{ (github.event_name == 'push' && steps.test-state-restore.outputs.cache-hit != 'true' || github.event_name != 'push' && steps.test-state-restore.outputs.cache-matched-key == '') && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), format('build-state-{0}--{1}', env.CI_BUILD_STATE, env.CI_BUILD_GENERATION)) }}
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        uses: &download-artifact actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: build-state-${{ env.CI_BUILD_STATE }}--${{ env.CI_BUILD_GENERATION }}
           run-id: ${{ needs.build-state.outputs.run-id }}
@@ -519,6 +519,169 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # A change owes re-verification by every specification naming a changed
+  # item (`evidence:obligations`). A pull request reruns only the obligated
+  # witnesses, specifications enforced, and lists them in one comment it
+  # updates in place; the merge queue still runs every test. The prose
+  # clauses to re-read are the pull request body's `## Re-verification`
+  # section (`pr:open` and `pr:land` write it), and the lane fails while one
+  # of its boxes is unticked, the lint assessment a performance fix owes
+  # among them. Dispatches run the lane too, against the parent commit and
+  # without a body, so `ci:act` exercises it. A fork's read-only token cannot
+  # comment: its witnesses stay in the log. The comment is found before the
+  # lane and posted after it, from bare runners, so the job running the
+  # change's code holds no write token.
+  obligations-comment-read:
+    name: find the obligations comment
+    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]' }}
+    runs-on: *linux
+    permissions:
+      pull-requests: read
+    outputs:
+      id: ${{ steps.find.outputs.id }}
+    env: &obligations-comment-env
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      # Only this workflow's own comment is updated: a comment by anyone else
+      # that copies the marker is ignored.
+      - id: find
+        name: find this workflow's comment
+        shell: bash
+        run: |
+          id=$(gh api --paginate --slurp "repos/$GH_REPO/issues/$PR_NUMBER/comments" |
+            jq -r '[.[][] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- quenchant-obligations -->")))] | first | .id // ""')
+          printf 'id=%s\n' "$id" >> "$GITHUB_OUTPUT"
+
+  # The policy pass that writes the records and the rustdoc JSON run here, on
+  # main's policy state; the witnesses reuse main's enforcing test state.
+  # Nothing is saved.
+  obligations:
+    name: re-verify obligated specifications (linux)
+    needs: [changes, ci-image-ref, obligations-comment-read]
+    if: ${{ !cancelled() && !failure() && needs.changes.outputs.rust == 'true' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') }}
+    runs-on: *linux
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+      pull-requests: read
+      issues: read
+    container: *ci-image # zizmor: ignore[unpinned-images]
+    timeout-minutes: 30
+    outputs:
+      comment: ${{ steps.obligations.outcome == 'success' }}
+      report: ${{ steps.report.outputs.artifact-url }}
+    env:
+      CI_BUILD_STATE: cargo-test
+      # A pull request checks out its merge commit, whose first parent is the
+      # base it merges into; a dispatch compares against its parent commit.
+      CI_FETCH_DEPTH: "2"
+    steps:
+      - *git-checkout
+      - *trust-workspace
+      - *install-policy-tools
+      - *read-sibling-pins
+      - *checkout-gandr
+      - *identify-build-state
+      - *setup-rust
+      - *restore-dylint-drivers
+      - *restore-policy-state
+      - *restore-test-state
+      # The body as it reads when the job runs, never the event's copy: a
+      # rerun after the boxes are ticked reads the ticks.
+      - name: read the pull request body
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          mkdir -p target/evidence
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""' > target/evidence/body.md
+      # Exit 2 is an unticked box: the witnesses still rerun and the comment
+      # is still posted, and the last step fails the lane. The read-only token
+      # reads the labels the lint assessment is owed under.
+      - name: list the re-verification obligations
+        id: obligations
+        shell: bash
+        env:
+          OBLIGATIONS_BODY: ${{ github.event_name == 'pull_request' }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          extra=()
+          if [[ $OBLIGATIONS_BODY == true ]]; then
+            extra=(--previous target/evidence/body.md --pr "$PR_NUMBER" --require-acknowledged)
+          fi
+          status=0
+          mise run evidence:obligations "$(git rev-parse --short=12 HEAD^)" "${extra[@]}" || status=$?
+          if (( status == 2 )); then
+            printf 'open=true\n' >> "$GITHUB_OUTPUT"
+          elif (( status != 0 )); then
+            exit "$status"
+          fi
+      - name: rerun the obligated witnesses
+        env:
+          NEXTEST_PROFILE: ci-enforcing
+        run: mise run evidence:witnesses
+      # The full report: the posted comment links here when it is truncated,
+      # so it is kept as long as any artifact.
+      - name: upload the obligations comment
+        id: report
+        if: ${{ !cancelled() && env.ACT != 'true' && steps.obligations.outcome == 'success' }}
+        uses: *upload-artifact
+        with:
+          name: obligations-comment
+          path: target/evidence/comment.md
+          if-no-files-found: error
+      - name: require every prose obligation acknowledged
+        if: ${{ !cancelled() && steps.obligations.outputs.open == 'true' }}
+        shell: bash
+        run: |
+          printf '::error::a prose obligation is unticked in the body'"'"'s ## Re-verification section; tick its box (`mise run pr:land` writes the section), then rerun this job\n'
+          exit 1
+      - *upload-test-report
+
+  # Posted whatever the witnesses' verdict and the boxes' state, once the
+  # report exists: the comment lists the witnesses rerun. GitHub refuses a
+  # comment body over 65,536 characters, so a longer report is cut at a line
+  # boundary below that, and the comment links the full report's artifact.
+  obligations-comment:
+    name: post the obligations comment
+    needs: [obligations-comment-read, obligations]
+    if: ${{ !cancelled() && needs.obligations.outputs.comment == 'true' && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork }}
+    runs-on: *linux
+    permissions:
+      pull-requests: write
+    env: *obligations-comment-env
+    steps:
+      - name: download the obligations comment
+        uses: *download-artifact
+        with:
+          name: obligations-comment
+      - name: create or update the comment
+        shell: bash
+        env:
+          COMMENT_ID: ${{ needs.obligations-comment-read.outputs.id }}
+          REPORT_URL: ${{ needs.obligations.outputs.report }}
+        run: |
+          if (( $(wc -c < comment.md) > 60000 )); then
+            body=$(head -c 60000 comment.md)
+            {
+              printf '%s\n\n' "${body%$'\n'*}"
+              printf -- '---\n\nThe report is cut here at the comment size limit. The full report is the [obligations-comment artifact](%s).\n' "$REPORT_URL"
+            } > comment.cut.md
+            mv comment.cut.md comment.md
+          fi
+          if [[ -n $COMMENT_ID ]]; then
+            gh api --method PATCH "repos/$GH_REPO/issues/comments/$COMMENT_ID" -F body=@comment.md --silent
+          else
+            gh api --method POST "repos/$GH_REPO/issues/$PR_NUMBER/comments" -F body=@comment.md --silent
+          fi
+
   # Formatting and workflow security lint share the treefmt pass (#53).
   format-gate:
     name: check formatting and lint gates (treefmt)
@@ -682,7 +845,7 @@ jobs:
       - *download-build-state
       - name: download the landing's Dylint drivers
         if: ${{ needs.ci-image-ref.outputs.ref == '' && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), 'dylint-drivers') }}
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        uses: *download-artifact
         with:
           name: dylint-drivers
           run-id: ${{ needs.build-state.outputs.run-id }}

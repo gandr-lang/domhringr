@@ -174,7 +174,12 @@ done
 
 # The pull request's title becomes the header of its merge commit on main: a
 # conventional header of at most 72 characters, its type and scope from
-# commitlint.config.mjs.
+# commitlint.config.mjs. The body carries the change's prose obligations as
+# its `## Re-verification` section, written into the body file here
+# (`evidence:obligations --body`) with any ticks the file already holds;
+# `gh pr create` waits until every box is ticked, so the pull request's first
+# obligations lane reads them. Tick one box per obligation in the file and run
+# `pr:open` again.
 #
 # The body names the issues it works, one per line: `Closes #n` for an issue
 # the pull request finishes (GitHub closes it on merge), `Advances #n` for a
@@ -230,10 +235,10 @@ done
 # `pr:land` from the stack's top rebases the chain onto it. Every other second
 # bottom is refused.
 ["pr:open"]
-description = "Open the pull request on the server's top"
+description = "Open the pull request on the server's top once its body acknowledges every prose obligation"
 usage = '''
 arg "<title>" help="the pull request title: a conventional header"
-arg "<body>" help="the body file"
+arg "<body>" help="the body file; its re-verification section is written in place"
 flag "--unblocks <number>" help="the open pull request this fix unblocks: open on main and queue on its own"
 '''
 run = '''
@@ -267,6 +272,17 @@ fi
 git fetch --quiet origin "$trunk"
 if [[ "$top" == null ]]; then
   base=$trunk
+  measured=$(git merge-base HEAD "origin/$trunk")
+  # A branch stacked before its stack began to land holds that stack's
+  # commits: measured past the newest landing head it holds, its obligations
+  # are its own (gandr-lang/gandr#1455).
+  while IFS= read -r landing_head; do
+    [[ -n "$landing_head" ]] || continue
+    git fetch --quiet origin "$landing_head" || continue
+    if git merge-base --is-ancestor "$measured" "origin/$landing_head" && git merge-base --is-ancestor "origin/$landing_head" HEAD; then
+      measured=$(git rev-parse "origin/$landing_head")
+    fi
+  done < <(open_prs | jq -r --arg own "$own" '.[] | select(.landing and .head != $own) | .head')
   if [[ -z "$unblocks" ]]; then echo "no pull request is open outside the merge queue: opening against $trunk"; fi
 else
   base=$(jq -r .head <<< "$top")
@@ -277,7 +293,15 @@ else
     git rebase --quiet --update-refs --onto "origin/$base" "$fork" \
       || { git rebase --abort; echo "the rebase of $own onto $base (#$top_number, the top) conflicts; resolve it on $own, run the hooks, and run \`pr:open\` again" >&2; exit 1; }
   fi
+  measured=origin/$base
 fi
+status=0
+mise run evidence:obligations --body "$body" --require-acknowledged "$measured" || status=$?
+if (( status == 2 )); then
+  echo "tick one box per prose obligation, and the lint assessment's box once its verdict is written, in $body's ## Re-verification section, then run \`pr:open\` again" >&2
+  exit 2
+fi
+(( status == 0 )) || exit "$status"
 # A second bottom is refused unless it unblocks the open stack: with any other
 # pull request open and not landing, the base is a branch of the stack.
 if [[ -z "$unblocks" && "$base" == "$trunk" && $(open_prs | jq --arg own "$own" '[.[] | select(.head != $own and (.landing | not))] | length') != 0 ]]; then
@@ -287,11 +311,11 @@ fi
 if [[ -z "$unblocks" ]]; then
   now=$(stack_top "$own")
   if [[ $(jq -r '.held // false' <<< "$now") == true ]]; then
-    echo "the stack top #$(jq -r .number <<< "$now") began landing while the branch was readied; wait for the queue (the coordinator pages it), then pr:open opens on $trunk" >&2
+    echo "the stack top #$(jq -r .number <<< "$now") began landing while the obligations were measured; wait for the queue (the coordinator pages it), then pr:open opens on $trunk" >&2
     exit 2
   fi
   if [[ $(jq -r '.number // empty' <<< "$now") != $(jq -r '.number // empty' <<< "$top") ]]; then
-    echo "the stack top moved from #$(jq -r '.number // "none"' <<< "$top") to #$(jq -r '.number // "none"' <<< "$now") while the branch was readied; run \`pr:open\` again" >&2
+    echo "the stack top moved from #$(jq -r '.number // "none"' <<< "$top") to #$(jq -r '.number // "none"' <<< "$now") while the obligations were measured; run \`pr:open\` again" >&2
     exit 2
   fi
 fi
@@ -344,7 +368,13 @@ fi
 # (gandr-lang/gandr#1520). Run from a branch that is not the top, the landing is
 # refused, naming the top. `.config/pr-stack/decide.jq` makes the decision and
 # `check:pr-stack` holds its cases.
-
+#
+# Before queueing, the prose obligations are written into the pull request's
+# body against the rebased branch, its ticks carried, and the landing is
+# refused while a box is unticked; a stack is measured whole against
+# origin/main into its top pull request's body, whose own labels join its
+# targets' for the lint assessment. Once every box is ticked, a failed
+# obligations lane is rerun so it reads the ticks.
 #
 # A queued stack member leaves the queue alone only by being closed and
 # reopened: `dequeuePullRequest` looks for a queue on the member's own base
@@ -507,11 +537,29 @@ if [[ "$stack" == true || -z "${usage_number:-}" ]]; then
   fi
 fi
 
-# The landing runs from the pull request's own branch: a stack's top branch.
+# The obligations are measured on the checked-out tree, so it must be the
+# pull request's own branch: a stack's top branch.
 own=$(gh pr view --json number --jq .number 2> /dev/null) || own=
 if [[ "$own" != "$number" ]]; then
   echo "PR #$number is not the checked-out branch's pull request; run \`pr:land\` from its branch, a stack from its top branch" >&2
   exit 2
+fi
+body=$(mktemp)
+gh pr view "$number" -R "$repo" --json body --jq .body > "$body"
+cp "$body" "$body.read"
+status=0
+mise run evidence:obligations --body "$body" --pr "$number" --require-acknowledged || status=$?
+if (( status != 0 && status != 2 )); then rm -f "$body" "$body.read"; exit "$status"; fi
+if ! cmp -s "$body" "$body.read"; then gh pr edit "$number" -R "$repo" --body-file "$body" > /dev/null; fi
+rm -f "$body" "$body.read"
+if (( status == 2 )); then
+  echo "PR #$number: tick one box per prose obligation, and the lint assessment's box once its verdict is written, in its body's ## Re-verification section, then run \`pr:land\` again" >&2
+  exit 2
+fi
+lane=$(gh pr checks "$number" -R "$repo" --json name,bucket,link --jq '.[] | select(.name == "re-verify obligated specifications (linux)" and .bucket == "fail") | .link')
+if [[ -n "$lane" ]]; then
+  run_id=${lane#*/runs/}
+  gh run rerun "${run_id%%/*}" -R "$repo" --job "${lane##*/job/}"
 fi
 
 initial=$(pr_state)
