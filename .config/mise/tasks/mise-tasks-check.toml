@@ -45,6 +45,14 @@ run = "cargo clippy --workspace --all-targets --locked --profile test -- --deny 
 description = "quenchant's policy library over the workspace"
 env.CARGO_INCREMENTAL = "0"
 env.DYLINT_RUSTFLAGS = "-D spec_attribute_present -D adequacy_present -D maybe_shape -D erased_error_signature -D spec_attribute_unqualified -D rustdoc_shape --force-warn doc_history_prose"
+# Every policy run also records what each specification names, one file per
+# compilation unit, for `evidence:obligations`. Recording always keeps one
+# configuration, so the lint state and the records never disagree. The
+# directory sits beside the rustdoc JSON the obligations report joins it with.
+env.DYLINT_TOML = '''
+[quenchant-dylints]
+evidence_directory = "{{ config_root }}/target/evidence/records"
+'''
 # The plugin links through dylint-link, which renames the artifact with the
 # toolchain suffix Dylint loads by; Cargo's linker variable is per target.
 env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "dylint-link"
@@ -98,6 +106,125 @@ env.PATH = "{{ config_root }}/target/workflow-tools/bin:{{ env.PATH }}"
 env.RUSTFLAGS = "--cfg anodized_panic"
 env.CARGO_TARGET_DIR = "{{ config_root }}/target/enforcing"
 run = "quenchant-gates witnesses --manifest-path Cargo.toml"
+
+# Re-verification obligations (quenchant-gates obligations): a change owes a
+# re-check by every specification that names a changed item, through an
+# executable clause (the records `check:dylint` writes) or through an
+# intra-doc link in a prose clause (rustdoc's JSON, resolved). One hop out: a
+# specification whose own text is unchanged stops the cascade. CI runs these
+# on a pull request; the merge queue still runs every test.
+#
+# Rustdoc builds in its own target directory so its JSON flags never rebuild
+# `check:doc`'s HTML; default features match the policy pass's items.
+["evidence:rustdoc"]
+description = "Rustdoc JSON with every intra-doc link resolved, for the obligations report"
+env.RUSTDOCFLAGS = "-Z unstable-options --output-format json"
+env.CARGO_TARGET_DIR = "{{ config_root }}/target/evidence"
+run = "cargo doc --workspace --locked --no-deps --document-private-items"
+
+# Lists the changed items against the base, the obligations they raise and the
+# witnesses to rerun, and writes the pull-request comment (the witnesses) and
+# the witness selection beside the records. The base defaults to where HEAD
+# left origin/main, so work landed on main since is not read as this change.
+# `--body` reads a pull-request body's ticked boxes and writes the body back
+# with its `## Re-verification` section, one line per prose obligation; a tick
+# holds while the clause and the items it names are unchanged. `--previous`
+# reads the ticks from a file it leaves alone. `--require-acknowledged` exits 2
+# while any prose obligation is unticked.
+#
+# A performance fix owes one more line: whether a lint could have refused the
+# pattern it fixes. The body names the issues it works
+# (`.config/claims/targets.jq`); when one of them, or the pull request named
+# by `--pr`, carries `kind:performance` or `fix:performance`, the section
+# gains a `lint assessment` box whose verdict reads `could: yes — <lint>,
+# <reference>` or `could: no — <one sentence>`, open until ticked in one of
+# those shapes. The labels are read through `gh` whenever a body is given.
+["evidence:obligations"]
+description = "List the specifications a change obliges to re-verify"
+depends = ["check:dylint", "evidence:rustdoc", "workflow:install"]
+tools.jq = "1.8.1"
+usage = '''
+arg "[base]" help="the revision the change is measured against; defaults to the merge base with origin/main"
+flag "--previous <file>" help="a pull-request body whose acknowledgements carry over, left unchanged"
+flag "--body <file>" help="a pull-request body whose acknowledgements carry over, rewritten with its re-verification section"
+flag "--pr <number>" help="the pull request whose own labels join its targets' for the lint assessment"
+flag "--require-acknowledged" help="exit 2 while any prose obligation is unticked"
+'''
+env.PATH = "{{ config_root }}/target/workflow-tools/bin:{{ env.PATH }}"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+base=${usage_base:-$(git merge-base origin/main HEAD)}
+extra=()
+if [[ -n ${usage_previous:-} ]]; then extra+=(--previous "$usage_previous"); fi
+if [[ -n ${usage_body:-} ]]; then extra+=(--body "$usage_body"); fi
+if [[ ${usage_require_acknowledged:-false} == true ]]; then extra+=(--require-acknowledged); fi
+text=${usage_body:-${usage_previous:-}}
+if [[ -n $text ]]; then
+  numbers=$(jq -Rrs -L .config/claims 'include "targets"; targets(working) | unique[]' "$text")
+  if [[ -n ${usage_pr:-} ]]; then numbers+=$'\n'$usage_pr; fi
+  labels=()
+  for number in $numbers; do
+    labels+=("$(gh api "repos/{owner}/{repo}/issues/$number" --jq '[.labels[].name] | join(",")')")
+  done
+  extra+=(--labels "$(IFS=,; printf '%s' "${labels[*]}")")
+fi
+quenchant-gates obligations --manifest-path Cargo.toml --base "$base" \
+  --records target/evidence/records --rustdoc target/evidence/doc "${extra[@]}" \
+  --comment target/evidence/comment.md --selection target/evidence/selection
+'''
+
+# The obligated witnesses, under the enforcing gate's flags and target
+# directory so a restored enforcing build serves them. The selection names
+# each witness's package, so Cargo builds only those packages' tests, with
+# dependency features resolved as for the whole workspace: a narrower
+# selection would change the features of shared dependencies and rebuild
+# every crate above them. The selection is `-p` per package, then `-E` and one
+# filterset whose alternatives join with ` | `. A change obligating thousands
+# of witnesses makes that one argument longer than the kernel accepts (Linux
+# refuses an argument over 128 KiB), so the alternatives run in batches of at
+# most 64 KiB of filterset, each under every selected package. A failing batch
+# fails the task once the rest have run; with more than one batch, each
+# batch's JUnit report is kept beside the others as `junit-<n>.xml`.
+["evidence:witnesses"]
+description = "Rerun the obligated witnesses with specifications enforced"
+env.RUSTFLAGS = "--cfg anodized_panic"
+env.CARGO_TARGET_DIR = "{{ config_root }}/target/enforcing"
+env.CARGO_UNSTABLE_FEATURE_UNIFICATION = "true"
+env.CARGO_RESOLVER_FEATURE_UNIFICATION = "workspace"
+run = '''
+{% raw %}#!/usr/bin/env bash
+set -euo pipefail
+mapfile -t selection < target/evidence/selection
+if (( ${#selection[@]} == 0 )); then
+  echo 'no obligated witness to rerun'
+  exit 0
+fi
+profile=${NEXTEST_PROFILE:-default}
+packages=("${selection[@]:0:${#selection[@]}-2}")
+filterset=${selection[-1]}
+mapfile -t alternatives <<< "${filterset// | /$'\n'}"
+limit=65536
+batches=()
+batch=''
+for alternative in "${alternatives[@]}"; do
+  if [[ -n $batch ]] && (( ${#batch} + 3 + ${#alternative} > limit )); then
+    batches+=("$batch")
+    batch=''
+  fi
+  batch=${batch:+$batch | }$alternative
+done
+batches+=("$batch")
+status=0
+for index in "${!batches[@]}"; do
+  cargo nextest run --locked --profile "$profile" "${packages[@]}" -E "${batches[index]}" || status=1
+  report=target/nextest/$profile/junit.xml
+  if (( ${#batches[@]} > 1 )) && [[ -f $report ]]; then
+    mv "$report" "target/nextest/$profile/junit-$((index + 1)).xml"
+  fi
+done
+exit "$status"
+{% endraw %}'''
 
 # `RUSTDOCFLAGS="-D warnings"` makes every rustdoc lint fatal, so a broken
 # intra-doc link — the vocabulary tables are rustdoc the types link into — is a
@@ -353,7 +480,7 @@ set -euo pipefail
 failed=0
 while IFS= read -r case; do
   name=$(jq -r .name <<< "$case")
-  got=$(jq .input <<< "$case" | jq -r -f .config/claims/decide.jq)
+  got=$(jq .input <<< "$case" | jq -r -L .config/claims -f .config/claims/decide.jq)
   want=$(jq -r .output <<< "$case")
   if [[ "$got" != "$want" ]]; then
     printf 'claims case FAILED: %s\n  gave:\n%s\n  wanted:\n%s\n' "$name" "$got" "$want" >&2
