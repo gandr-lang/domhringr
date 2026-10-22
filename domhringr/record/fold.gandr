@@ -1,0 +1,3423 @@
+// The fold: a tree's commits, in canonical order, folded into its view — the
+// owner, the members granted, the notes, the paths bound, the names claimed,
+// the labels introduced, the book of presented endpoints, the attested
+// indexes, the tree read as a task, and the commits admitted and refused. It
+// follows `fold` of `domhringr-record-tree`
+// (`crates/record-tree/src/fold.rs`) and the task it reads
+// (`crates/record-tree/src/task.rs`), and each exemplar below is one of that
+// fold's test sequences, its commits numbered in the canonical order the
+// exemplar gives them.
+//
+// The commits arrive already in canonical order: the topological order and
+// the commit-id tie-break are the store's. A commit's authority is read from
+// its causal past, the pasts of its parents merged, so a receipt concurrent
+// with a grant is not under it whatever its place in the order. The
+// operation fences, the proofs and the ids are integers the exemplars state.
+//
+// Every call is bound by `run` before its value is passed on: a call nested
+// in an argument doubles the lowered function with each case around it, and
+// three cases deep in the fold one such call lowers past the run's bound
+// (gandr #1856). A view is read by matching its whole constructor, no field
+// being read by projection (gandr #1106), and a list passed to a function is
+// annotated with its type (gandr #1833).
+
+// Lists, and the rubric the grades come from.
+import "../strategy/rubric.gandr" ;
+
+// Rulings and grades.
+import "../strategy/grade.gandr" ;
+
+// The receipt kinds.
+import "./receipt.gandr" ;
+
+// The checks and their refusals.
+import "./authority.gandr" ;
+
+/// A list with `x` after its last element.
+@[ checks ]
+def rec append(a : Type, xs : List(a), x : a) -> -F List(a) {
+  case xs {
+    Nil => (Cons(x, Nil) : List(a)),
+    Cons(y, rest) => {
+      run later <- append[<](a, rest, x);
+      (Cons(y, later) : List(a))
+    }
+  }
+}
+
+/// An admitted note and its author.
+@[ checks ]
+data Noted : Type {
+  NotedBy : (author : Integer, text : String) --> Noted;
+}
+
+/// A bound path's binding: the path, the author of its last admitted bind,
+/// and its target.
+@[ checks ]
+data Binding : Type {
+  BoundBy : (path : Name, author : Integer, target : Target) --> Binding;
+}
+
+/// An introduced label's introduction: the label, the author of its last
+/// admitted introduction, and the tree it names.
+@[ checks ]
+data Introduction : Type {
+  IntroducedBy : (label : Name, author : Integer, tree : Integer) --> Introduction;
+}
+
+/// An author's presence in the book: the endpoint it presented and the commit
+/// that presented it.
+@[ checks ]
+data Presence : Type {
+  PresentAt : (author : Integer, endpoint : EndpointAddr, since : Integer) --> Presence;
+}
+
+/// An author's claim about an index: the index, the commit carrying it, and
+/// the parents it was derived at.
+@[ checks ]
+data Attestation : Type {
+  AttestedBy : (
+    author : Integer,
+    index : Integer,
+    commit : Integer,
+    parents : List(Integer)
+  ) --> Attestation;
+}
+
+/// A refused commit and why.
+@[ checks ]
+data RefusedCommit : Type {
+  RefusedAt : (commit : Integer, refusal : Refusal) --> RefusedCommit;
+}
+
+/// A question of a graded verdict, by its hash, and its grade.
+@[ checks ]
+data Marked : Type {
+  MarkedAs : (question : Integer, grade : Grade) --> Marked;
+}
+
+/// A receipt the fold admitted into the task, as the task records it.
+@[ checks ]
+data Step : Type {
+  DispatchStep : (edition : Integer, seat : Integer, brief : Brief) --> Step;
+  ReportStep : (dispatch : Integer, author : Integer, content : Integer, summary : String) --> Step;
+  HandoffStep : (dispatch : Integer, giver : Integer, to : Integer) --> Step;
+  RetireStep : (dispatch : Integer, author : Integer) --> Step;
+  PauseStep : (dispatch : Integer, author : Integer) --> Step;
+  VerdictStep : (
+    dispatch : Integer,
+    judge : Integer,
+    rubric : Integer,
+    transcript : Integer,
+    answers : List(Ruled)
+  ) --> Step;
+  VerifiedStep : (
+    dispatch : Integer,
+    runner : Integer,
+    playbook : Integer,
+    step : String,
+    output : Integer,
+    status : Status
+  ) --> Step;
+  GradedStep : (
+    dispatch : Integer,
+    verdict : Integer,
+    rubric : Integer,
+    grades : List(Marked),
+    composed : Grade
+  ) --> Step;
+  DecideStep : (dispatch : Integer, operator : Integer, decision : Decision) --> Step;
+  LandedStep : (dispatch : Integer, decided : Integer, operator : Integer, merge : String) --> Step;
+}
+
+/// An admitted step and its commit.
+@[ checks ]
+data Stepped : Type {
+  StepAt : (commit : Integer, step : Step) --> Stepped;
+}
+
+/// Who an attempt's slot is with: its holder, or the holder who retired from
+/// it and the retirement's commit.
+@[ checks ]
+data Slot : Type {
+  Held : (seat : Integer) --> Slot;
+  Vacated : (by : Integer, retirement : Integer) --> Slot;
+}
+
+/// Whether an attempt is reported on: awaited, or by this report, the last
+/// in canonical order.
+@[ checks ]
+data Answer : Type {
+  Awaited : Answer;
+  ReportedBy : (report : Integer) --> Answer;
+}
+
+/// How far an attempt has gone past its report: the furthest of its
+/// verifications, gradings, decisions and landings, ranked in that order.
+@[ checks ]
+data Progress : Type {
+  Unchecked : Progress;
+  VerifiedBy : (verification : Integer) --> Progress;
+  GradedBy : (grading : Integer, composed : Grade) --> Progress;
+  DecidedBy : (decide : Integer, decision : Decision) --> Progress;
+  LandedBy : (landing : Integer, merge : String) --> Progress;
+}
+
+/// Where a task stands: no dispatch admitted, or the current attempt — the
+/// admitted dispatch last in canonical order, its edition and brief, its
+/// slot, its answer and its progress.
+@[ checks ]
+data Current : Type {
+  Undispatched : Current;
+  Attempt : (
+    dispatch : Integer,
+    edition : Integer,
+    brief : Brief,
+    slot : Slot,
+    answer : Answer,
+    progress : Progress
+  ) --> Current;
+}
+
+/// A tree read as a task: the admitted steps in canonical order, and where
+/// it stands.
+@[ checks ]
+data Task : Type {
+  Task : (steps : List(Stepped), current : Current) --> Task;
+}
+
+/// What a peer makes of a tree. Members, admitted commits and claims are
+/// held in key order; bindings, introductions, the book and the indexes in
+/// the order of their keys; notes, attestations and refusals in canonical
+/// order.
+@[ checks ]
+data View : Type {
+  View : (
+    owner : Integer,
+    members : List(Integer),
+    notes : List(Noted),
+    bindings : List(Binding),
+    claims : List(Name),
+    introductions : List(Introduction),
+    book : List(Presence),
+    attestations : List(Attestation),
+    indexes : List(Attestation),
+    task : Task,
+    admitted : List(Integer),
+    refused : List(RefusedCommit)
+  ) --> View;
+}
+
+/// The fold's answer: no commit is the tree's Open, or the view.
+@[ checks ]
+data Folded : Type {
+  Unopened : Folded;
+  Folded : (view : View) --> Folded;
+}
+
+/// A placed commit's causal past, as its children read it.
+@[ checks ]
+data Carried : Type {
+  CarriedBy : (commit : Integer, past : Past) --> Carried;
+}
+
+/// An admitted commit's operation fence.
+@[ checks ]
+data Fenced : Type {
+  FencedBy : (operation : Integer, commit : Integer) --> Fenced;
+}
+
+/// A dispatch's slot play: the edition it names and where its play stands.
+@[ checks ]
+data SlotPlay : Type {
+  SlotOf : (dispatch : Integer, edition : Integer, phase : Phase) --> SlotPlay;
+}
+
+/// An admitted verdict's judge channel: its judge, its dispatch, its rubric,
+/// its rulings and where its play stands.
+@[ checks ]
+data JudgePlay : Type {
+  JudgeOf : (
+    verdict : Integer,
+    judge : Integer,
+    dispatch : Integer,
+    rubric : Integer,
+    rulings : List(Ruled),
+    phase : Phase
+  ) --> JudgePlay;
+}
+
+/// A dispatch's decision channel and where its play stands.
+@[ checks ]
+data DecisionPlay : Type {
+  DecisionOf : (dispatch : Integer, phase : Phase) --> DecisionPlay;
+}
+
+/// An admitted decision: its commit, its dispatch and its operator.
+@[ checks ]
+data Decided : Type {
+  DecisionBy : (decision : Integer, dispatch : Integer, operator : Integer) --> Decided;
+}
+
+/// What the fold remembers between commits: how many it placed, the pasts
+/// the placed commits carry, the admitted fences, and the plays of the
+/// slots, the judges and the decisions, with the admitted decisions.
+@[ checks ]
+data Ledger : Type {
+  Ledger : (
+    placed : Integer,
+    pasts : List(Carried),
+    fences : List(Fenced),
+    slots : List(SlotPlay),
+    judges : List(JudgePlay),
+    choices : List(DecisionPlay),
+    decided : List(Decided)
+  ) --> Ledger;
+}
+
+/// The carried past of a placed commit, if it was placed. The past is
+/// returned in its carrier: a type argument reads `Past` as its constructor
+/// (gandr #1855).
+@[ checks ]
+def rec pastOf(commit : Integer, pasts : List(Carried)) -> -F Maybe(Carried) {
+  case pasts {
+    Nil => (None : Maybe(Carried)),
+    Cons(carried, rest) => case carried {
+      CarriedBy(held, past) => case held == commit {
+        true => (Some(carried) : Maybe(Carried)),
+        false => become pastOf[<](commit, rest)
+      }
+    }
+  }
+}
+
+/// A commit's causal past read from its parents: their pasts merged, a
+/// parent not placed contributing nothing.
+@[ checks ]
+def rec inherit(parents : List(Integer), pasts : List(Carried)) -> -F Past {
+  case parents {
+    Nil => emptyPast,
+    Cons(parent, rest) => {
+      run others <- inherit[<](rest, pasts);
+      case pastOf(parent, pasts) {
+        None => others,
+        Some(carried) => case carried {
+          CarriedBy(held, past) => become merge(past, others)
+        }
+      }
+    }
+  }
+}
+
+/// The admitted commit carrying an operation, if any.
+@[ checks ]
+def rec fenced(operation : Integer, fences : List(Fenced)) -> -F Maybe(Integer) {
+  case fences {
+    Nil => (None : Maybe(Integer)),
+    Cons(fence, rest) => case fence {
+      FencedBy(held, commit) => case held == operation {
+        true => (Some(commit) : Maybe(Integer)),
+        false => become fenced[<](operation, rest)
+      }
+    }
+  }
+}
+
+/// A dispatch's slot play, if it was dispatched.
+@[ checks ]
+def rec slotOf(dispatch : Integer, slots : List(SlotPlay)) -> -F Maybe(SlotPlay) {
+  case slots {
+    Nil => (None : Maybe(SlotPlay)),
+    Cons(play, rest) => case play {
+      SlotOf(held, edition, phase) => case held == dispatch {
+        true => (Some(play) : Maybe(SlotPlay)),
+        false => become slotOf[<](dispatch, rest)
+      }
+    }
+  }
+}
+
+/// The slot plays with a dispatch's play set to `phase` under `edition`.
+@[ checks ]
+def rec setSlot(
+  dispatch : Integer,
+  edition : Integer,
+  phase : Phase,
+  slots : List(SlotPlay)
+) -> -F List(SlotPlay) {
+  case slots {
+    Nil => (Cons(SlotOf(dispatch, edition, phase), Nil) : List(SlotPlay)),
+    Cons(play, rest) => case play {
+      SlotOf(held, was, before) => case held == dispatch {
+        true => (Cons(SlotOf(dispatch, edition, phase), rest) : List(SlotPlay)),
+        false => {
+          run later <- setSlot[<](dispatch, edition, phase, rest);
+          (Cons(play, later) : List(SlotPlay))
+        }
+      }
+    }
+  }
+}
+
+/// An admitted verdict's judge channel, if it is in `verdicts`, the
+/// verdicts of a commit's causal past.
+@[ checks ]
+def rec judgeOf(
+  verdict : Integer,
+  verdicts : List(Integer),
+  judges : List(JudgePlay)
+) -> -F Maybe(JudgePlay) {
+  case member(verdict, verdicts) {
+    false => (None : Maybe(JudgePlay)),
+    true => case judges {
+      Nil => (None : Maybe(JudgePlay)),
+      Cons(play, rest) => case play {
+        JudgeOf(held, judge, dispatch, rubric, rulings, phase) => case held == verdict {
+          true => (Some(play) : Maybe(JudgePlay)),
+          false => become judgeOf[<](verdict, verdicts, rest)
+        }
+      }
+    }
+  }
+}
+
+/// The judge channels with a verdict's play moved to `phase`.
+@[ checks ]
+def rec setJudge(verdict : Integer, phase : Phase, judges : List(JudgePlay)) -> -F List(JudgePlay) {
+  case judges {
+    Nil => (Nil : List(JudgePlay)),
+    Cons(play, rest) => case play {
+      JudgeOf(held, judge, dispatch, rubric, rulings, before) => case held == verdict {
+        true => (Cons(
+          JudgeOf(held, judge, dispatch, rubric, rulings, phase),
+          rest
+        ) : List(JudgePlay)),
+        false => {
+          run later <- setJudge[<](verdict, phase, rest);
+          (Cons(play, later) : List(JudgePlay))
+        }
+      }
+    }
+  }
+}
+
+/// Where a dispatch's decision channel stands: fresh until a move on it is
+/// admitted.
+@[ checks ]
+def rec choiceOf(dispatch : Integer, choices : List(DecisionPlay)) -> -F Phase {
+  case choices {
+    Nil => DecisionFresh,
+    Cons(play, rest) => case play {
+      DecisionOf(held, phase) => case held == dispatch {
+        true => phase,
+        false => become choiceOf[<](dispatch, rest)
+      }
+    }
+  }
+}
+
+/// The decision channels with a dispatch's play set to `phase`.
+@[ checks ]
+def rec setChoice(
+  dispatch : Integer,
+  phase : Phase,
+  choices : List(DecisionPlay)
+) -> -F List(DecisionPlay) {
+  case choices {
+    Nil => (Cons(DecisionOf(dispatch, phase), Nil) : List(DecisionPlay)),
+    Cons(play, rest) => case play {
+      DecisionOf(held, before) => case held == dispatch {
+        true => (Cons(DecisionOf(dispatch, phase), rest) : List(DecisionPlay)),
+        false => {
+          run later <- setChoice[<](dispatch, phase, rest);
+          (Cons(play, later) : List(DecisionPlay))
+        }
+      }
+    }
+  }
+}
+
+/// An admitted decision, if it is in `decisions`, the decisions of a
+/// commit's causal past.
+@[ checks ]
+def rec decisionOf(
+  decision : Integer,
+  decisions : List(Integer),
+  decided : List(Decided)
+) -> -F Maybe(Decided) {
+  case member(decision, decisions) {
+    false => (None : Maybe(Decided)),
+    true => case decided {
+      Nil => (None : Maybe(Decided)),
+      Cons(record, rest) => case record {
+        DecisionBy(held, dispatch, operator) => case held == decision {
+          true => (Some(record) : Maybe(Decided)),
+          false => become decisionOf[<](decision, decisions, rest)
+        }
+      }
+    }
+  }
+}
+
+/// A move's progress on a channel of a dispatch: where the play moves to, or
+/// the refusal that stops it.
+@[ checks ]
+data Advance : Type {
+  Went : (phase : Phase) --> Advance;
+  Halted : (refusal : Refusal) --> Advance;
+}
+
+/// A move on a channel at `phase`, related to `dispatch`: refused as not
+/// current unless `dispatch` is the course's and was dispatched, then
+/// replayed under its edition.
+@[ checks ]
+def advance(
+  course : Course,
+  slots : List(SlotPlay),
+  dispatch : Integer,
+  phase : Phase,
+  move : Move
+) -> -F Advance {
+  case current(course, dispatch) {
+    Fail(refusal) => Halted(refusal),
+    Pass => case slotOf(dispatch, slots) {
+      None => Halted(NotCurrent),
+      Some(play) => case play {
+        SlotOf(held, edition, slotPhase) => case replay(edition, phase, move) {
+          Moved(next) => Went(next),
+          Stuck(reason) => Halted(Protocol(edition, move, reason))
+        }
+      }
+    }
+  }
+}
+
+/// A grading or a landing with no predecessor in its causal past, replayed
+/// on an empty channel of the course's dispatch.
+@[ checks ]
+def unstarted(course : Course, slots : List(SlotPlay), phase : Phase, move : Move) -> -F Refusal {
+  case course {
+    Idle => NotCurrent,
+    Dispatched(
+      placed,
+      dispatch,
+      moved,
+      holder
+    ) => case advance(course, slots, dispatch, phase, move) {
+      Went(next) => NotCurrent,
+      Halted(refusal) => refusal
+    }
+  }
+}
+
+/// A move on a dispatch's slot by an author whose authority is `authority`:
+/// refused as not current when the dispatch has no slot play; otherwise
+/// replayed, a protocol refusal standing before the authority's, and the
+/// authority's before the move is admitted.
+@[ checks ]
+def slotMove(
+  slots : List(SlotPlay),
+  dispatch : Integer,
+  authority : Outcome,
+  move : Move
+) -> -F Advance {
+  case slotOf(dispatch, slots) {
+    None => Halted(NotCurrent),
+    Some(play) => case play {
+      SlotOf(held, edition, phase) => case replay(edition, phase, move) {
+        Stuck(reason) => Halted(Protocol(edition, move, reason)),
+        Moved(next) => case authority {
+          Pass => Went(next),
+          Fail(refusal) => Halted(refusal)
+        }
+      }
+    }
+  }
+}
+
+/// What an admitted receipt changes in the view beside admitting its commit.
+@[ checks ]
+data Change : Type {
+  Quiet : Change;
+  Joins : (to : Integer) --> Change;
+  Notes : (text : String) --> Change;
+  Attests : (index : Integer) --> Change;
+  Binds : (path : Name, target : Target) --> Change;
+  Claims : (domain : Name) --> Change;
+  Introduces : (label : Name, tree : Integer) --> Change;
+  Presents : (endpoint : EndpointAddr) --> Change;
+  Withdraws : (holder : Integer) --> Change;
+  Steps : (step : Step) --> Change;
+}
+
+/// The fold's judgement of one receipt: refused, the ledger as the refusal
+/// leaves it; or admitted, with the past it hands its children, the ledger
+/// and its change to the view.
+@[ checks ]
+data Admission : Type {
+  Refuse : (refusal : Refusal, ledger : Ledger) --> Admission;
+  Admit : (past : Past, ledger : Ledger, change : Change) --> Admission;
+}
+
+/// The ledger with its slot plays replaced.
+@[ checks ]
+def withSlots(ledger : Ledger, slots : List(SlotPlay)) -> -F Ledger {
+  case ledger {
+    Ledger(placed, pasts, fences, was, judges, choices, decided) => Ledger(
+      placed,
+      pasts,
+      fences,
+      slots,
+      judges,
+      choices,
+      decided
+    )
+  }
+}
+
+/// The ledger with its judge channels replaced.
+@[ checks ]
+def withJudges(ledger : Ledger, judges : List(JudgePlay)) -> -F Ledger {
+  case ledger {
+    Ledger(placed, pasts, fences, slots, was, choices, decided) => Ledger(
+      placed,
+      pasts,
+      fences,
+      slots,
+      judges,
+      choices,
+      decided
+    )
+  }
+}
+
+/// The ledger with its decision channels and admitted decisions replaced.
+@[ checks ]
+def withChoices(
+  ledger : Ledger,
+  choices : List(DecisionPlay),
+  decided : List(Decided)
+) -> -F Ledger {
+  case ledger {
+    Ledger(placed, pasts, fences, slots, judges, was, before) => Ledger(
+      placed,
+      pasts,
+      fences,
+      slots,
+      judges,
+      choices,
+      decided
+    )
+  }
+}
+
+/// The past with a peer granted.
+@[ checks ]
+def granting(past : Past, peer : Integer) -> -F Past {
+  case past {
+    Past(grantees, seats, verdicts, decisions, course) => {
+      run more <- insert(peer, grantees);
+      Past(more, seats, verdicts, decisions, course)
+    }
+  }
+}
+
+/// The past with a peer seated and the course moved on.
+@[ checks ]
+def seating(past : Past, seat : Integer, course : Course) -> -F Past {
+  case past {
+    Past(grantees, seats, verdicts, decisions, was) => {
+      run more <- insert(seat, seats);
+      Past(grantees, more, verdicts, decisions, course)
+    }
+  }
+}
+
+/// The past with its course moved on.
+@[ checks ]
+def coursing(past : Past, course : Course) -> -F Past {
+  case past {
+    Past(grantees, seats, verdicts, decisions, was) => Past(
+      grantees,
+      seats,
+      verdicts,
+      decisions,
+      course
+    )
+  }
+}
+
+/// The past with a verdict admitted.
+@[ checks ]
+def ruling(past : Past, verdict : Integer) -> -F Past {
+  case past {
+    Past(grantees, seats, verdicts, decisions, course) => {
+      run more <- insert(verdict, verdicts);
+      Past(grantees, seats, more, decisions, course)
+    }
+  }
+}
+
+/// The past with a decision admitted.
+@[ checks ]
+def deciding(past : Past, decision : Integer) -> -F Past {
+  case past {
+    Past(grantees, seats, verdicts, decisions, course) => {
+      run more <- insert(decision, decisions);
+      Past(grantees, seats, verdicts, more, course)
+    }
+  }
+}
+
+/// Whether a proof is the statement of `key` naming `peer`.
+@[ checks ]
+def verifies(proof : Proof, key : Integer, peer : Integer) -> -F Bool {
+  case proof {
+    Signed(by, names) => case by == key {
+      true => names == peer,
+      false => by == key
+    }
+  }
+}
+
+/// The choice a decision makes on its channel.
+@[ checks ]
+def choice(decision : Decision) -> -F Choice {
+  case decision {
+    Land => ToLand,
+    Rework(reason) => ToRework,
+    Abandon => ToAbandon
+  }
+}
+
+/// Each question of a verdict's rulings with its grade, in order.
+@[ checks ]
+def rec marks(rulings : List(Ruled), grades : List(Grade)) -> -F List(Marked) {
+  case rulings {
+    Nil => (Nil : List(Marked)),
+    Cons(ruled, rest) => case grades {
+      Nil => (Nil : List(Marked)),
+      Cons(grade, more) => case ruled {
+        OnQuestion(question, ruling) => {
+          run later <- marks[<](rest, more);
+          (Cons(MarkedAs(question, grade), later) : List(Marked))
+        }
+      }
+    }
+  }
+}
+
+/// A move on the current dispatch's slot by its holder: a report, a
+/// handoff, a retirement or a pause, admitted with `past` handed on and
+/// `change` to the view once the slot play takes it.
+@[ checks ]
+def heldMove(
+  ledger : Ledger,
+  course : Course,
+  author : Integer,
+  dispatch : Integer,
+  move : Move,
+  past : Past,
+  change : Change
+) -> -F Admission {
+  case ledger {
+    Ledger(placed, pasts, fences, slots, judges, choices, decided) => {
+      run authority <- answerable(course, dispatch, author);
+      case slotMove(slots, dispatch, authority, move) {
+        Halted(refusal) => Refuse(refusal, ledger),
+        Went(phase) => case slotOf(dispatch, slots) {
+          None => Refuse(NotCurrent, ledger),
+          Some(play) => case play {
+            SlotOf(held, edition, before) => {
+              run moved <- setSlot(dispatch, edition, phase, slots);
+              run next <- withSlots(ledger, moved);
+              Admit(past, next, change)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// A verdict on `dispatch`, admitted from the judge it names while its
+/// dispatch is current.
+@[ checks ]
+def verdictMove(
+  ledger : Ledger,
+  past : Past,
+  author : Integer,
+  commit : Integer,
+  dispatch : Integer,
+  judge : Integer,
+  rubric : Integer,
+  transcript : Integer,
+  answers : List(Ruled)
+) -> -F Admission {
+  case author == judge {
+    false => Refuse(NotJudge, ledger),
+    true => case past {
+      Past(grantees, seats, verdicts, decisions, course) => case ledger {
+        Ledger(placed, pasts, fences, slots, judges, choices, decided) => case advance(
+          course,
+          slots,
+          dispatch,
+          JudgeFresh,
+          VerdictMove
+        ) {
+          Halted(refusal) => Refuse(refusal, ledger),
+          Went(phase) => {
+            run more <- append(
+              JudgePlay,
+              judges,
+              JudgeOf(commit, judge, dispatch, rubric, answers, phase)
+            );
+            run next <- withJudges(ledger, more);
+            run handed <- ruling(past, commit);
+            Admit(handed, next, Steps(VerdictStep(dispatch, judge, rubric, transcript, answers)))
+          }
+        }
+      }
+    }
+  }
+}
+
+/// A verification on `dispatch`, admitted from the runner it names while its
+/// dispatch is current.
+@[ checks ]
+def verifiedMove(
+  ledger : Ledger,
+  past : Past,
+  author : Integer,
+  runner : Integer,
+  dispatch : Integer,
+  step : Step
+) -> -F Admission {
+  case author == runner {
+    false => Refuse(NotRunner, ledger),
+    true => case past {
+      Past(grantees, seats, verdicts, decisions, course) => case ledger {
+        Ledger(placed, pasts, fences, slots, judges, choices, decided) => case advance(
+          course,
+          slots,
+          dispatch,
+          RunnerOpen,
+          VerifiedMove
+        ) {
+          Halted(refusal) => Refuse(refusal, ledger),
+          Went(phase) => Admit(past, ledger, Steps(step))
+        }
+      }
+    }
+  }
+}
+
+/// A grading of `verdict`, admitted when the verdict is in its causal past,
+/// from that verdict's judge, answering its rulings and composing its
+/// grades, while the verdict's dispatch is current.
+@[ checks ]
+def gradedMove(
+  ledger : Ledger,
+  past : Past,
+  author : Integer,
+  verdict : Integer,
+  grades : List(Grade),
+  composed : Grade
+) -> -F Admission {
+  case past {
+    Past(grantees, seats, verdicts, decisions, course) => case ledger {
+      Ledger(placed, pasts, fences, slots, judges, choices, decided) => case judgeOf(
+        verdict,
+        verdicts,
+        judges
+      ) {
+        None => {
+          run refusal <- unstarted(course, slots, JudgeFresh, GradedMove);
+          Refuse(refusal, ledger)
+        },
+        Some(play) => case play {
+          JudgeOf(held, judge, dispatch, rubric, rulings, phase) => case grading(
+            judge,
+            rulings,
+            author,
+            grades,
+            composed
+          ) {
+            Fail(refusal) => Refuse(refusal, ledger),
+            Pass => case advance(course, slots, dispatch, phase, GradedMove) {
+              Halted(refusal) => Refuse(refusal, ledger),
+              Went(next) => {
+                run moved <- setJudge(verdict, next, judges);
+                run kept <- withJudges(ledger, moved);
+                run marked <- marks(rulings, grades);
+                Admit(past, kept, Steps(GradedStep(dispatch, verdict, rubric, marked, composed)))
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// A decision on `dispatch`, admitted from the operator it names, holding
+/// the operator role, while the dispatch is current.
+@[ checks ]
+def decideMove(
+  ledger : Ledger,
+  past : Past,
+  authorized : Bool,
+  author : Integer,
+  commit : Integer,
+  dispatch : Integer,
+  operator : Integer,
+  decision : Decision
+) -> -F Admission {
+  case authorized {
+    false => Refuse(NoAuthority, ledger),
+    true => case author == operator {
+      false => Refuse(NotOperator, ledger),
+      true => case past {
+        Past(grantees, seats, verdicts, decisions, course) => case ledger {
+          Ledger(placed, pasts, fences, slots, judges, choices, decided) => {
+            run phase <- choiceOf(dispatch, choices);
+            run chosen <- choice(decision);
+            case advance(course, slots, dispatch, phase, DecideMove(chosen)) {
+              Halted(refusal) => Refuse(refusal, ledger),
+              Went(next) => {
+                run moved <- setChoice(dispatch, next, choices);
+                run made <- append(Decided, decided, DecisionBy(commit, dispatch, operator));
+                run kept <- withChoices(ledger, moved, made);
+                run handed <- deciding(past, commit);
+                Admit(handed, kept, Steps(DecideStep(dispatch, operator, decision)))
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// A landing of `decision`, admitted when a decision to land is in its
+/// causal past, from that decision's operator, while its dispatch is
+/// current.
+@[ checks ]
+def landedMove(
+  ledger : Ledger,
+  past : Past,
+  author : Integer,
+  decision : Integer,
+  merge : String
+) -> -F Admission {
+  case past {
+    Past(grantees, seats, verdicts, decisions, course) => case ledger {
+      Ledger(placed, pasts, fences, slots, judges, choices, decided) => case decisionOf(
+        decision,
+        decisions,
+        decided
+      ) {
+        None => {
+          run refusal <- unstarted(course, slots, DecisionFresh, LandedMove);
+          Refuse(refusal, ledger)
+        },
+        Some(record) => case record {
+          DecisionBy(held, dispatch, operator) => case landing(operator, author) {
+            Fail(refusal) => Refuse(refusal, ledger),
+            Pass => {
+              run phase <- choiceOf(dispatch, choices);
+              case advance(course, slots, dispatch, phase, LandedMove) {
+                Halted(refusal) => Refuse(refusal, ledger),
+                Went(next) => {
+                  run moved <- setChoice(dispatch, next, choices);
+                  run kept <- withChoices(ledger, moved, decided);
+                  Admit(past, kept, Steps(LandedStep(dispatch, decision, author, merge)))
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// A dispatch by an author with authority: replayed as the first move of its
+/// slot play, the play kept even when its edition is unknown, then admitted
+/// as the course's dispatch with its seat seated.
+@[ checks ]
+def dispatchMove(
+  ledger : Ledger,
+  past : Past,
+  commit : Integer,
+  placed : Integer,
+  edition : Integer,
+  seat : Integer,
+  brief : Brief
+) -> -F Admission {
+  case ledger {
+    Ledger(count, pasts, fences, slots, judges, choices, decided) => case replay(
+      edition,
+      SlotFresh,
+      DispatchMove
+    ) {
+      Stuck(reason) => {
+        run kept <- setSlot(commit, edition, SlotFresh, slots);
+        run next <- withSlots(ledger, kept);
+        Refuse(Protocol(edition, DispatchMove, reason), next)
+      },
+      Moved(phase) => {
+        run kept <- setSlot(commit, edition, phase, slots);
+        run next <- withSlots(ledger, kept);
+        run handed <- seating(past, seat, Dispatched(placed, commit, placed, SeatHolds(seat)));
+        Admit(handed, next, Steps(DispatchStep(edition, seat, brief)))
+      }
+    }
+  }
+}
+
+/// A receipt's admission by its kind, its tree and fence already checked:
+/// `authorized` when the author is the owner or granted in the causal past,
+/// `present` when also when a dispatch or handoff there seated it.
+@[ checks ]
+def admitKind(
+  owner : Integer,
+  open : Integer,
+  bad : List(Integer),
+  ledger : Ledger,
+  past : Past,
+  authorized : Bool,
+  present : Bool,
+  author : Integer,
+  commit : Integer,
+  kind : Kind
+) -> -F Admission {
+  case ledger {
+    Ledger(placed, pasts, fences, slots, judges, choices, decided) => case past {
+      Past(grantees, seats, verdicts, decisions, course) => case kind {
+        Open(proof) => case member(commit, bad) {
+          true => Refuse(BadProof, ledger),
+          false => case commit == open {
+            true => Admit(past, ledger, Quiet),
+            false => Refuse(SecondOpen, ledger)
+          }
+        },
+        Grant(to) => case authorized {
+          true => {
+            run handed <- granting(past, to);
+            Admit(handed, ledger, Joins(to))
+          },
+          false => Refuse(NoAuthority, ledger)
+        },
+        Note(text) => case authorized {
+          true => Admit(past, ledger, Notes(text)),
+          false => Refuse(NoAuthority, ledger)
+        },
+        Indexed(index) => case authorized {
+          true => Admit(past, ledger, Attests(index)),
+          false => Refuse(NoAuthority, ledger)
+        },
+        Bind(path, target) => case authorized {
+          true => Admit(past, ledger, Binds(path, target)),
+          false => Refuse(NoAuthority, ledger)
+        },
+        Claim(domain) => case author == owner {
+          true => Admit(past, ledger, Claims(domain)),
+          false => Refuse(NotOwner, ledger)
+        },
+        Introduce(tree, label) => case authorized {
+          true => Admit(past, ledger, Introduces(label, tree)),
+          false => Refuse(NoAuthority, ledger)
+        },
+        Present(endpoint, proof) => case present {
+          true => case endpoint {
+            EndpointAt(key, port) => case verifies(proof, key, author) {
+              true => Admit(past, ledger, Presents(endpoint)),
+              false => Refuse(ForeignEndpoint, ledger)
+            }
+          },
+          false => Refuse(NoAuthority, ledger)
+        },
+        Withdraw(holder) => case author == owner {
+          true => Admit(past, ledger, Withdraws(holder)),
+          false => case present {
+            true => case holder == author {
+              true => Admit(past, ledger, Withdraws(holder)),
+              false => Refuse(ForeignPresence, ledger)
+            },
+            false => Refuse(NoAuthority, ledger)
+          }
+        },
+        Dispatch(edition, seat, brief) => case authorized {
+          true => become dispatchMove(ledger, past, commit, placed, edition, seat, brief),
+          false => Refuse(NoAuthority, ledger)
+        },
+        Report(dispatch, content, summary) => become heldMove(
+          ledger,
+          course,
+          author,
+          dispatch,
+          ReportMove,
+          past,
+          Steps(ReportStep(dispatch, author, content, summary))
+        ),
+        Handoff(dispatch, to) => {
+          run passed <- moved(course, placed, SeatHolds(to));
+          run handed <- seating(past, to, passed);
+          become heldMove(
+            ledger,
+            course,
+            author,
+            dispatch,
+            HandoffMove,
+            handed,
+            Steps(HandoffStep(dispatch, author, to))
+          )
+        },
+        Retire(dispatch) => {
+          run vacated <- moved(course, placed, Vacant);
+          run handed <- coursing(past, vacated);
+          become heldMove(
+            ledger,
+            course,
+            author,
+            dispatch,
+            RetireMove,
+            handed,
+            Steps(RetireStep(dispatch, author))
+          )
+        },
+        Pause(dispatch) => become heldMove(
+          ledger,
+          course,
+          author,
+          dispatch,
+          PauseMove,
+          past,
+          Steps(PauseStep(dispatch, author))
+        ),
+        Verdict(dispatch, judge, rubric, transcript, answers) => become verdictMove(
+          ledger,
+          past,
+          author,
+          commit,
+          dispatch,
+          judge,
+          rubric,
+          transcript,
+          answers
+        ),
+        Verified(dispatch, runner, playbook, step, output, status) => become verifiedMove(
+          ledger,
+          past,
+          author,
+          runner,
+          dispatch,
+          VerifiedStep(dispatch, runner, playbook, step, output, status)
+        ),
+        Graded(
+          verdict,
+          grades,
+          composed
+        ) => become gradedMove(ledger, past, author, verdict, grades, composed),
+        Decide(dispatch, operator, decision) => become decideMove(
+          ledger,
+          past,
+          authorized,
+          author,
+          commit,
+          dispatch,
+          operator,
+          decision
+        ),
+        Landed(decision, merge) => become landedMove(ledger, past, author, decision, merge)
+      }
+    }
+  }
+}
+
+/// Whether an author holds write authority: the owner, or granted in its
+/// causal past.
+@[ checks ]
+def authorizes(owner : Integer, author : Integer, grantees : List(Integer)) -> -F Bool {
+  case author == owner {
+    true => author == owner,
+    false => become member(author, grantees)
+  }
+}
+
+/// Whether an author may present or withdraw: with write authority, or
+/// seated by a dispatch or handoff in its causal past.
+@[ checks ]
+def presents(authorized : Bool, author : Integer, seats : List(Integer)) -> -F Bool {
+  case authorized {
+    true => authorized,
+    false => become member(author, seats)
+  }
+}
+
+/// A receipt's admission: refused when it names another tree, or carries the
+/// fence of a commit admitted earlier; otherwise judged by its kind.
+@[ checks ]
+def admission(
+  tree : Integer,
+  owner : Integer,
+  open : Integer,
+  bad : List(Integer),
+  ledger : Ledger,
+  past : Past,
+  author : Integer,
+  commit : Integer,
+  receipt : Receipt
+) -> -F Admission {
+  case receipt {
+    Receipt(named, operation, kind) => case named == tree {
+      false => Refuse(WrongTree(named), ledger),
+      true => case ledger {
+        Ledger(placed, pasts, fences, slots, judges, choices, decided) => case fenced(
+          operation,
+          fences
+        ) {
+          Some(first) => Refuse(Duplicate(first), ledger),
+          None => case past {
+            Past(grantees, seats, verdicts, decisions, course) => {
+              run authorized <- authorizes(owner, author, grantees);
+              run present <- presents(authorized, author, seats);
+              become admitKind(
+                owner,
+                open,
+                bad,
+                ledger,
+                past,
+                authorized,
+                present,
+                author,
+                commit,
+                kind
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The key a path, a name or a label is compared by.
+@[ checks ]
+def keyOf(name : Name) -> -F Integer {
+  case name {
+    Named(key, text) => key
+  }
+}
+
+/// The bindings with a path's binding set, in path order.
+@[ checks ]
+def rec rebind(binding : Binding, bindings : List(Binding)) -> -F List(Binding) {
+  case binding {
+    BoundBy(path, author, target) => case bindings {
+      Nil => (Cons(binding, Nil) : List(Binding)),
+      Cons(held, rest) => case held {
+        BoundBy(heldPath, heldAuthor, heldTarget) => {
+          run key <- keyOf(path);
+          run heldKey <- keyOf(heldPath);
+          case key < heldKey {
+            true => (Cons(binding, bindings) : List(Binding)),
+            false => case key == heldKey {
+              true => (Cons(binding, rest) : List(Binding)),
+              false => {
+                run later <- rebind[<](binding, rest);
+                (Cons(held, later) : List(Binding))
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The claims with a domain added, in name order.
+@[ checks ]
+def rec claim(domain : Name, claims : List(Name)) -> -F List(Name) {
+  case claims {
+    Nil => (Cons(domain, Nil) : List(Name)),
+    Cons(held, rest) => {
+      run key <- keyOf(domain);
+      run heldKey <- keyOf(held);
+      case key < heldKey {
+        true => (Cons(domain, claims) : List(Name)),
+        false => case key == heldKey {
+          true => claims,
+          false => {
+            run later <- claim[<](domain, rest);
+            (Cons(held, later) : List(Name))
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The introductions with a label's introduction set, in label order.
+@[ checks ]
+def rec reintroduce(
+  introduction : Introduction,
+  introductions : List(Introduction)
+) -> -F List(Introduction) {
+  case introduction {
+    IntroducedBy(label, author, tree) => case introductions {
+      Nil => (Cons(introduction, Nil) : List(Introduction)),
+      Cons(held, rest) => case held {
+        IntroducedBy(heldLabel, heldAuthor, heldTree) => {
+          run key <- keyOf(label);
+          run heldKey <- keyOf(heldLabel);
+          case key < heldKey {
+            true => (Cons(introduction, introductions) : List(Introduction)),
+            false => case key == heldKey {
+              true => (Cons(introduction, rest) : List(Introduction)),
+              false => {
+                run later <- reintroduce[<](introduction, rest);
+                (Cons(held, later) : List(Introduction))
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The book with an author's presence set, in author order.
+@[ checks ]
+def rec enter(presence : Presence, book : List(Presence)) -> -F List(Presence) {
+  case presence {
+    PresentAt(author, endpoint, since) => case book {
+      Nil => (Cons(presence, Nil) : List(Presence)),
+      Cons(held, rest) => case held {
+        PresentAt(heldAuthor, heldEndpoint, heldSince) => case author < heldAuthor {
+          true => (Cons(presence, book) : List(Presence)),
+          false => case author == heldAuthor {
+            true => (Cons(presence, rest) : List(Presence)),
+            false => {
+              run later <- enter[<](presence, rest);
+              (Cons(held, later) : List(Presence))
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The book with an author's presence withdrawn, present or not.
+@[ checks ]
+def rec leave(holder : Integer, book : List(Presence)) -> -F List(Presence) {
+  case book {
+    Nil => book,
+    Cons(held, rest) => case held {
+      PresentAt(author, endpoint, since) => case author == holder {
+        true => rest,
+        false => {
+          run later <- leave[<](holder, rest);
+          (Cons(held, later) : List(Presence))
+        }
+      }
+    }
+  }
+}
+
+/// The indexes with an author's attestation set, in author order.
+@[ checks ]
+def rec attest(attestation : Attestation, indexes : List(Attestation)) -> -F List(Attestation) {
+  case attestation {
+    AttestedBy(author, index, commit, parents) => case indexes {
+      Nil => (Cons(attestation, Nil) : List(Attestation)),
+      Cons(held, rest) => case held {
+        AttestedBy(heldAuthor, heldIndex, heldCommit, heldParents) => case author < heldAuthor {
+          true => (Cons(attestation, indexes) : List(Attestation)),
+          false => case author == heldAuthor {
+            true => (Cons(attestation, rest) : List(Attestation)),
+            false => {
+              run later <- attest[<](attestation, rest);
+              (Cons(held, later) : List(Attestation))
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Where a progress ranks: unchecked, then verified, graded, decided and
+/// landed.
+@[ checks ]
+def rank(progress : Progress) -> -F Integer {
+  case progress {
+    Unchecked => 0,
+    VerifiedBy(verification) => 1,
+    GradedBy(grading, composed) => 2,
+    DecidedBy(decide, decision) => 3,
+    LandedBy(landing, merge) => 4
+  }
+}
+
+/// An attempt's progress advanced to `next` unless it has gone further: a
+/// later step of one rank replaces an earlier, a lower rank never undoes a
+/// higher.
+@[ checks ]
+def further(held : Progress, next : Progress) -> -F Progress {
+  run heldRank <- rank(held);
+  run nextRank <- rank(next);
+  case nextRank >= heldRank {
+    true => next,
+    false => held
+  }
+}
+
+/// The current attempt with its answer reported by `report`, when the
+/// report answers its dispatch.
+@[ checks ]
+def reported(current : Current, answered : Integer, report : Integer) -> -F Current {
+  case current {
+    Undispatched => current,
+    Attempt(dispatch, edition, brief, slot, answer, progress) => case answered == dispatch {
+      true => Attempt(dispatch, edition, brief, slot, ReportedBy(report), progress),
+      false => current
+    }
+  }
+}
+
+/// The current attempt with its slot moved to `slot`, when the move answers
+/// its dispatch.
+@[ checks ]
+def reslotted(current : Current, answered : Integer, moved : Slot) -> -F Current {
+  case current {
+    Undispatched => current,
+    Attempt(dispatch, edition, brief, slot, answer, progress) => case answered == dispatch {
+      true => Attempt(dispatch, edition, brief, moved, answer, progress),
+      false => current
+    }
+  }
+}
+
+/// The current attempt with its progress advanced to `next`, when the check
+/// answers its dispatch.
+@[ checks ]
+def progressed(current : Current, answered : Integer, next : Progress) -> -F Current {
+  case current {
+    Undispatched => current,
+    Attempt(dispatch, edition, brief, slot, answer, progress) => case answered == dispatch {
+      true => {
+        run moved <- further(progress, next);
+        Attempt(dispatch, edition, brief, slot, answer, moved)
+      },
+      false => current
+    }
+  }
+}
+
+/// Where the task stands once an admitted step is recorded: a dispatch
+/// starts a fresh attempt; a step answering the current attempt's dispatch
+/// moves its slot, its answer or its progress; a verdict, a pause and a step
+/// answering an earlier dispatch move nothing.
+@[ checks ]
+def standing(current : Current, commit : Integer, step : Step) -> -F Current {
+  case step {
+    DispatchStep(
+      edition,
+      seat,
+      brief
+    ) => Attempt(commit, edition, brief, Held(seat), Awaited, Unchecked),
+    ReportStep(answered, author, content, summary) => become reported(current, answered, commit),
+    HandoffStep(answered, giver, to) => become reslotted(current, answered, Held(to)),
+    RetireStep(answered, author) => become reslotted(current, answered, Vacated(author, commit)),
+    PauseStep(answered, author) => current,
+    VerdictStep(answered, judge, rubric, transcript, answers) => current,
+    VerifiedStep(answered, runner, playbook, name, output, status) => become progressed(
+      current,
+      answered,
+      VerifiedBy(commit)
+    ),
+    GradedStep(answered, verdict, rubric, grades, composed) => become progressed(
+      current,
+      answered,
+      GradedBy(commit, composed)
+    ),
+    DecideStep(answered, operator, decision) => become progressed(
+      current,
+      answered,
+      DecidedBy(commit, decision)
+    ),
+    LandedStep(answered, decided, operator, merge) => become progressed(
+      current,
+      answered,
+      LandedBy(commit, merge)
+    )
+  }
+}
+
+/// The task with an admitted step recorded.
+@[ checks ]
+def record(task : Task, commit : Integer, step : Step) -> -F Task {
+  case task {
+    Task(steps, current) => {
+      run more <- append(Stepped, steps, StepAt(commit, step));
+      run now <- standing(current, commit, step);
+      Task(more, now)
+    }
+  }
+}
+
+/// The view with an admitted commit's change made and the commit admitted.
+@[ checks ]
+def apply(
+  view : View,
+  commit : Integer,
+  author : Integer,
+  parents : List(Integer),
+  change : Change
+) -> -F View {
+  case view {
+    View(
+      owner,
+      members,
+      notes,
+      bindings,
+      claims,
+      introductions,
+      book,
+      attestations,
+      indexes,
+      task,
+      admitted,
+      refused
+    ) => {
+      run taken <- insert(commit, admitted);
+      case change {
+        Quiet => View(
+          owner,
+          members,
+          notes,
+          bindings,
+          claims,
+          introductions,
+          book,
+          attestations,
+          indexes,
+          task,
+          taken,
+          refused
+        ),
+        Joins(to) => {
+          run more <- insert(to, members);
+          View(
+            owner,
+            more,
+            notes,
+            bindings,
+            claims,
+            introductions,
+            book,
+            attestations,
+            indexes,
+            task,
+            taken,
+            refused
+          )
+        },
+        Notes(text) => {
+          run more <- append(Noted, notes, NotedBy(author, text));
+          View(
+            owner,
+            members,
+            more,
+            bindings,
+            claims,
+            introductions,
+            book,
+            attestations,
+            indexes,
+            task,
+            taken,
+            refused
+          )
+        },
+        Attests(index) => {
+          run more <- append(Attestation, attestations, AttestedBy(author, index, commit, parents));
+          run latest <- attest(AttestedBy(author, index, commit, parents), indexes);
+          View(
+            owner,
+            members,
+            notes,
+            bindings,
+            claims,
+            introductions,
+            book,
+            more,
+            latest,
+            task,
+            taken,
+            refused
+          )
+        },
+        Binds(path, target) => {
+          run more <- rebind(BoundBy(path, author, target), bindings);
+          View(
+            owner,
+            members,
+            notes,
+            more,
+            claims,
+            introductions,
+            book,
+            attestations,
+            indexes,
+            task,
+            taken,
+            refused
+          )
+        },
+        Claims(domain) => {
+          run more <- claim(domain, claims);
+          View(
+            owner,
+            members,
+            notes,
+            bindings,
+            more,
+            introductions,
+            book,
+            attestations,
+            indexes,
+            task,
+            taken,
+            refused
+          )
+        },
+        Introduces(label, tree) => {
+          run more <- reintroduce(IntroducedBy(label, author, tree), introductions);
+          View(
+            owner,
+            members,
+            notes,
+            bindings,
+            claims,
+            more,
+            book,
+            attestations,
+            indexes,
+            task,
+            taken,
+            refused
+          )
+        },
+        Presents(endpoint) => {
+          run more <- enter(PresentAt(author, endpoint, commit), book);
+          View(
+            owner,
+            members,
+            notes,
+            bindings,
+            claims,
+            introductions,
+            more,
+            attestations,
+            indexes,
+            task,
+            taken,
+            refused
+          )
+        },
+        Withdraws(holder) => {
+          run fewer <- leave(holder, book);
+          View(
+            owner,
+            members,
+            notes,
+            bindings,
+            claims,
+            introductions,
+            fewer,
+            attestations,
+            indexes,
+            task,
+            taken,
+            refused
+          )
+        },
+        Steps(step) => {
+          run recorded <- record(task, commit, step);
+          View(
+            owner,
+            members,
+            notes,
+            bindings,
+            claims,
+            introductions,
+            book,
+            attestations,
+            indexes,
+            recorded,
+            taken,
+            refused
+          )
+        }
+      }
+    }
+  }
+}
+
+/// The view with a commit refused for `refusal`, after the refusals before
+/// it.
+@[ checks ]
+def refuse(view : View, commit : Integer, refusal : Refusal) -> -F View {
+  case view {
+    View(
+      owner,
+      members,
+      notes,
+      bindings,
+      claims,
+      introductions,
+      book,
+      attestations,
+      indexes,
+      task,
+      admitted,
+      refused
+    ) => {
+      run more <- append(RefusedCommit, refused, RefusedAt(commit, refusal));
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        more
+      )
+    }
+  }
+}
+
+/// The fold between two commits: the ledger and the view so far.
+@[ checks ]
+data Folding : Type {
+  Folding : (ledger : Ledger, view : View) --> Folding;
+}
+
+/// The ledger once a commit is placed: one more placed, its past carried,
+/// and its fence held when it was admitted.
+@[ checks ]
+def placing(ledger : Ledger, commit : Integer, past : Past, fence : Maybe(Integer)) -> -F Ledger {
+  case ledger {
+    Ledger(placed, pasts, fences, slots, judges, choices, decided) => {
+      run carried <- append(Carried, pasts, CarriedBy(commit, past));
+      run count <- placed + 1;
+      case fence {
+        None => Ledger(count, carried, fences, slots, judges, choices, decided),
+        Some(operation) => {
+          run held <- append(Fenced, fences, FencedBy(operation, commit));
+          Ledger(count, carried, held, slots, judges, choices, decided)
+        }
+      }
+    }
+  }
+}
+
+/// One commit placed: its receipt admitted or refused against its causal
+/// past, the past it hands its children carried.
+@[ checks ]
+def place(
+  tree : Integer,
+  owner : Integer,
+  open : Integer,
+  bad : List(Integer),
+  folding : Folding,
+  commit : Commit
+) -> -F Folding {
+  case folding {
+    Folding(ledger, view) => case commit {
+      Committed(id, author, parents, blob) => case ledger {
+        Ledger(placed, pasts, fences, slots, judges, choices, decided) => {
+          run past <- inherit(parents, pasts);
+          case blob {
+            Garbled => {
+              run next <- placing(ledger, id, past, (None : Maybe(Integer)));
+              run seen <- refuse(view, id, Undecodable);
+              Folding(next, seen)
+            },
+            Decoded(receipt) => case receipt {
+              Receipt(
+                named,
+                operation,
+                kind
+              ) => case admission(tree, owner, open, bad, ledger, past, author, id, receipt) {
+                Refuse(refusal, kept) => {
+                  run next <- placing(kept, id, past, (None : Maybe(Integer)));
+                  run seen <- refuse(view, id, refusal);
+                  Folding(next, seen)
+                },
+                Admit(handed, kept, change) => {
+                  run next <- placing(kept, id, handed, (Some(operation) : Maybe(Integer)));
+                  run seen <- apply(view, id, author, parents, change);
+                  Folding(next, seen)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The commits placed in order.
+@[ checks ]
+def rec walk(
+  tree : Integer,
+  owner : Integer,
+  open : Integer,
+  bad : List(Integer),
+  folding : Folding,
+  commits : List(Commit)
+) -> -F Folding {
+  case commits {
+    Nil => folding,
+    Cons(commit, rest) => {
+      run next <- place(tree, owner, open, bad, folding, commit);
+      become walk[<](tree, owner, open, bad, next, rest)
+    }
+  }
+}
+
+/// The tree's Open: its commit and its author, the owner.
+@[ checks ]
+data Opening : Type {
+  OpenedBy : (commit : Integer, owner : Integer) --> Opening;
+}
+
+/// Whether a commit is an Open of `tree`, and its proof the tree key's
+/// naming its author.
+@[ checks ]
+def opens(tree : Integer, commit : Commit) -> -F Bool {
+  case commit {
+    Committed(id, author, parents, blob) => case blob {
+      Garbled => id < id,
+      Decoded(receipt) => case receipt {
+        Receipt(named, operation, kind) => case kind {
+          Open(proof) => case named == tree {
+            true => become verifies(proof, tree, author),
+            false => named == tree
+          },
+          _ => id < id
+        }
+      }
+    }
+  }
+}
+
+/// The tree's Open: of the commits with no parents that open the tree, the
+/// first in canonical order.
+@[ checks ]
+def rec openOf(tree : Integer, commits : List(Commit)) -> -F Maybe(Opening) {
+  case commits {
+    Nil => (None : Maybe(Opening)),
+    Cons(commit, rest) => case commit {
+      Committed(id, author, parents, blob) => case parents {
+        Cons(parent, more) => become openOf[<](tree, rest),
+        Nil => case opens(tree, commit) {
+          true => (Some(OpenedBy(id, author)) : Maybe(Opening)),
+          false => become openOf[<](tree, rest)
+        }
+      }
+    }
+  }
+}
+
+/// The commits that are Opens of `tree` whose proof is not the tree key's
+/// naming their author.
+@[ checks ]
+def rec forged(tree : Integer, commits : List(Commit)) -> -F List(Integer) {
+  case commits {
+    Nil => (Nil : List(Integer)),
+    Cons(commit, rest) => {
+      run later <- forged[<](tree, rest);
+      case commit {
+        Committed(id, author, parents, blob) => case blob {
+          Garbled => later,
+          Decoded(receipt) => case receipt {
+            Receipt(named, operation, kind) => case kind {
+              Open(proof) => case named == tree {
+                true => case verifies(proof, tree, author) {
+                  true => later,
+                  false => become insert(id, later)
+                },
+                false => later
+              },
+              _ => later
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The fold before its first commit: nothing placed, and the view of the
+/// owner alone.
+@[ checks ]
+def start(owner : Integer) -> -F Folding {
+  Folding(
+    Ledger(0, Nil, Nil, Nil, Nil, Nil, Nil),
+    View(owner, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Task(Nil, Undispatched), Nil, Nil)
+  )
+}
+
+/// Fold `tree`'s commits, given in canonical order, into its view; no view
+/// when no commit is the tree's Open.
+@[ checks ]
+def fold(tree : Integer, commits : List(Commit)) -> -F Folded {
+  case openOf(tree, commits) {
+    None => Unopened,
+    Some(opening) => case opening {
+      OpenedBy(open, owner) => {
+        run bad <- forged(tree, commits);
+        run first <- start(owner);
+        run folded <- walk(tree, owner, open, bad, first, commits);
+        case folded {
+          Folding(last, seen) => Folded(seen)
+        }
+      }
+    }
+  }
+}
+
+/// The owner of a folded view.
+@[ checks ]
+def ownerOf(folded : Folded) -> -F Maybe(Integer) {
+  case folded {
+    Unopened => (None : Maybe(Integer)),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => (Some(owner) : Maybe(Integer))
+    }
+  }
+}
+
+/// The notes of a folded view, in canonical order.
+@[ checks ]
+def notesOf(folded : Folded) -> -F Maybe(List(Noted)) {
+  case folded {
+    Unopened => (None : Maybe(List(Noted))),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => (Some(notes) : Maybe(List(Noted)))
+    }
+  }
+}
+
+/// The bindings of a folded view, in path order.
+@[ checks ]
+def bindingsOf(folded : Folded) -> -F Maybe(List(Binding)) {
+  case folded {
+    Unopened => (None : Maybe(List(Binding))),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => (Some(bindings) : Maybe(List(Binding)))
+    }
+  }
+}
+
+/// The claims of a folded view, in name order.
+@[ checks ]
+def claimsOf(folded : Folded) -> -F Maybe(List(Name)) {
+  case folded {
+    Unopened => (None : Maybe(List(Name))),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => (Some(claims) : Maybe(List(Name)))
+    }
+  }
+}
+
+/// The introductions of a folded view, in label order.
+@[ checks ]
+def introductionsOf(folded : Folded) -> -F Maybe(List(Introduction)) {
+  case folded {
+    Unopened => (None : Maybe(List(Introduction))),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => (Some(introductions) : Maybe(List(Introduction)))
+    }
+  }
+}
+
+/// The book of a folded view, in author order.
+@[ checks ]
+def bookOf(folded : Folded) -> -F Maybe(List(Presence)) {
+  case folded {
+    Unopened => (None : Maybe(List(Presence))),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => (Some(book) : Maybe(List(Presence)))
+    }
+  }
+}
+
+/// Every attestation of a folded view, in canonical order.
+@[ checks ]
+def attestationsOf(folded : Folded) -> -F Maybe(List(Attestation)) {
+  case folded {
+    Unopened => (None : Maybe(List(Attestation))),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => (Some(attestations) : Maybe(List(Attestation)))
+    }
+  }
+}
+
+/// Each author's last attestation in a folded view, in author order.
+@[ checks ]
+def indexesOf(folded : Folded) -> -F Maybe(List(Attestation)) {
+  case folded {
+    Unopened => (None : Maybe(List(Attestation))),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => (Some(indexes) : Maybe(List(Attestation)))
+    }
+  }
+}
+
+/// The admitted steps of a folded view's task, in canonical order.
+@[ checks ]
+def stepsOf(folded : Folded) -> -F Maybe(List(Stepped)) {
+  case folded {
+    Unopened => (None : Maybe(List(Stepped))),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => case task {
+        Task(steps, current) => (Some(steps) : Maybe(List(Stepped)))
+      }
+    }
+  }
+}
+
+/// Where a folded view's task stands.
+@[ checks ]
+def currentOf(folded : Folded) -> -F Maybe(Current) {
+  case folded {
+    Unopened => (None : Maybe(Current)),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => case task {
+        Task(steps, current) => (Some(current) : Maybe(Current))
+      }
+    }
+  }
+}
+
+/// The admitted commits of a folded view, in id order.
+@[ checks ]
+def admittedOf(folded : Folded) -> -F Maybe(List(Integer)) {
+  case folded {
+    Unopened => (None : Maybe(List(Integer))),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => (Some(admitted) : Maybe(List(Integer)))
+    }
+  }
+}
+
+/// The refusals of a folded view, in canonical order.
+@[ checks ]
+def refusedOf(folded : Folded) -> -F Maybe(List(RefusedCommit)) {
+  case folded {
+    Unopened => (None : Maybe(List(RefusedCommit))),
+    Folded(view) => case view {
+      View(
+        owner,
+        members,
+        notes,
+        bindings,
+        claims,
+        introductions,
+        book,
+        attestations,
+        indexes,
+        task,
+        admitted,
+        refused
+      ) => (Some(refused) : Maybe(List(RefusedCommit)))
+    }
+  }
+}
+
+// The exemplars fold the sequences of the Rust fold's tests, each named for
+// its test. Every one is on the tree `100`; the peers are `10` the owner,
+// `20` the other peer, and `50`, `70`, `80` and `90` the keys made from the
+// bytes 5, 7, 8 and 9; the endpoint keys `500` and `600` are made from 5 and
+// 6, and the trees `200`, `260` and `270` are the other trees named. Commits
+// are numbered in the canonical order the exemplar gives them, and a
+// commit's fence is its own number unless it states one. A content hash or
+// a digest is a number in the 700s or 900s, one per text the test hashes.
+
+/// A commit of a receipt on the tree `100` with no parent.
+@[ checks ]
+def rooted(id : Integer, author : Integer, kind : Kind) -> -F Commit {
+  Committed(id, author, Nil, Decoded(Receipt(100, id, kind)))
+}
+
+/// A commit of a receipt on the tree `100` with one parent.
+@[ checks ]
+def child(id : Integer, author : Integer, parent : Integer, kind : Kind) -> -F Commit {
+  Committed(id, author, Cons(parent, Nil), Decoded(Receipt(100, id, kind)))
+}
+
+/// A commit of a receipt on the tree `100` with two parents.
+@[ checks ]
+def merged(
+  id : Integer,
+  author : Integer,
+  left : Integer,
+  right : Integer,
+  kind : Kind
+) -> -F Commit {
+  Committed(id, author, Cons(left, Cons(right, Nil)), Decoded(Receipt(100, id, kind)))
+}
+
+/// A commit of a receipt on the tree `100` with one parent, carrying the
+/// fence `operation`.
+@[ checks ]
+def fencedChild(
+  id : Integer,
+  author : Integer,
+  parent : Integer,
+  operation : Integer,
+  kind : Kind
+) -> -F Commit {
+  Committed(id, author, Cons(parent, Nil), Decoded(Receipt(100, operation, kind)))
+}
+
+/// The brief the tests dispatch: the path `briefs/one` in the tree.
+@[ checks ]
+def briefOne = (BriefAt("domhringr://100/briefs/one") : Brief);
+
+/// The rulings the tests' verdicts carry: the question hashed from `read`
+/// read as `B`, and the one hashed from `unread` left unread for want of a
+/// letter.
+@[ checks ]
+def rulings = (
+  Cons(
+    OnQuestion(901, Read(Cons(250000, Cons(750000, Nil)), 0)),
+    Cons(OnQuestion(902, Unread(NoLetter)), Nil)
+  ) : List(Ruled)
+);
+
+/// The revision the tests' landings land at.
+@[ checks ]
+def revision = ("0123456789abcdef0123456789abcdef01234567" : String);
+
+/// `a_note_by_a_peer_granted_in_its_causal_past_is_admitted`: a grant, a
+/// note under it, and a note concurrent with it.
+@[ checks ]
+def grantedCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run granted <- child(2, 10, 1, Grant(20));
+  run after <- child(3, 20, 2, Note("after"));
+  run beside <- child(4, 20, 1, Note("beside"));
+  (Cons(opened, Cons(granted, Cons(after, Cons(beside, Nil)))) : List(Commit))
+}
+
+/// The note descending from the grant is admitted.
+@[ runs("Some(Cons(NotedBy(20, \"after\"), Nil))") ]
+def grantedNotes : () => Maybe(List(Noted)) ;
+def grantedNotes = thunk {
+  run commits <- grantedCommits();
+  run folded <- fold(100, commits);
+  become notesOf(folded)
+} ;
+
+/// A note concurrent with the grant is not under it.
+@[ runs("Some(Cons(RefusedAt(4, NoAuthority), Nil))") ]
+def grantedRefused : () => Maybe(List(RefusedCommit)) ;
+def grantedRefused = thunk {
+  run commits <- grantedCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// `the_later_bind_in_canonical_order_wins`: `x` bound and rebound in
+/// descent, `y` bound twice concurrently. The paths are `x` = 1 and
+/// `y` = 2.
+@[ checks ]
+def rebindCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run first <- child(2, 10, 1, Bind(Named(1, "x"), ToAnchor("domhringr://100/.commit/1")));
+  run second <- child(3, 10, 2, Bind(Named(1, "x"), ToDatum("rebound")));
+  run left <- child(4, 10, 1, Bind(Named(2, "y"), ToDatum("left")));
+  run right <- child(5, 10, 1, Bind(Named(2, "y"), ToDatum("right")));
+  (Cons(opened, Cons(first, Cons(second, Cons(left, Cons(right, Nil))))) : List(Commit))
+}
+
+/// The rebind descending from the bind wins, and of two concurrent binds the
+/// one placed later.
+@[ runs("Some(Cons(BoundBy(Named(1, \"x\"), 10, ToDatum(\"rebound\")), Cons(BoundBy(Named(2, \"y\"), 10, ToDatum(\"right\")), Nil)))") ]
+def rebound : () => Maybe(List(Binding)) ;
+def rebound = thunk {
+  run commits <- rebindCommits();
+  run folded <- fold(100, commits);
+  become bindingsOf(folded)
+} ;
+
+/// `a_bind_by_a_non_member_is_refused`: the owner binds `x`, a non-member
+/// binds it again.
+@[ checks ]
+def squatCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run bound <- child(2, 10, 1, Bind(Named(1, "x"), ToAnchor("domhringr://100/.commit/1")));
+  run squat <- child(3, 20, 2, Bind(Named(1, "x"), ToDatum("squat")));
+  (Cons(opened, Cons(bound, Cons(squat, Nil))) : List(Commit))
+}
+
+/// The non-member's bind is refused for want of authority.
+@[ runs("Some(Cons(RefusedAt(3, NoAuthority), Nil))") ]
+def squatRefused : () => Maybe(List(RefusedCommit)) ;
+def squatRefused = thunk {
+  run commits <- squatCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The path stays as the owner bound it, and nothing else is bound.
+@[ runs("Some(Cons(BoundBy(Named(1, \"x\"), 10, ToAnchor(\"domhringr://100/.commit/1\")), Nil))") ]
+def squatBindings : () => Maybe(List(Binding)) ;
+def squatBindings = thunk {
+  run commits <- squatCommits();
+  run folded <- fold(100, commits);
+  become bindingsOf(folded)
+} ;
+
+/// `a_claim_by_anyone_but_the_owner_is_refused`: a member and a stranger
+/// claim names beside the owner. The names are `example.test` = 1,
+/// `member.test` = 2 and `stranger.test` = 3.
+@[ checks ]
+def claimCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run granted <- child(2, 10, 1, Grant(20));
+  run noted <- child(3, 20, 2, Note("member"));
+  run byMember <- child(4, 20, 3, Claim(Named(2, "member.test")));
+  run byStranger <- child(5, 50, 3, Claim(Named(3, "stranger.test")));
+  run byOwner <- child(6, 10, 3, Claim(Named(1, "example.test")));
+  (Cons(
+    opened,
+    Cons(granted, Cons(noted, Cons(byMember, Cons(byStranger, Cons(byOwner, Nil)))))
+  ) : List(Commit))
+}
+
+/// The owner's claim alone is admitted.
+@[ runs("Some(Cons(Named(1, \"example.test\"), Nil))") ]
+def claimed : () => Maybe(List(Name)) ;
+def claimed = thunk {
+  run commits <- claimCommits();
+  run folded <- fold(100, commits);
+  become claimsOf(folded)
+} ;
+
+/// A claim by a member or by a stranger is refused as not the owner's.
+@[ runs("Some(Cons(RefusedAt(4, NotOwner), Cons(RefusedAt(5, NotOwner), Nil)))") ]
+def claimRefused : () => Maybe(List(RefusedCommit)) ;
+def claimRefused = thunk {
+  run commits <- claimCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The member holds write authority.
+@[ runs("Some(Cons(NotedBy(20, \"member\"), Nil))") ]
+def claimNotes : () => Maybe(List(Noted)) ;
+def claimNotes = thunk {
+  run commits <- claimCommits();
+  run folded <- fold(100, commits);
+  become notesOf(folded)
+} ;
+
+/// `the_later_introduction_of_a_label_rebinds_it`: the owner introduces `b`
+/// twice, a member introduces `my friend`, and a stranger `b`. The labels
+/// are `b` = 1 and `my friend` = 2.
+@[ checks ]
+def introductionCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run introduced <- child(2, 10, 1, Introduce(200, Named(1, "b")));
+  run reintroduced <- child(3, 10, 2, Introduce(260, Named(1, "b")));
+  run granted <- child(4, 10, 3, Grant(20));
+  run byMember <- child(5, 20, 4, Introduce(270, Named(2, "my friend")));
+  run byStranger <- child(6, 50, 5, Introduce(270, Named(1, "b")));
+  (Cons(
+    opened,
+    Cons(introduced, Cons(reintroduced, Cons(granted, Cons(byMember, Cons(byStranger, Nil)))))
+  ) : List(Commit))
+}
+
+/// The later introduction of `b` rebinds it, and a member introduces under
+/// its grant.
+@[ runs("Some(Cons(IntroducedBy(Named(1, \"b\"), 10, 260), Cons(IntroducedBy(Named(2, \"my friend\"), 20, 270), Nil)))") ]
+def introduced : () => Maybe(List(Introduction)) ;
+def introduced = thunk {
+  run commits <- introductionCommits();
+  run folded <- fold(100, commits);
+  become introductionsOf(folded)
+} ;
+
+/// A stranger's introduction is refused for want of authority.
+@[ runs("Some(Cons(RefusedAt(6, NoAuthority), Nil))") ]
+def introductionRefused : () => Maybe(List(RefusedCommit)) ;
+def introductionRefused = thunk {
+  run commits <- introductionCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// `a_presence_naming_another_members_endpoint_is_refused`: the owner
+/// presents its endpoint; a member presents it under the owner's proof, then
+/// under a proof its own endpoint key made for itself.
+@[ checks ]
+def foreignCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run granted <- child(2, 10, 1, Grant(20));
+  run presented <- child(3, 10, 2, Present(EndpointAt(500, 5), Signed(500, 10)));
+  run stolen <- child(4, 20, 3, Present(EndpointAt(500, 7), Signed(500, 10)));
+  run misproved <- child(5, 20, 4, Present(EndpointAt(500, 8), Signed(600, 20)));
+  (Cons(opened, Cons(granted, Cons(presented, Cons(stolen, Cons(misproved, Nil))))) : List(Commit))
+}
+
+/// Both of the member's presences are refused by name.
+@[ runs("Some(Cons(RefusedAt(4, ForeignEndpoint), Cons(RefusedAt(5, ForeignEndpoint), Nil)))") ]
+def foreignRefused : () => Maybe(List(RefusedCommit)) ;
+def foreignRefused = thunk {
+  run commits <- foreignCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The owner's own presence stands, and the member holds none.
+@[ runs("Some(Cons(PresentAt(10, EndpointAt(500, 5), 3), Nil))") ]
+def foreignBook : () => Maybe(List(Presence)) ;
+def foreignBook = thunk {
+  run commits <- foreignCommits();
+  run folded <- fold(100, commits);
+  become bookOf(folded)
+} ;
+
+/// `a_member_cannot_withdraw_the_owners_presence`: the owner presents; a
+/// member and a stranger withdraw it, and the member withdraws its own.
+@[ checks ]
+def withdrawCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run granted <- child(2, 10, 1, Grant(20));
+  run presented <- child(3, 10, 2, Present(EndpointAt(500, 5), Signed(500, 10)));
+  run byMember <- child(4, 20, 3, Withdraw(10));
+  run byStranger <- child(5, 50, 3, Withdraw(10));
+  run own <- child(6, 20, 3, Withdraw(20));
+  (Cons(
+    opened,
+    Cons(granted, Cons(presented, Cons(byMember, Cons(byStranger, Cons(own, Nil)))))
+  ) : List(Commit))
+}
+
+/// A member's withdrawal of the owner's presence is refused by name, a
+/// stranger's for want of authority.
+@[ runs("Some(Cons(RefusedAt(4, ForeignPresence), Cons(RefusedAt(5, NoAuthority), Nil)))") ]
+def withdrawRefused : () => Maybe(List(RefusedCommit)) ;
+def withdrawRefused = thunk {
+  run commits <- withdrawCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// A member withdraws its own presence, absent or not.
+@[ runs("Some(Cons(1, Cons(2, Cons(3, Cons(6, Nil)))))") ]
+def withdrawAdmitted : () => Maybe(List(Integer)) ;
+def withdrawAdmitted = thunk {
+  run commits <- withdrawCommits();
+  run folded <- fold(100, commits);
+  become admittedOf(folded)
+} ;
+
+/// The owner's presence stands.
+@[ runs("Some(Cons(PresentAt(10, EndpointAt(500, 5), 3), Nil))") ]
+def withdrawBook : () => Maybe(List(Presence)) ;
+def withdrawBook = thunk {
+  run commits <- withdrawCommits();
+  run folded <- fold(100, commits);
+  become bookOf(folded)
+} ;
+
+/// `the_book_after_a_withdrawal_does_not_offer_the_endpoint`: the owner and
+/// a member present, and the owner withdraws its own presence.
+@[ checks ]
+def withdrawnCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run granted <- child(2, 10, 1, Grant(20));
+  run presented <- child(3, 10, 2, Present(EndpointAt(500, 5), Signed(500, 10)));
+  run member <- child(4, 20, 3, Present(EndpointAt(600, 6), Signed(600, 20)));
+  run withdrawn <- child(5, 10, 4, Withdraw(10));
+  (Cons(opened, Cons(granted, Cons(presented, Cons(member, Cons(withdrawn, Nil))))) : List(Commit))
+}
+
+/// The withdrawn presence is absent and the other stands.
+@[ runs("Some(Cons(PresentAt(20, EndpointAt(600, 6), 4), Nil))") ]
+def withdrawnBook : () => Maybe(List(Presence)) ;
+def withdrawnBook = thunk {
+  run commits <- withdrawnCommits();
+  run folded <- fold(100, commits);
+  become bookOf(folded)
+} ;
+
+/// A presence after the withdrawal is offered again, at its own commit.
+@[ runs("Some(Cons(PresentAt(10, EndpointAt(500, 7), 6), Cons(PresentAt(20, EndpointAt(600, 6), 4), Nil)))") ]
+def returnedBook : () => Maybe(List(Presence)) ;
+def returnedBook = thunk {
+  run commits <- withdrawnCommits();
+  run back <- child(6, 10, 5, Present(EndpointAt(500, 7), Signed(500, 10)));
+  run all <- append(Commit, commits, back);
+  run folded <- fold(100, all);
+  become bookOf(folded)
+} ;
+
+/// `an_attestation_is_admitted_from_the_owner_or_a_member`: the owner
+/// attests twice and a member once; a seat and a stranger attest. The index
+/// digests are the bytes the test fills them with.
+@[ checks ]
+def attestationCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run granted <- child(2, 10, 1, Grant(20));
+  run dispatched <- child(3, 10, 2, Dispatch(1, 80, briefOne));
+  run first <- child(4, 10, 3, Indexed(1));
+  run second <- child(5, 10, 4, Indexed(2));
+  run theirs <- child(6, 20, 5, Indexed(3));
+  run seated <- child(7, 80, 6, Indexed(4));
+  run alien <- child(8, 90, 6, Indexed(5));
+  (Cons(
+    opened,
+    Cons(
+      granted,
+      Cons(dispatched, Cons(first, Cons(second, Cons(theirs, Cons(seated, Cons(alien, Nil))))))
+    )
+  ) : List(Commit))
+}
+
+/// Each author's last attestation, at the parents it was derived at.
+@[ runs("Some(Cons(AttestedBy(10, 2, 5, Cons(4, Nil)), Cons(AttestedBy(20, 3, 6, Cons(5, Nil)), Nil)))") ]
+def attestedIndexes : () => Maybe(List(Attestation)) ;
+def attestedIndexes = thunk {
+  run commits <- attestationCommits();
+  run folded <- fold(100, commits);
+  become indexesOf(folded)
+} ;
+
+/// Every admitted attestation is retained, in canonical order.
+@[ runs("Some(Cons(AttestedBy(10, 1, 4, Cons(3, Nil)), Cons(AttestedBy(10, 2, 5, Cons(4, Nil)), Cons(AttestedBy(20, 3, 6, Cons(5, Nil)), Nil))))") ]
+def attested : () => Maybe(List(Attestation)) ;
+def attested = thunk {
+  run commits <- attestationCommits();
+  run folded <- fold(100, commits);
+  become attestationsOf(folded)
+} ;
+
+/// A seat's and a stranger's attestations are refused for want of
+/// authority.
+@[ runs("Some(Cons(RefusedAt(7, NoAuthority), Cons(RefusedAt(8, NoAuthority), Nil)))") ]
+def attestationRefused : () => Maybe(List(RefusedCommit)) ;
+def attestationRefused = thunk {
+  run commits <- attestationCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// `the_dispatched_seat_reports_on_its_dispatch`: a stranger dispatches
+/// itself; the owner dispatches the other peer, a stranger reports on it,
+/// and the seat presents and reports. The contents are `mine` = 702 and
+/// `done` = 701.
+@[ checks ]
+def seatCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run stray <- child(2, 50, 1, Dispatch(1, 50, briefOne));
+  run dispatched <- child(3, 10, 1, Dispatch(1, 20, briefOne));
+  run byStranger <- child(4, 50, 3, Report(3, 702, "mine"));
+  run presented <- child(5, 20, 3, Present(EndpointAt(600, 9), Signed(600, 20)));
+  run reported <- child(6, 20, 5, Report(3, 701, "done"));
+  (Cons(
+    opened,
+    Cons(stray, Cons(dispatched, Cons(byStranger, Cons(presented, Cons(reported, Nil)))))
+  ) : List(Commit))
+}
+
+/// A dispatch by a non-member is refused for want of authority, and a report
+/// by a key not dispatched as not the holder.
+@[ runs("Some(Cons(RefusedAt(2, NoAuthority), Cons(RefusedAt(4, NotHolder), Nil)))") ]
+def seatRefused : () => Maybe(List(RefusedCommit)) ;
+def seatRefused = thunk {
+  run commits <- seatCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The dispatched seat presents in the task's book.
+@[ runs("Some(Cons(PresentAt(20, EndpointAt(600, 9), 5), Nil))") ]
+def seatBook : () => Maybe(List(Presence)) ;
+def seatBook = thunk {
+  run commits <- seatCommits();
+  run folded <- fold(100, commits);
+  become bookOf(folded)
+} ;
+
+/// The admitted seat receipts are the task's steps.
+@[ runs("Some(Cons(StepAt(3, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(6, ReportStep(3, 20, 701, \"done\")), Nil)))") ]
+def seatSteps : () => Maybe(List(Stepped)) ;
+def seatSteps = thunk {
+  run commits <- seatCommits();
+  run folded <- fold(100, commits);
+  become stepsOf(folded)
+} ;
+
+/// The seat's report answers the current attempt.
+@[ runs("Some(Attempt(3, 1, BriefAt(\"domhringr://100/briefs/one\"), Held(20), ReportedBy(6), Unchecked))") ]
+def seatCurrent : () => Maybe(Current) ;
+def seatCurrent = thunk {
+  run commits <- seatCommits();
+  run folded <- fold(100, commits);
+  become currentOf(folded)
+} ;
+
+/// The opened tree alone is undispatched.
+@[ runs("Some(Undispatched)") ]
+def undispatched : () => Maybe(Current) ;
+def undispatched = thunk {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run folded <- fold(100, (Cons(opened, Nil) : List(Commit)));
+  become currentOf(folded)
+} ;
+
+/// `handoff_closes_the_play_instead_of_permitting_a_second_handoff`: the
+/// seat reports and hands off to `50`, which hands back, reports and
+/// retires after the play ended.
+@[ checks ]
+def handoffCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run dispatched <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run reported <- child(3, 20, 2, Report(2, 701, "done"));
+  run handed <- child(4, 20, 3, Handoff(2, 50));
+  run repeated <- child(5, 50, 4, Handoff(2, 20));
+  run late <- child(6, 50, 5, Report(2, 704, "late"));
+  run retired <- child(7, 50, 6, Retire(2));
+  (Cons(
+    opened,
+    Cons(dispatched, Cons(reported, Cons(handed, Cons(repeated, Cons(late, Cons(retired, Nil))))))
+  ) : List(Commit))
+}
+
+/// Every move after the handoff resumes an ended play.
+@[ runs("Some(Cons(RefusedAt(5, Protocol(1, HandoffMove, ResumeAfterEnd)), Cons(RefusedAt(6, Protocol(1, ReportMove, ResumeAfterEnd)), Cons(RefusedAt(7, Protocol(1, RetireMove, ResumeAfterEnd)), Nil))))") ]
+def handoffRefused : () => Maybe(List(RefusedCommit)) ;
+def handoffRefused = thunk {
+  run commits <- handoffCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The slot is with the recipient, the attempt answered by the report.
+@[ runs("Some(Attempt(2, 1, BriefAt(\"domhringr://100/briefs/one\"), Held(50), ReportedBy(3), Unchecked))") ]
+def handoffCurrent : () => Maybe(Current) ;
+def handoffCurrent = thunk {
+  run commits <- handoffCommits();
+  run folded <- fold(100, commits);
+  become currentOf(folded)
+} ;
+
+/// `a_handoff_before_report_is_a_named_protocol_refusal`: `50` reports on
+/// the seat's dispatch; the seat hands off before reporting, then reports;
+/// the owner seizes the slot, and `50` reports.
+@[ checks ]
+def earlyCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run dispatched <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run early <- child(3, 50, 2, Report(2, 703, "early"));
+  run handed <- child(4, 20, 2, Handoff(2, 50));
+  run byFormer <- child(5, 20, 4, Report(2, 704, "late"));
+  run byOwner <- child(6, 10, 4, Handoff(2, 10));
+  run reported <- child(7, 50, 4, Report(2, 701, "done"));
+  (Cons(
+    opened,
+    Cons(dispatched, Cons(early, Cons(handed, Cons(byFormer, Cons(byOwner, Cons(reported, Nil))))))
+  ) : List(Commit))
+}
+
+/// The handoff before a report is refused at its selection; the refused
+/// handoff hands nothing, so the reports by `50` and the owner's seizure are
+/// not the holder's.
+@[ runs("Some(Cons(RefusedAt(3, NotHolder), Cons(RefusedAt(4, Protocol(1, HandoffMove, WrongLabel)), Cons(RefusedAt(6, NotHolder), Cons(RefusedAt(7, NotHolder), Nil)))))") ]
+def earlyRefused : () => Maybe(List(RefusedCommit)) ;
+def earlyRefused = thunk {
+  run commits <- earlyCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The refused handoff leaves the original holder able to report.
+@[ runs("Some(Attempt(2, 1, BriefAt(\"domhringr://100/briefs/one\"), Held(20), ReportedBy(5), Unchecked))") ]
+def earlyCurrent : () => Maybe(Current) ;
+def earlyCurrent = thunk {
+  run commits <- earlyCommits();
+  run folded <- fold(100, commits);
+  become currentOf(folded)
+} ;
+
+/// `retirement_before_report_is_refused_without_relinquishing_the_slot`:
+/// the seat retires before reporting, then reports.
+@[ checks ]
+def retiredCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run dispatched <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run retired <- child(3, 20, 2, Retire(2));
+  run late <- child(4, 20, 3, Report(2, 704, "late"));
+  (Cons(opened, Cons(dispatched, Cons(retired, Cons(late, Nil)))) : List(Commit))
+}
+
+/// The retirement is refused at its selection.
+@[ runs("Some(Cons(RefusedAt(3, Protocol(1, RetireMove, WrongLabel)), Nil))") ]
+def retiredRefused : () => Maybe(List(RefusedCommit)) ;
+def retiredRefused = thunk {
+  run commits <- retiredCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The refused retirement leaves the slot open for its first report.
+@[ runs("Some(Attempt(2, 1, BriefAt(\"domhringr://100/briefs/one\"), Held(20), ReportedBy(4), Unchecked))") ]
+def retiredCurrent : () => Maybe(Current) ;
+def retiredCurrent = thunk {
+  run commits <- retiredCommits();
+  run folded <- fold(100, commits);
+  become currentOf(folded)
+} ;
+
+/// `a_report_on_a_superseded_dispatch_is_refused`: two dispatches in
+/// descent; the first seat reports after the second, on a dispatch never
+/// made, and concurrently with the second.
+@[ checks ]
+def supersededCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run first <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run second <- child(3, 10, 2, Dispatch(1, 50, briefOne));
+  run stale <- child(4, 20, 3, Report(2, 707, "stale"));
+  run unknown <- child(5, 20, 2, Report(9999, 708, "unknown"));
+  run concurrent <- child(6, 20, 2, Report(2, 709, "concurrent"));
+  (Cons(
+    opened,
+    Cons(first, Cons(second, Cons(stale, Cons(unknown, Cons(concurrent, Nil)))))
+  ) : List(Commit))
+}
+
+/// The report after the later dispatch and the one on no dispatch are not
+/// current.
+@[ runs("Some(Cons(RefusedAt(4, NotCurrent), Cons(RefusedAt(5, NotCurrent), Nil)))") ]
+def supersededRefused : () => Maybe(List(RefusedCommit)) ;
+def supersededRefused = thunk {
+  run commits <- supersededCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The report concurrent with the later dispatch is a step, and the later
+/// dispatch is the current attempt, its report awaited.
+@[ runs("Some(Cons(StepAt(2, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(3, DispatchStep(1, 50, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(6, ReportStep(2, 20, 709, \"concurrent\")), Nil))))") ]
+def supersededSteps : () => Maybe(List(Stepped)) ;
+def supersededSteps = thunk {
+  run commits <- supersededCommits();
+  run folded <- fold(100, commits);
+  become stepsOf(folded)
+} ;
+
+/// The later dispatch is the current attempt, its report awaited.
+@[ runs("Some(Attempt(3, 1, BriefAt(\"domhringr://100/briefs/one\"), Held(50), Awaited, Unchecked))") ]
+def supersededCurrent : () => Maybe(Current) ;
+def supersededCurrent = thunk {
+  run commits <- supersededCommits();
+  run folded <- fold(100, commits);
+  become currentOf(folded)
+} ;
+
+/// `dispatch_editions_govern_each_attempt`: a report before any dispatch,
+/// then an attempt under each of editions 1, 2 and 99, each paused before
+/// its report and retired after it.
+@[ checks ]
+def editionCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run early <- child(2, 20, 1, Report(7777, 703, "early"));
+  run one <- child(3, 10, 2, Dispatch(1, 20, briefOne));
+  run pausedOne <- child(4, 20, 3, Pause(3));
+  run reportedOne <- child(5, 20, 4, Report(3, 701, "done"));
+  run retiredOne <- child(6, 20, 5, Retire(3));
+  run two <- child(7, 10, 6, Dispatch(2, 20, briefOne));
+  run pausedTwo <- child(8, 20, 7, Pause(7));
+  run reportedTwo <- child(9, 20, 8, Report(7, 701, "done"));
+  run retiredTwo <- child(10, 20, 9, Retire(7));
+  run unknown <- child(11, 10, 10, Dispatch(99, 20, briefOne));
+  run pausedUnknown <- child(12, 20, 11, Pause(11));
+  run reportedUnknown <- child(13, 20, 12, Report(11, 701, "done"));
+  run retiredUnknown <- child(14, 20, 13, Retire(11));
+  (Cons(
+    opened,
+    Cons(
+      early,
+      Cons(
+        one,
+        Cons(
+          pausedOne,
+          Cons(
+            reportedOne,
+            Cons(
+              retiredOne,
+              Cons(
+                two,
+                Cons(
+                  pausedTwo,
+                  Cons(
+                    reportedTwo,
+                    Cons(
+                      retiredTwo,
+                      Cons(
+                        unknown,
+                        Cons(pausedUnknown, Cons(reportedUnknown, Cons(retiredUnknown, Nil)))
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  ) : List(Commit))
+}
+
+/// The early report is not current; edition 1 offers no pause; every move
+/// under edition 99, its dispatch first, is refused as an unknown edition.
+@[ runs("Some(Cons(RefusedAt(2, NotCurrent), Cons(RefusedAt(4, Protocol(1, PauseMove, WrongLabel)), Cons(RefusedAt(11, Protocol(99, DispatchMove, UnknownEdition)), Cons(RefusedAt(12, Protocol(99, PauseMove, UnknownEdition)), Cons(RefusedAt(13, Protocol(99, ReportMove, UnknownEdition)), Cons(RefusedAt(14, Protocol(99, RetireMove, UnknownEdition)), Nil)))))))") ]
+def editionRefused : () => Maybe(List(RefusedCommit)) ;
+def editionRefused = thunk {
+  run commits <- editionCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The edition-2 attempt, paused, reported and retired, stays current past
+/// the refused edition-99 dispatch.
+@[ runs("Some(Attempt(7, 2, BriefAt(\"domhringr://100/briefs/one\"), Vacated(20, 10), ReportedBy(9), Unchecked))") ]
+def editionCurrent : () => Maybe(Current) ;
+def editionCurrent = thunk {
+  run commits <- editionCommits();
+  run folded <- fold(100, commits);
+  become currentOf(folded)
+} ;
+
+/// `a_judge_rules_on_the_current_dispatch`: the judge `50` rules; a stranger
+/// and the owner sign verdicts naming it; the seat retires before reporting,
+/// and the stranger rules in its own name after. The rubric is 903 and the
+/// transcript 705.
+@[ checks ]
+def judgeCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run dispatched <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run judged <- child(3, 50, 2, Verdict(2, 50, 903, 705, rulings));
+  run forged <- child(4, 70, 2, Verdict(2, 50, 903, 705, rulings));
+  run byOwner <- child(5, 10, 2, Verdict(2, 50, 903, 705, rulings));
+  run retired <- child(6, 20, 3, Retire(2));
+  run after <- child(7, 70, 6, Verdict(2, 70, 903, 705, rulings));
+  (Cons(
+    opened,
+    Cons(dispatched, Cons(judged, Cons(forged, Cons(byOwner, Cons(retired, Cons(after, Nil))))))
+  ) : List(Commit))
+}
+
+/// A verdict signed by any key but its judge's, the owner's among them, is
+/// refused, and the retirement before a report at its selection.
+@[ runs("Some(Cons(RefusedAt(4, NotJudge), Cons(RefusedAt(5, NotJudge), Cons(RefusedAt(6, Protocol(1, RetireMove, WrongLabel)), Nil))))") ]
+def judgeRefused : () => Maybe(List(RefusedCommit)) ;
+def judgeRefused = thunk {
+  run commits <- judgeCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// Judges rule while the report is still owed, even after a refused
+/// retirement.
+@[ runs("Some(Cons(StepAt(2, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(3, VerdictStep(2, 50, 903, 705, Cons(OnQuestion(901, Read(Cons(250000, Cons(750000, Nil)), 0)), Cons(OnQuestion(902, Unread(NoLetter)), Nil)))), Cons(StepAt(7, VerdictStep(2, 70, 903, 705, Cons(OnQuestion(901, Read(Cons(250000, Cons(750000, Nil)), 0)), Cons(OnQuestion(902, Unread(NoLetter)), Nil)))), Nil))))") ]
+def judgeSteps : () => Maybe(List(Stepped)) ;
+def judgeSteps = thunk {
+  run commits <- judgeCommits();
+  run folded <- fold(100, commits);
+  become stepsOf(folded)
+} ;
+
+/// A verdict moves no slot and answers no attempt.
+@[ runs("Some(Attempt(2, 1, BriefAt(\"domhringr://100/briefs/one\"), Held(20), Awaited, Unchecked))") ]
+def judgeCurrent : () => Maybe(Current) ;
+def judgeCurrent = thunk {
+  run commits <- judgeCommits();
+  run folded <- fold(100, commits);
+  become currentOf(folded)
+} ;
+
+/// `a_runner_verifies_on_the_current_dispatch`: the runner `50` passes; a
+/// stranger and the owner sign verifications naming it; the seat retires
+/// before reporting; the runner fails, the owner dispatches again, and the
+/// runner verifies the superseded dispatch. The playbook is 904 and the
+/// output 706.
+@[ checks ]
+def runnerCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run first <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run passed <- child(3, 50, 2, Verified(2, 50, 904, "test", 706, Exited(0)));
+  run forged <- child(4, 70, 2, Verified(2, 50, 904, "test", 706, Exited(0)));
+  run byOwner <- child(5, 10, 2, Verified(2, 50, 904, "test", 706, Exited(0)));
+  run retired <- child(6, 20, 3, Retire(2));
+  run failed <- child(7, 50, 6, Verified(2, 50, 904, "test", 706, Exited(1)));
+  run second <- child(8, 10, 7, Dispatch(1, 20, briefOne));
+  run stale <- child(9, 50, 8, Verified(2, 50, 904, "test", 706, Exited(0)));
+  (Cons(
+    opened,
+    Cons(
+      first,
+      Cons(
+        passed,
+        Cons(forged, Cons(byOwner, Cons(retired, Cons(failed, Cons(second, Cons(stale, Nil))))))
+      )
+    )
+  ) : List(Commit))
+}
+
+/// A verification signed by any key but its runner's, the owner's among
+/// them, and one on a superseded dispatch are refused.
+@[ runs("Some(Cons(RefusedAt(4, NotRunner), Cons(RefusedAt(5, NotRunner), Cons(RefusedAt(6, Protocol(1, RetireMove, WrongLabel)), Cons(RefusedAt(9, NotCurrent), Nil)))))") ]
+def runnerRefused : () => Maybe(List(RefusedCommit)) ;
+def runnerRefused = thunk {
+  run commits <- runnerCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// Verifications before and after a refused retirement retain their exit
+/// status.
+@[ runs("Some(Cons(StepAt(2, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(3, VerifiedStep(2, 50, 904, \"test\", 706, Exited(0))), Cons(StepAt(7, VerifiedStep(2, 50, 904, \"test\", 706, Exited(1))), Cons(StepAt(8, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Nil)))))") ]
+def runnerSteps : () => Maybe(List(Stepped)) ;
+def runnerSteps = thunk {
+  run commits <- runnerCommits();
+  run folded <- fold(100, commits);
+  become stepsOf(folded)
+} ;
+
+/// `a_verdicts_judge_grades_its_answers`: the judge grades its verdict; a
+/// stranger grades it, the judge grades a verdict never made and the verdict
+/// concurrently, too few grades, a read answer refused and an unread one
+/// met; the owner dispatches again and the judge grades after it.
+@[ checks ]
+def gradingCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run dispatched <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run judged <- child(3, 50, 2, Verdict(2, 50, 903, 705, rulings));
+  run admitted <- child(4, 50, 3, Graded(3, Cons(Met, Cons(Refused, Nil)), Refused));
+  run forged <- child(5, 70, 3, Graded(3, Cons(Met, Cons(Refused, Nil)), Refused));
+  run unknown <- child(6, 50, 3, Graded(9999, Cons(Met, Cons(Refused, Nil)), Refused));
+  run concurrent <- child(7, 50, 2, Graded(3, Cons(Met, Cons(Refused, Nil)), Refused));
+  run short <- child(8, 50, 3, Graded(3, Cons(Met, Nil), Met));
+  run readRefused <- child(9, 50, 3, Graded(3, Cons(Refused, Cons(Refused, Nil)), Refused));
+  run unreadMet <- child(10, 50, 3, Graded(3, Cons(Met, Cons(Met, Nil)), Met));
+  run second <- child(11, 10, 3, Dispatch(1, 20, briefOne));
+  run stale <- child(12, 50, 11, Graded(3, Cons(Met, Cons(Refused, Nil)), Refused));
+  (Cons(
+    opened,
+    Cons(
+      dispatched,
+      Cons(
+        judged,
+        Cons(
+          admitted,
+          Cons(
+            forged,
+            Cons(
+              unknown,
+              Cons(
+                concurrent,
+                Cons(short, Cons(readRefused, Cons(unreadMet, Cons(second, Cons(stale, Nil)))))
+              )
+            )
+          )
+        )
+      )
+    )
+  ) : List(Commit))
+}
+
+/// A grading by a key but the verdict's judge, whose grades do not answer
+/// the verdict's or after a later dispatch is refused; one of a verdict not
+/// in its past replays on an empty judge channel.
+@[ runs("Some(Cons(RefusedAt(5, NotJudge), Cons(RefusedAt(6, Protocol(1, GradedMove, WrongPayloadIdentity)), Cons(RefusedAt(7, Protocol(1, GradedMove, WrongPayloadIdentity)), Cons(RefusedAt(8, Misgraded), Cons(RefusedAt(9, Misgraded), Cons(RefusedAt(10, Misgraded), Cons(RefusedAt(12, NotCurrent), Nil))))))))") ]
+def gradingRefused : () => Maybe(List(RefusedCommit)) ;
+def gradingRefused = thunk {
+  run commits <- gradingCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The judge's grading is a step naming its verdict's dispatch, rubric and
+/// questions.
+@[ runs("Some(Cons(StepAt(2, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(3, VerdictStep(2, 50, 903, 705, Cons(OnQuestion(901, Read(Cons(250000, Cons(750000, Nil)), 0)), Cons(OnQuestion(902, Unread(NoLetter)), Nil)))), Cons(StepAt(4, GradedStep(2, 3, 903, Cons(MarkedAs(901, Met), Cons(MarkedAs(902, Refused), Nil)), Refused)), Cons(StepAt(11, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Nil)))))") ]
+def gradingSteps : () => Maybe(List(Stepped)) ;
+def gradingSteps = thunk {
+  run commits <- gradingCommits();
+  run folded <- fold(100, commits);
+  become stepsOf(folded)
+} ;
+
+/// `a_gradings_composition_is_checked_before_it_advances_the_task`, for the
+/// grades met and refused: each composition but refused is miscomposed, in
+/// descent, and the correct one is admitted.
+@[ checks ]
+def composedCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run dispatched <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run judged <- child(3, 50, 2, Verdict(2, 50, 903, 705, rulings));
+  run asMet <- child(4, 50, 3, Graded(3, Cons(Met, Cons(Refused, Nil)), Met));
+  run asUnmet <- child(5, 50, 4, Graded(3, Cons(Met, Cons(Refused, Nil)), Unmet));
+  run asUndecided <- child(6, 50, 5, Graded(3, Cons(Met, Cons(Refused, Nil)), Undecided));
+  run admitted <- child(7, 50, 6, Graded(3, Cons(Met, Cons(Refused, Nil)), Refused));
+  (Cons(
+    opened,
+    Cons(
+      dispatched,
+      Cons(judged, Cons(asMet, Cons(asUnmet, Cons(asUndecided, Cons(admitted, Nil)))))
+    )
+  ) : List(Commit))
+}
+
+/// Each misstated composition is refused.
+@[ runs("Some(Cons(RefusedAt(4, Miscomposed), Cons(RefusedAt(5, Miscomposed), Cons(RefusedAt(6, Miscomposed), Nil))))") ]
+def composedRefused : () => Maybe(List(RefusedCommit)) ;
+def composedRefused = thunk {
+  run commits <- composedCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The correct composition advances the attempt to graded.
+@[ runs("Some(Attempt(2, 1, BriefAt(\"domhringr://100/briefs/one\"), Held(20), Awaited, GradedBy(7, Refused)))") ]
+def composedCurrent : () => Maybe(Current) ;
+def composedCurrent = thunk {
+  run commits <- composedCommits();
+  run folded <- fold(100, commits);
+  become currentOf(folded)
+} ;
+
+/// `task_channels_refuse_second_choices`, in descent: the judge grades its
+/// verdict twice, the owner decides to land twice and lands twice.
+@[ checks ]
+def secondCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run dispatched <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run judged <- child(3, 50, 2, Verdict(2, 50, 903, 705, rulings));
+  run firstGrade <- child(4, 50, 3, Graded(3, Cons(Met, Cons(Refused, Nil)), Refused));
+  run secondGrade <- child(5, 50, 4, Graded(3, Cons(Met, Cons(Refused, Nil)), Refused));
+  run firstDecision <- merged(6, 10, 4, 5, Decide(2, 10, Land));
+  run secondDecision <- child(7, 10, 6, Decide(2, 10, Land));
+  run firstLanding <- merged(8, 10, 6, 7, Landed(6, revision));
+  run secondLanding <- child(9, 10, 8, Landed(6, revision));
+  (Cons(
+    opened,
+    Cons(
+      dispatched,
+      Cons(
+        judged,
+        Cons(
+          firstGrade,
+          Cons(
+            secondGrade,
+            Cons(firstDecision, Cons(secondDecision, Cons(firstLanding, Cons(secondLanding, Nil))))
+          )
+        )
+      )
+    )
+  ) : List(Commit))
+}
+
+/// A second grading resumes an ended judge channel, a second decision meets
+/// a channel owing its landing, and a second landing an ended one.
+@[ runs("Some(Cons(RefusedAt(5, Protocol(1, GradedMove, ResumeAfterEnd)), Cons(RefusedAt(7, Protocol(1, DecideMove(ToLand), WrongDirection)), Cons(RefusedAt(9, Protocol(1, LandedMove, ResumeAfterEnd)), Nil))))") ]
+def secondRefused : () => Maybe(List(RefusedCommit)) ;
+def secondRefused = thunk {
+  run commits <- secondCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// `an_operator_decides_on_the_current_dispatch`, the owner deciding: the
+/// owner decides to land; the seat, a stranger and a member signing for the
+/// owner decide; the owner decides on a dispatch never made, dispatches
+/// again and decides on the superseded dispatch.
+@[ checks ]
+def decisionCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run granted <- child(2, 10, 1, Grant(50));
+  run dispatched <- child(3, 10, 2, Dispatch(1, 20, briefOne));
+  run admitted <- child(4, 10, 3, Decide(3, 10, Land));
+  run bySeat <- child(5, 20, 3, Decide(3, 20, Land));
+  run byStranger <- child(6, 70, 3, Decide(3, 70, Abandon));
+  run forged <- child(7, 50, 3, Decide(3, 10, Land));
+  run unknown <- child(8, 10, 3, Decide(9999, 10, Land));
+  run second <- child(9, 10, 4, Dispatch(1, 20, briefOne));
+  run stale <- child(10, 10, 9, Decide(3, 10, Abandon));
+  (Cons(
+    opened,
+    Cons(
+      granted,
+      Cons(
+        dispatched,
+        Cons(
+          admitted,
+          Cons(
+            bySeat,
+            Cons(byStranger, Cons(forged, Cons(unknown, Cons(second, Cons(stale, Nil)))))
+          )
+        )
+      )
+    )
+  ) : List(Commit))
+}
+
+/// The seat and the stranger hold no operator role, the member signs for
+/// another operator, and the decisions on a dispatch never made or
+/// superseded are not current.
+@[ runs("Some(Cons(RefusedAt(5, NoAuthority), Cons(RefusedAt(6, NoAuthority), Cons(RefusedAt(7, NotOperator), Cons(RefusedAt(8, NotCurrent), Cons(RefusedAt(10, NotCurrent), Nil))))))") ]
+def decisionRefused : () => Maybe(List(RefusedCommit)) ;
+def decisionRefused = thunk {
+  run commits <- decisionCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// `a_landing_carries_out_a_decision_to_land`, deciding to land: the owner
+/// lands; the seat and a member who did not decide land; the owner lands
+/// with no decision and concurrently with it, dispatches again and lands
+/// after.
+@[ checks ]
+def landingCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run granted <- child(2, 10, 1, Grant(50));
+  run dispatched <- child(3, 10, 2, Dispatch(1, 20, briefOne));
+  run decided <- child(4, 10, 3, Decide(3, 10, Land));
+  run landing <- child(5, 10, 4, Landed(4, revision));
+  run bySeat <- child(6, 20, 4, Landed(4, revision));
+  run byMember <- child(7, 50, 4, Landed(4, revision));
+  run undecided <- child(8, 10, 3, Landed(9999, revision));
+  run concurrent <- child(9, 10, 3, Landed(4, revision));
+  run second <- child(10, 10, 5, Dispatch(1, 20, briefOne));
+  run stale <- child(11, 10, 10, Landed(4, revision));
+  (Cons(
+    opened,
+    Cons(
+      granted,
+      Cons(
+        dispatched,
+        Cons(
+          decided,
+          Cons(
+            landing,
+            Cons(
+              bySeat,
+              Cons(byMember, Cons(undecided, Cons(concurrent, Cons(second, Cons(stale, Nil)))))
+            )
+          )
+        )
+      )
+    )
+  ) : List(Commit))
+}
+
+/// A landing by anyone but the deciding operator is refused; one with no
+/// decision in its past replays on an empty decision channel; one after a
+/// later dispatch is not current.
+@[ runs("Some(Cons(RefusedAt(6, NotOperator), Cons(RefusedAt(7, NotOperator), Cons(RefusedAt(8, Protocol(1, LandedMove, WrongDirection)), Cons(RefusedAt(9, Protocol(1, LandedMove, WrongDirection)), Cons(RefusedAt(11, NotCurrent), Nil))))))") ]
+def landingRefused : () => Maybe(List(RefusedCommit)) ;
+def landingRefused = thunk {
+  run commits <- landingCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The decision and its landing are the task's steps past the dispatch.
+@[ runs("Some(Cons(StepAt(3, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(4, DecideStep(3, 10, Land)), Cons(StepAt(5, LandedStep(3, 4, 10, \"0123456789abcdef0123456789abcdef01234567\")), Cons(StepAt(10, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Nil)))))") ]
+def landingSteps : () => Maybe(List(Stepped)) ;
+def landingSteps = thunk {
+  run commits <- landingCommits();
+  run folded <- fold(100, commits);
+  become stepsOf(folded)
+} ;
+
+/// `a_landing_carries_out_a_decision_to_land`, deciding to rework: the
+/// landing resumes the ended decision channel.
+@[ runs("Some(Cons(RefusedAt(5, Protocol(1, LandedMove, ResumeAfterEnd)), Nil))") ]
+def reworkRefused : () => Maybe(List(RefusedCommit)) ;
+def reworkRefused = thunk {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run granted <- child(2, 10, 1, Grant(50));
+  run dispatched <- child(3, 10, 2, Dispatch(1, 20, briefOne));
+  run decided <- child(4, 10, 3, Decide(3, 10, Rework("lint red")));
+  run landing <- child(5, 10, 4, Landed(4, revision));
+  run folded <- fold(
+    100,
+    (Cons(
+      opened,
+      Cons(granted, Cons(dispatched, Cons(decided, Cons(landing, Nil))))
+    ) : List(Commit))
+  );
+  become refusedOf(folded)
+} ;
+
+/// `an_attempt_advances_through_its_lifecycle`: a dispatch, its report, a
+/// verification, a verdict, its grading, a later verification and a
+/// decision to rework; a fresh dispatch, a decision to land and the
+/// landing.
+@[ checks ]
+def lifecycleCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run first <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run reported <- child(3, 20, 2, Report(2, 701, "done"));
+  run verifying <- child(4, 50, 3, Verified(2, 50, 904, "test", 706, Exited(0)));
+  run judged <- child(5, 50, 4, Verdict(2, 50, 903, 705, rulings));
+  run grading <- child(6, 50, 5, Graded(5, Cons(Met, Cons(Refused, Nil)), Refused));
+  run reverifying <- child(7, 50, 6, Verified(2, 50, 904, "test", 706, Exited(1)));
+  (Cons(
+    opened,
+    Cons(
+      first,
+      Cons(reported, Cons(verifying, Cons(judged, Cons(grading, Cons(reverifying, Nil)))))
+    )
+  ) : List(Commit))
+}
+
+/// A later verification ranks below the grading.
+@[ runs("Some(Attempt(2, 1, BriefAt(\"domhringr://100/briefs/one\"), Held(20), ReportedBy(3), GradedBy(6, Refused)))") ]
+def lifecycleGraded : () => Maybe(Current) ;
+def lifecycleGraded = thunk {
+  run commits <- lifecycleCommits();
+  run folded <- fold(100, commits);
+  become currentOf(folded)
+} ;
+
+/// The fresh dispatch after rework lands, every step admitted.
+@[ runs("Some(Attempt(9, 1, BriefAt(\"domhringr://100/briefs/one\"), Held(20), Awaited, LandedBy(11, \"0123456789abcdef0123456789abcdef01234567\")))") ]
+def lifecycleLanded : () => Maybe(Current) ;
+def lifecycleLanded = thunk {
+  run commits <- lifecycleCommits();
+  run reworked <- child(8, 10, 7, Decide(2, 10, Rework("lint red")));
+  run next <- child(9, 10, 8, Dispatch(1, 20, briefOne));
+  run land <- child(10, 10, 9, Decide(9, 10, Land));
+  run landing <- child(11, 10, 10, Landed(10, revision));
+  run all <- append(Commit, commits, reworked);
+  run more <- append(Commit, all, next);
+  run most <- append(Commit, more, land);
+  run every <- append(Commit, most, landing);
+  run folded <- fold(100, every);
+  become currentOf(folded)
+} ;
+
+/// `a_duplicate_operation_keeps_the_first`, in descent: two notes carrying
+/// one fence.
+@[ checks ]
+def duplicateCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run first <- fencedChild(2, 10, 1, 77, Note("first"));
+  run again <- fencedChild(3, 10, 2, 77, Note("again"));
+  (Cons(opened, Cons(first, Cons(again, Nil))) : List(Commit))
+}
+
+/// The ancestor keeps the operation.
+@[ runs("Some(Cons(NotedBy(10, \"first\"), Nil))") ]
+def duplicateNotes : () => Maybe(List(Noted)) ;
+def duplicateNotes = thunk {
+  run commits <- duplicateCommits();
+  run folded <- fold(100, commits);
+  become notesOf(folded)
+} ;
+
+/// The descendant repeating it is a duplicate of the first.
+@[ runs("Some(Cons(RefusedAt(3, Duplicate(2)), Nil))") ]
+def duplicateRefused : () => Maybe(List(RefusedCommit)) ;
+def duplicateRefused = thunk {
+  run commits <- duplicateCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// `a_duplicate_operation_keeps_the_first`, a refused receipt claiming no
+/// operation: a non-member's note, then the owner's under the same fence.
+@[ runs("Some(Cons(RefusedAt(2, NoAuthority), Nil))") ]
+def squattedFence : () => Maybe(List(RefusedCommit)) ;
+def squattedFence = thunk {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run squat <- fencedChild(2, 20, 1, 78, Note("squat"));
+  run owned <- fencedChild(3, 10, 2, 78, Note("owned"));
+  run folded <- fold(100, (Cons(opened, Cons(squat, Cons(owned, Nil))) : List(Commit)));
+  become refusedOf(folded)
+} ;
+
+/// `a_receipt_under_the_wrong_tree_is_refused`: a note naming the tree
+/// `200` is refused naming it.
+@[ runs("Some(Cons(RefusedAt(2, WrongTree(200)), Nil))") ]
+def astray : () => Maybe(List(RefusedCommit)) ;
+def astray = thunk {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run folded <- fold(
+    100,
+    (Cons(
+      opened,
+      Cons(Committed(2, 10, Cons(1, Nil), Decoded(Receipt(200, 2, Note("astray")))), Nil)
+    ) : List(Commit))
+  );
+  become refusedOf(folded)
+} ;
+
+/// `the_smallest_root_open_names_the_owner`: two root Opens and a reopening;
+/// the Open placed first names the owner.
+@[ checks ]
+def opensCommits() -> -F List(Commit) {
+  run byA <- rooted(1, 10, Open(Signed(100, 10)));
+  run byB <- rooted(2, 20, Open(Signed(100, 20)));
+  run reopened <- child(3, 10, 1, Open(Signed(100, 10)));
+  (Cons(byA, Cons(byB, Cons(reopened, Nil))) : List(Commit))
+}
+
+/// The root Open placed first names the owner.
+@[ runs("Some(10)") ]
+def opensOwner : () => Maybe(Integer) ;
+def opensOwner = thunk {
+  run commits <- opensCommits();
+  run folded <- fold(100, commits);
+  become ownerOf(folded)
+} ;
+
+/// Every other proved Open, root or not, is a second Open.
+@[ runs("Some(Cons(RefusedAt(2, SecondOpen), Cons(RefusedAt(3, SecondOpen), Nil)))") ]
+def opensRefused : () => Maybe(List(RefusedCommit)) ;
+def opensRefused = thunk {
+  run commits <- opensCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// `an_open_proved_by_another_key_is_refused`: an Open proved by the tree
+/// `200`'s key opens nothing.
+@[ runs("None") ]
+def forgedOpen : () => Maybe(Integer) ;
+def forgedOpen = thunk {
+  run forged <- rooted(1, 10, Open(Signed(200, 10)));
+  run folded <- fold(100, (Cons(forged, Nil) : List(Commit)));
+  become ownerOf(folded)
+} ;
+
+/// An Open proved for another author opens nothing.
+@[ runs("None") ]
+def replayedOpen : () => Maybe(Integer) ;
+def replayedOpen = thunk {
+  run replayed <- rooted(2, 20, Open(Signed(100, 10)));
+  run folded <- fold(100, (Cons(replayed, Nil) : List(Commit)));
+  become ownerOf(folded)
+} ;
+
+/// Beside the Open the tree key proved for its author, both are refused as
+/// bad proofs.
+@[ runs("Some(Cons(RefusedAt(1, BadProof), Cons(RefusedAt(2, BadProof), Nil)))") ]
+def badProofs : () => Maybe(List(RefusedCommit)) ;
+def badProofs = thunk {
+  run forged <- rooted(1, 10, Open(Signed(200, 10)));
+  run replayed <- rooted(2, 20, Open(Signed(100, 10)));
+  run opened <- rooted(3, 10, Open(Signed(100, 10)));
+  run folded <- fold(100, (Cons(forged, Cons(replayed, Cons(opened, Nil))) : List(Commit)));
+  become refusedOf(folded)
+} ;
+
+/// `an_undecodable_blob_is_refused_and_an_unopened_tree_has_no_view`: a blob
+/// that is no receipt is refused.
+@[ runs("Some(Cons(RefusedAt(2, Undecodable), Nil))") ]
+def garbled : () => Maybe(List(RefusedCommit)) ;
+def garbled = thunk {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run folded <- fold(
+    100,
+    (Cons(opened, Cons(Committed(2, 10, Cons(1, Nil), Garbled), Nil)) : List(Commit))
+  );
+  become refusedOf(folded)
+} ;
+
+/// An Open of another tree does not open this one.
+@[ runs("None") ]
+def foreignOpen : () => Maybe(Integer) ;
+def foreignOpen = thunk {
+  run orphan <- child(2, 10, 1, Note("orphan"));
+  run folded <- fold(
+    100,
+    (Cons(
+      Committed(1, 10, Nil, Decoded(Receipt(200, 1, Open(Signed(200, 10))))),
+      Cons(orphan, Nil)
+    ) : List(Commit))
+  );
+  become ownerOf(folded)
+} ;
+
+/// Nothing opens an empty tree.
+@[ runs("None") ]
+def empty : () => Maybe(Integer) ;
+def empty = thunk {
+  run folded <- fold(100, (Nil : List(Commit)));
+  become ownerOf(folded)
+} ;

@@ -1,0 +1,144 @@
+// A receipt: what one commit of a record tree carries — the tree it belongs
+// to, an operation fence, and the transition it records, one of nineteen
+// kinds. It follows `Receipt` and `Kind` of `domhringr-record-tree`
+// (`crates/record-tree/src/receipt.rs`), and a commit is its id, its verified
+// author, its parents and the receipt its blob decodes to, as the fold reads
+// a signed commit.
+//
+// Every key, commit id, hash, digest and fence is an integer the exemplar
+// states: the fragment computes no hash and checks no signature. A proof is
+// the statement of who signed it naming whom, which the fold compares with
+// the key it is checked under. A path, a DNS name and a label are each an
+// integer key with their text beside it: no admitted form compares two
+// strings (gandr #1832), so a name is compared by its key, and an exemplar
+// numbers names in their text's order, the order the Rust crate's maps keep.
+
+// Lists, and the rubric the grades come from.
+import "../strategy/rubric.gandr" ;
+
+// Rulings and grades.
+import "../strategy/grade.gandr" ;
+
+/// An optional `a`: absent, or present.
+@[ checks ]
+data Maybe(a : Type) : Type {
+  None : Maybe(a);
+  Some : (value : a) --> Maybe(a);
+}
+
+/// A signature, as the statement it makes: the key that signed it and the
+/// peer it names. An Open's proof is the tree key's naming the owner; a
+/// presence's is the endpoint key's naming the presence's author.
+@[ checks ]
+data Proof : Type {
+  Signed : (by : Integer, names : Integer) --> Proof;
+}
+
+/// An iroh endpoint: its key, and the loopback port it is reached at. The
+/// grade sources bind `Endpoint` as a reason a ruling is unread.
+@[ checks ]
+data EndpointAddr : Type {
+  EndpointAt : (key : Integer, port : Integer) --> EndpointAddr;
+}
+
+/// A path, a DNS name or a label: the key it is compared by, and its text.
+@[ checks ]
+data Name : Type {
+  Named : (key : Integer, text : String) --> Name;
+}
+
+/// What a path is bound to: an anchor, written as its text, an endpoint by
+/// its key, or an opaque datum.
+@[ checks ]
+data Target : Type {
+  ToAnchor : (anchor : String) --> Target;
+  ToEndpoint : (key : Integer) --> Target;
+  ToDatum : (datum : String) --> Target;
+}
+
+/// What a dispatch hands its seat to work from: an anchor, written as its
+/// text, or the hash of the brief's content.
+@[ checks ]
+data Brief : Type {
+  BriefAt : (anchor : String) --> Brief;
+  BriefHashed : (hash : Integer) --> Brief;
+}
+
+/// How a verifier's process ended.
+@[ checks ]
+data Status : Type {
+  Exited : (code : Integer) --> Status;
+  Signalled : (number : Integer) --> Status;
+}
+
+/// What an operator decides of an attempt.
+@[ checks ]
+data Decision : Type {
+  Land : Decision;
+  Rework : (reason : String) --> Decision;
+  Abandon : Decision;
+}
+
+/// A question of a verdict, by its hash, and the judge's ruling on it.
+@[ checks ]
+data Ruled : Type {
+  OnQuestion : (question : Integer, ruling : Ruling) --> Ruled;
+}
+
+/// The transition a receipt records.
+@[ checks ]
+data Kind : Type {
+  Indexed : (index : Integer) --> Kind;
+  Open : (proof : Proof) --> Kind;
+  Grant : (to : Integer) --> Kind;
+  Note : (text : String) --> Kind;
+  Bind : (path : Name, target : Target) --> Kind;
+  Claim : (domain : Name) --> Kind;
+  Introduce : (tree : Integer, label : Name) --> Kind;
+  Present : (endpoint : EndpointAddr, proof : Proof) --> Kind;
+  Withdraw : (holder : Integer) --> Kind;
+  Dispatch : (edition : Integer, seat : Integer, brief : Brief) --> Kind;
+  Report : (dispatch : Integer, content : Integer, summary : String) --> Kind;
+  Handoff : (dispatch : Integer, to : Integer) --> Kind;
+  Retire : (dispatch : Integer) --> Kind;
+  Pause : (dispatch : Integer) --> Kind;
+  Verdict : (
+    dispatch : Integer,
+    judge : Integer,
+    rubric : Integer,
+    transcript : Integer,
+    answers : List(Ruled)
+  ) --> Kind;
+  Verified : (
+    dispatch : Integer,
+    runner : Integer,
+    playbook : Integer,
+    step : String,
+    output : Integer,
+    status : Status
+  ) --> Kind;
+  Graded : (verdict : Integer, grades : List(Grade), composed : Grade) --> Kind;
+  Decide : (dispatch : Integer, operator : Integer, decision : Decision) --> Kind;
+  Landed : (decided : Integer, merge : String) --> Kind;
+}
+
+/// A receipt: the tree it belongs to, its operation fence, and its kind.
+@[ checks ]
+data Receipt : Type {
+  Receipt : (tree : Integer, operation : Integer, kind : Kind) --> Receipt;
+}
+
+/// What a commit's blob decodes to: a receipt, or no receipt.
+@[ checks ]
+data Blob : Type {
+  Decoded : (receipt : Receipt) --> Blob;
+  Garbled : Blob;
+}
+
+/// A commit as the fold reads it: its id, its verified author, the ids of its
+/// parents and its blob. Its constructor is named apart from its type: a type
+/// argument reads a constructor of the type's name (gandr #1855).
+@[ checks ]
+data Commit : Type {
+  Committed : (id : Integer, author : Integer, parents : List(Integer), blob : Blob) --> Commit;
+}
