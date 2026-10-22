@@ -73,28 +73,9 @@ dependencies = [
 [[package]]
 name = "anodized"
 version = "0.7.0"
-source = "git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426#372f70b50ef7af68f4e8a750132d90d54e780426"
-dependencies = [
- "anodized-macros 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
-]
-
-[[package]]
-name = "anodized"
-version = "0.7.0"
 source = "git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87#5483862f402da57329dd22e8e2f272fde576af87"
 dependencies = [
- "anodized-macros 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87)",
-]
-
-[[package]]
-name = "anodized-core"
-version = "0.7.0"
-source = "git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426#372f70b50ef7af68f4e8a750132d90d54e780426"
-dependencies = [
- "bitflags",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
+ "anodized-macros",
 ]
 
 [[package]]
@@ -111,20 +92,9 @@ dependencies = [
 [[package]]
 name = "anodized-macros"
 version = "0.7.0"
-source = "git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426#372f70b50ef7af68f4e8a750132d90d54e780426"
-dependencies = [
- "anodized-core 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "anodized-macros"
-version = "0.7.0"
 source = "git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87#5483862f402da57329dd22e8e2f272fde576af87"
 dependencies = [
- "anodized-core 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87)",
+ "anodized-core",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -776,7 +746,7 @@ dependencies = [
  "gandr-storage-values",
  "iroh",
  "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
- "quenchant-arith",
+ "quenchant-arith 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=111850988c96b7b33ee898f54c017ca645243e7f)",
  "sedimentree_core",
  "subduction_core",
  "subduction_crypto",
@@ -1154,35 +1124,36 @@ dependencies = [
 name = "gandr-core-session"
 version = "0.0.0"
 dependencies = [
- "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
  "gandr-kernel-core",
  "gandr-kernel-term",
+ "gandr-theory-deep-inference",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 
 [[package]]
 name = "gandr-kernel-check-memo"
 version = "0.0.0"
 dependencies = [
- "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 
 [[package]]
 name = "gandr-kernel-conversion-trace"
 version = "0.0.0"
 dependencies = [
- "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 
 [[package]]
 name = "gandr-kernel-core"
 version = "0.0.0"
 dependencies = [
- "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
  "gandr-kernel-check-memo",
  "gandr-kernel-conversion-trace",
  "gandr-kernel-strata",
  "gandr-kernel-term",
- "quenchant-arith",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+ "quenchant-arith 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
  "quenchant-shape",
 ]
 
@@ -1190,41 +1161,82 @@ dependencies = [
 name = "gandr-kernel-strata"
 version = "0.0.0"
 dependencies = [
- "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 
 [[package]]
 name = "gandr-kernel-term"
 version = "0.0.0"
 dependencies = [
- "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
  "gandr-kernel-conversion-trace",
  "gandr-kernel-strata",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+ "quenchant-shape",
 ]
 
 [[package]]
 name = "gandr-storage-chunker"
 version = "0.0.0"
 dependencies = [
- "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 
 [[package]]
 name = "gandr-storage-records"
 version = "0.0.0"
 dependencies = [
- "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
  "blake3",
  "gandr-storage-chunker",
+ "gandr-theory-spec-combinators",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 
 [[package]]
 name = "gandr-storage-values"
 version = "0.0.0"
 dependencies = [
- "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=372f70b50ef7af68f4e8a750132d90d54e780426)",
  "blake3",
  "gandr-storage-chunker",
+ "gandr-theory-spec-combinators",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+]
+
+[[package]]
+name = "gandr-theory-cell-complexes"
+version = "0.0.0"
+dependencies = [
+ "gandr-theory-spec-combinators",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+ "quenchant-shape",
+]
+
+[[package]]
+name = "gandr-theory-coherent-resolutions"
+version = "0.0.0"
+dependencies = [
+ "gandr-theory-cell-complexes",
+ "gandr-theory-spec-combinators",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+ "quenchant-shape",
+]
+
+[[package]]
+name = "gandr-theory-deep-inference"
+version = "0.0.0"
+dependencies = [
+ "foldhash",
+ "gandr-theory-cell-complexes",
+ "gandr-theory-coherent-resolutions",
+ "hashbrown",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+ "quenchant-shape",
+]
+
+[[package]]
+name = "gandr-theory-spec-combinators"
+version = "0.0.0"
+dependencies = [
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 
 [[package]]
@@ -2785,8 +2797,8 @@ name = "quenchant-anodized"
 version = "0.0.0"
 source = "git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9#8b8d0702d69409549e855606a85492c777e05fc9"
 dependencies = [
- "anodized 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87)",
- "anodized-macros 0.7.0 (git+https://github.com/gandr-lang/anodized?rev=5483862f402da57329dd22e8e2f272fde576af87)",
+ "anodized",
+ "anodized-macros",
  "quenchant-spec-macros 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 
@@ -2799,11 +2811,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "quenchant-arith"
+version = "0.0.0"
+source = "git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9#8b8d0702d69409549e855606a85492c777e05fc9"
+dependencies = [
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+]
+
+[[package]]
 name = "quenchant-shape"
 version = "0.0.0"
-source = "git+https://github.com/gandr-lang/quenchant?rev=111850988c96b7b33ee898f54c017ca645243e7f#111850988c96b7b33ee898f54c017ca645243e7f"
+source = "git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9#8b8d0702d69409549e855606a85492c777e05fc9"
 dependencies = [
- "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=111850988c96b7b33ee898f54c017ca645243e7f)",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 
 [[package]]

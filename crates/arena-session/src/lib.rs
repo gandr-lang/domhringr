@@ -180,11 +180,9 @@ use gandr_core_session::ValueTypeId;
 use gandr_core_session::certified::PayloadCodes;
 use gandr_core_session::certified::Protocol;
 use gandr_core_session::certified::TransportError;
+use gandr_kernel_core::KernelError;
 use gandr_kernel_core::ReplayBudget;
-use gandr_kernel_core::flow_universe::Certificate;
 use gandr_kernel_core::flow_universe::Family;
-use gandr_kernel_core::flow_universe::Flow;
-use gandr_kernel_core::flow_universe::Flows;
 use gandr_kernel_term::BaseType;
 use gandr_kernel_term::TermArena;
 
@@ -421,7 +419,7 @@ pub enum ArenaError
     Transport(#[from] TransportError),
     /// The kernel refused the candidate certificate.
     #[error(transparent)]
-    Kernel(#[from] gandr_kernel_core::flow_universe::FlowError),
+    Kernel(#[from] KernelError),
 }
 
 /// Opaque receipt payload types. Each digest names its receipt commit.
@@ -591,12 +589,12 @@ impl Arena
         let integer = terms.value_type_base(BaseType::Integer);
         let string = terms.value_type_base(BaseType::String);
         let numeric = terms.value_type_base(BaseType::Numeric);
-        let pair = terms.value_type_product(unit, unit);
-        let verdict = terms.value_type_product(integer, unit);
-        let graded = terms.value_type_product(string, unit);
-        let verified = terms.value_type_product(numeric, unit);
-        let decide = terms.value_type_product(unit, integer);
-        let landed = terms.value_type_product(unit, string);
+        let pair = terms.value_type_product(&[unit, unit]);
+        let verdict = terms.value_type_product(&[integer, unit]);
+        let graded = terms.value_type_product(&[string, unit]);
+        let verified = terms.value_type_product(&[numeric, unit]);
+        let decide = terms.value_type_product(&[unit, integer]);
+        let landed = terms.value_type_product(&[unit, string]);
         let payloads = PayloadCodes(
             [
                 (DISPATCH, integer),
@@ -614,18 +612,11 @@ impl Arena
         );
         let source_code = gandr_core_session::certified::encode(&mut terms, source, &payloads)?;
         let target_code = gandr_core_session::certified::encode(&mut terms, target, &payloads)?;
+        let classifier = terms.value_type_flow_universe(source_code, target_code);
         let proofs = terms.value_unit();
-        let mut flows = Flows::new();
-        let flow = flows.push(Flow::Session {
-            source: source_code,
-            target: target_code,
-            evidence: Arc::new(evidence),
-            payload_paths: proofs,
-        })?;
-        let certificate = Certificate::Flow(flow);
+        let certificate = terms.value_session_flow(classifier, Arc::new(evidence), proofs);
         let _classifier = gandr_kernel_core::flow_universe::form_certificate(
             &mut terms,
-            &flows,
             certificate,
             Family::Flow,
             ReplayBudget::DEFAULT,
@@ -642,7 +633,6 @@ impl Arena
         };
         let moves = gandr_core_session::certified::transport(
             &mut terms,
-            &flows,
             certificate,
             (source, target),
             &play.moves,
