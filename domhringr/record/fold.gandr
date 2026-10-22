@@ -18,8 +18,7 @@
 // in an argument doubles the lowered function with each case around it, and
 // three cases deep in the fold one such call lowers past the run's bound
 // (gandr #1856). A view is read by matching its whole constructor, no field
-// being read by projection (gandr #1106), and a list passed to a function is
-// annotated with its type (gandr #1833).
+// being read by projection (gandr #1106).
 
 // Lists, and the rubric the grades come from.
 import "../strategy/rubric.gandr" ;
@@ -2636,7 +2635,7 @@ def seatCurrent = thunk {
 def undispatched : () => Maybe(Current) ;
 def undispatched = thunk {
   run opened <- rooted(1, 10, Open(Signed(100, 10)));
-  run folded <- fold(100, (Cons(opened, Nil) : List(Commit)));
+  run folded <- fold(100, Cons(opened, Nil));
   become currentOf(folded)
 } ;
 
@@ -3218,10 +3217,7 @@ def reworkRefused = thunk {
   run landing <- child(5, 10, 4, Landed(4, revision));
   run folded <- fold(
     100,
-    (Cons(
-      opened,
-      Cons(granted, Cons(dispatched, Cons(decided, Cons(landing, Nil))))
-    ) : List(Commit))
+    Cons(opened, Cons(granted, Cons(dispatched, Cons(decided, Cons(landing, Nil)))))
   );
   become refusedOf(folded)
 } ;
@@ -3310,7 +3306,7 @@ def squattedFence = thunk {
   run opened <- rooted(1, 10, Open(Signed(100, 10)));
   run squat <- fencedChild(2, 20, 1, 78, Note("squat"));
   run owned <- fencedChild(3, 10, 2, 78, Note("owned"));
-  run folded <- fold(100, (Cons(opened, Cons(squat, Cons(owned, Nil))) : List(Commit)));
+  run folded <- fold(100, Cons(opened, Cons(squat, Cons(owned, Nil))));
   become refusedOf(folded)
 } ;
 
@@ -3322,10 +3318,10 @@ def astray = thunk {
   run opened <- rooted(1, 10, Open(Signed(100, 10)));
   run folded <- fold(
     100,
-    (Cons(
+    Cons(
       opened,
       Cons(Committed(2, 10, Cons(1, Nil), Decoded(Receipt(200, 2, Note("astray")))), Nil)
-    ) : List(Commit))
+    )
   );
   become refusedOf(folded)
 } ;
@@ -3364,7 +3360,7 @@ def opensRefused = thunk {
 def forgedOpen : () => Maybe(Integer) ;
 def forgedOpen = thunk {
   run forged <- rooted(1, 10, Open(Signed(200, 10)));
-  run folded <- fold(100, (Cons(forged, Nil) : List(Commit)));
+  run folded <- fold(100, Cons(forged, Nil));
   become ownerOf(folded)
 } ;
 
@@ -3373,7 +3369,7 @@ def forgedOpen = thunk {
 def replayedOpen : () => Maybe(Integer) ;
 def replayedOpen = thunk {
   run replayed <- rooted(2, 20, Open(Signed(100, 10)));
-  run folded <- fold(100, (Cons(replayed, Nil) : List(Commit)));
+  run folded <- fold(100, Cons(replayed, Nil));
   become ownerOf(folded)
 } ;
 
@@ -3385,7 +3381,7 @@ def badProofs = thunk {
   run forged <- rooted(1, 10, Open(Signed(200, 10)));
   run replayed <- rooted(2, 20, Open(Signed(100, 10)));
   run opened <- rooted(3, 10, Open(Signed(100, 10)));
-  run folded <- fold(100, (Cons(forged, Cons(replayed, Cons(opened, Nil))) : List(Commit)));
+  run folded <- fold(100, Cons(forged, Cons(replayed, Cons(opened, Nil))));
   become refusedOf(folded)
 } ;
 
@@ -3395,10 +3391,7 @@ def badProofs = thunk {
 def garbled : () => Maybe(List(RefusedCommit)) ;
 def garbled = thunk {
   run opened <- rooted(1, 10, Open(Signed(100, 10)));
-  run folded <- fold(
-    100,
-    (Cons(opened, Cons(Committed(2, 10, Cons(1, Nil), Garbled), Nil)) : List(Commit))
-  );
+  run folded <- fold(100, Cons(opened, Cons(Committed(2, 10, Cons(1, Nil), Garbled), Nil)));
   become refusedOf(folded)
 } ;
 
@@ -3409,10 +3402,10 @@ def foreignOpen = thunk {
   run orphan <- child(2, 10, 1, Note("orphan"));
   run folded <- fold(
     100,
-    (Cons(
+    Cons(
       Committed(1, 10, Nil, Decoded(Receipt(200, 1, Open(Signed(200, 10))))),
       Cons(orphan, Nil)
-    ) : List(Commit))
+    )
   );
   become ownerOf(folded)
 } ;
@@ -3421,6 +3414,6 @@ def foreignOpen = thunk {
 @[ runs("None") ]
 def empty : () => Maybe(Integer) ;
 def empty = thunk {
-  run folded <- fold(100, (Nil : List(Commit)));
+  run folded <- fold(100, Nil);
   become ownerOf(folded)
 } ;
