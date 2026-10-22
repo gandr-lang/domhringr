@@ -11,8 +11,6 @@
 // The composition is the strong three-valued conjunction with refusal placed
 // between failure and indecision: on the order met, undecided, refused,
 // unmet it is the greatest grade, so it folds the pairwise greater from met.
-// Each exemplar's list of grades is annotated: a constructor given as an
-// argument takes no type from its parameter yet (gandr #1833).
 
 // The rubric, its band and the two documents.
 import "./rubric.gandr" ;
@@ -61,113 +59,107 @@ def verdict(rubric : Rubric, rulings : List(Ruling)) -> -F Grade {
 /// No grade composes as met.
 @[ runs("Met") ]
 def none : () => Grade ;
-def none = thunk { become compose((Nil : List(Grade))) } ;
+def none = thunk { become compose(Nil) } ;
 
 /// One grade composes as itself: met.
 @[ runs("Met") ]
 def onlyMet : () => Grade ;
-def onlyMet = thunk { become compose((Cons(Met, Nil) : List(Grade))) } ;
+def onlyMet = thunk { become compose(Cons(Met, Nil)) } ;
 
 /// One grade composes as itself: unmet.
 @[ runs("Unmet") ]
 def onlyUnmet : () => Grade ;
-def onlyUnmet = thunk { become compose((Cons(Unmet, Nil) : List(Grade))) } ;
+def onlyUnmet = thunk { become compose(Cons(Unmet, Nil)) } ;
 
 /// One grade composes as itself: undecided.
 @[ runs("Undecided") ]
 def onlyUndecided : () => Grade ;
-def onlyUndecided = thunk { become compose((Cons(Undecided, Nil) : List(Grade))) } ;
+def onlyUndecided = thunk { become compose(Cons(Undecided, Nil)) } ;
 
 /// One grade composes as itself: refused.
 @[ runs("Refused") ]
 def onlyRefused : () => Grade ;
-def onlyRefused = thunk { become compose((Cons(Refused, Nil) : List(Grade))) } ;
+def onlyRefused = thunk { become compose(Cons(Refused, Nil)) } ;
 
 /// A grade twice composes as itself: met.
 @[ runs("Met") ]
 def twiceMet : () => Grade ;
-def twiceMet = thunk { become compose((Cons(Met, Cons(Met, Nil)) : List(Grade))) } ;
+def twiceMet = thunk { become compose(Cons(Met, Cons(Met, Nil))) } ;
 
 /// A grade twice composes as itself: unmet.
 @[ runs("Unmet") ]
 def twiceUnmet : () => Grade ;
-def twiceUnmet = thunk { become compose((Cons(Unmet, Cons(Unmet, Nil)) : List(Grade))) } ;
+def twiceUnmet = thunk { become compose(Cons(Unmet, Cons(Unmet, Nil))) } ;
 
 /// A grade twice composes as itself: undecided.
 @[ runs("Undecided") ]
 def twiceUndecided : () => Grade ;
-def twiceUndecided = thunk {
-  become compose((Cons(Undecided, Cons(Undecided, Nil)) : List(Grade)))
-} ;
+def twiceUndecided = thunk { become compose(Cons(Undecided, Cons(Undecided, Nil))) } ;
 
 /// A grade twice composes as itself: refused.
 @[ runs("Refused") ]
 def twiceRefused : () => Grade ;
-def twiceRefused = thunk { become compose((Cons(Refused, Cons(Refused, Nil)) : List(Grade))) } ;
+def twiceRefused = thunk { become compose(Cons(Refused, Cons(Refused, Nil))) } ;
 
 /// Indecision beside a met criterion: undecided.
 @[ runs("Undecided") ]
 def metUndecided : () => Grade ;
-def metUndecided = thunk { become compose((Cons(Met, Cons(Undecided, Nil)) : List(Grade))) } ;
+def metUndecided = thunk { become compose(Cons(Met, Cons(Undecided, Nil))) } ;
 
 /// The same, in the other order.
 @[ runs("Undecided") ]
 def undecidedMet : () => Grade ;
-def undecidedMet = thunk { become compose((Cons(Undecided, Cons(Met, Nil)) : List(Grade))) } ;
+def undecidedMet = thunk { become compose(Cons(Undecided, Cons(Met, Nil))) } ;
 
 /// A refusal beside a met criterion: refused.
 @[ runs("Refused") ]
 def refusedMet : () => Grade ;
-def refusedMet = thunk { become compose((Cons(Refused, Cons(Met, Nil)) : List(Grade))) } ;
+def refusedMet = thunk { become compose(Cons(Refused, Cons(Met, Nil))) } ;
 
 /// The same, in the other order.
 @[ runs("Refused") ]
 def metRefused : () => Grade ;
-def metRefused = thunk { become compose((Cons(Met, Cons(Refused, Nil)) : List(Grade))) } ;
+def metRefused = thunk { become compose(Cons(Met, Cons(Refused, Nil))) } ;
 
 /// A refusal beside indecision: refused, never merely close.
 @[ runs("Refused") ]
 def undecidedRefused : () => Grade ;
-def undecidedRefused = thunk {
-  become compose((Cons(Undecided, Cons(Refused, Nil)) : List(Grade)))
-} ;
+def undecidedRefused = thunk { become compose(Cons(Undecided, Cons(Refused, Nil))) } ;
 
 /// The same, in the other order.
 @[ runs("Refused") ]
 def refusedUndecided : () => Grade ;
-def refusedUndecided = thunk {
-  become compose((Cons(Refused, Cons(Undecided, Nil)) : List(Grade)))
-} ;
+def refusedUndecided = thunk { become compose(Cons(Refused, Cons(Undecided, Nil))) } ;
 
 /// A failing criterion beside a met one: unmet.
 @[ runs("Unmet") ]
 def metUnmet : () => Grade ;
-def metUnmet = thunk { become compose((Cons(Met, Cons(Unmet, Nil)) : List(Grade))) } ;
+def metUnmet = thunk { become compose(Cons(Met, Cons(Unmet, Nil))) } ;
 
 /// The same, in the other order.
 @[ runs("Unmet") ]
 def unmetMet : () => Grade ;
-def unmetMet = thunk { become compose((Cons(Unmet, Cons(Met, Nil)) : List(Grade))) } ;
+def unmetMet = thunk { become compose(Cons(Unmet, Cons(Met, Nil))) } ;
 
 /// A failing criterion beside indecision: unmet.
 @[ runs("Unmet") ]
 def unmetUndecided : () => Grade ;
-def unmetUndecided = thunk { become compose((Cons(Unmet, Cons(Undecided, Nil)) : List(Grade))) } ;
+def unmetUndecided = thunk { become compose(Cons(Unmet, Cons(Undecided, Nil))) } ;
 
 /// The same, in the other order.
 @[ runs("Unmet") ]
 def undecidedUnmet : () => Grade ;
-def undecidedUnmet = thunk { become compose((Cons(Undecided, Cons(Unmet, Nil)) : List(Grade))) } ;
+def undecidedUnmet = thunk { become compose(Cons(Undecided, Cons(Unmet, Nil))) } ;
 
 /// A failing criterion beside a refusal: unmet, whatever the other says.
 @[ runs("Unmet") ]
 def refusedUnmet : () => Grade ;
-def refusedUnmet = thunk { become compose((Cons(Refused, Cons(Unmet, Nil)) : List(Grade))) } ;
+def refusedUnmet = thunk { become compose(Cons(Refused, Cons(Unmet, Nil))) } ;
 
 /// The same, in the other order.
 @[ runs("Unmet") ]
 def unmetRefused : () => Grade ;
-def unmetRefused = thunk { become compose((Cons(Unmet, Cons(Refused, Nil)) : List(Grade))) } ;
+def unmetRefused = thunk { become compose(Cons(Unmet, Cons(Refused, Nil))) } ;
 
 /// `code` over `rubrics/fixtures/code/met`: met.
 @[ runs("Met") ]
