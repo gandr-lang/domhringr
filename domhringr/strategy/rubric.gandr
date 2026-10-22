@@ -19,13 +19,8 @@ data List(a : Type) : Type {
 }
 
 /// Where a rubric's grades stand: the probability on a criterion holding at
-/// or below which it is unmet, and at or above which it is met. A data type
-/// read by a match: a synonym for a record type stands only in a module
-/// (gandr #1834), and a data field is read by no projection yet (gandr #1106).
-@[ checks ]
-data Band : Type {
-  Bounds : (low : Integer, high : Integer) --> Band;
-}
+/// or below which it is unmet, and at or above which it is met.
+type Band = #{low : Integer, high : Integer} ;
 
 /// A question: its name, the instructions the judge reads, and its two
 /// criteria, offered as `A` when it holds and `B` when it fails.
@@ -68,7 +63,7 @@ def questionsOf(rubric : Rubric) -> -F List(Question) {
 @[ checks ]
 def banded(band : Band) -> -F Bool {
   case band {
-    Bounds(low, high) => {
+    #{.low = low, .high = high} => {
       run floor <- 0 <= low;
       run below <- low < high;
       run ceiling <- high <= 1000000;
@@ -125,7 +120,8 @@ def rec nth(a : Type, xs : List(a), i : Integer, fallback : a) -> -F a {
 /// The band every rubric of the set grades against, `low = 0.2` and
 /// `high = 0.8`.
 @[ checks ]
-def setBand = (Bounds(200000, 800000) : Band);
+def setBand : Band ;
+def setBand = #{low = 200000, high = 800000} ;
 
 /// `rubrics/code.toml`: the code a change adds carries its specifications,
 /// keeps every diagnostic, says why a value is absent, converts numbers
@@ -294,14 +290,14 @@ def setBanded = thunk { become banded(setBand) } ;
 /// A band whose low bound is above its high one is not.
 @[ runs("+{.1 = unit}") ]
 def invertedBanded : () => Bool ;
-def invertedBanded = thunk { become banded(Bounds(750000, 250000)) } ;
+def invertedBanded = thunk { become banded(#{low = 750000, high = 250000}) } ;
 
 /// Nor is one whose bounds are equal.
 @[ runs("+{.1 = unit}") ]
 def equalBanded : () => Bool ;
-def equalBanded = thunk { become banded(Bounds(500000, 500000)) } ;
+def equalBanded = thunk { become banded(#{low = 500000, high = 500000}) } ;
 
 /// Nor is one whose high bound is past one.
 @[ runs("+{.1 = unit}") ]
 def overBanded : () => Bool ;
-def overBanded = thunk { become banded(Bounds(250000, 1500000)) } ;
+def overBanded = thunk { become banded(#{low = 250000, high = 1500000}) } ;
