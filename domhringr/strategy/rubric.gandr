@@ -64,8 +64,7 @@ def questionsOf(rubric : Rubric) -> -F List(Question) {
 
 /// Whether a band is one a rubric may hold: each bound a probability, from
 /// zero to one, and the low bound strictly below the high one, as
-/// `Band::read` admits. A failing comparison answers for itself where `false`
-/// would stand (gandr #1831).
+/// `Band::read` admits.
 @[ checks ]
 def banded(band : Band) -> -F Bool {
   case band {
@@ -76,9 +75,9 @@ def banded(band : Band) -> -F Bool {
       case floor {
         true => case below {
           true => ceiling,
-          false => below
+          false => false
         },
-        false => floor
+        false => false
       }
     }
   }
