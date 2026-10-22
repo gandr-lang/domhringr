@@ -1,0 +1,185 @@
+// A ruling graded against a rubric's band: the probability the judge put on
+// the criterion holding, `A`, is met at the high bound or above, unmet at the
+// low bound or below and undecided strictly between; a ruling the judge read
+// no answer for is refused, never graded. It follows `Band::grade` of
+// `domhringr-strategy-document` (`crates/strategy-document/src/rubric.rs`),
+// its band positions those of the witness
+// `a_ruling_is_graded_at_each_band_position`, and its fixture rulings those
+// the rubric set's test answers with (`crates/surface-peer/tests/strategy.rs`):
+// every criterion holding at 0.9 over `met`, the isolated one failing at 0.1
+// over `unmet`.
+
+// The rubric, its band and the two documents.
+import "./rubric.gandr" ;
+
+/// Why a judge read no answer for a question.
+@[ checks ]
+data Unread : Type {
+  NoLetter : Unread;
+  Outside : Unread;
+  Tied : Unread;
+  Endpoint : Unread;
+  Malformed : Unread;
+}
+
+/// A judge's answer to one question: the probability on each option
+/// letter in order, `A` first, with the mass outside them; or why there is
+/// none.
+@[ checks ]
+data Ruling : Type {
+  Read : (probabilities : List(Integer), outside : Integer) --> Ruling;
+  Unread : (reason : Unread) --> Ruling;
+}
+
+/// Where a ruling stands against a band, or where a rubric's grades composed
+/// stand.
+@[ checks ]
+data Grade : Type {
+  Met : Grade;
+  Unmet : Grade;
+  Undecided : Grade;
+  Refused : Grade;
+}
+
+/// A ruling graded against a band. A readout with no option is no reading
+/// of the criterion, and is refused as an unread ruling is.
+@[ checks ]
+def grade(band : Band, ruling : Ruling) -> -F Grade {
+  case ruling {
+    Unread(reason) => Refused,
+    Read(probabilities, outside) => case probabilities {
+      Nil => Refused,
+      Cons(holds, rest) => case band {
+        Bounds(low, high) => {
+          run met <- holds >= high;
+          case met {
+            true => Met,
+            false => {
+              run unmet <- holds <= low;
+              case unmet {
+                true => Unmet,
+                false => Undecided
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Each ruling of a list graded against one band, in order.
+@[ checks ]
+def rec grades(band : Band, rulings : List(Ruling)) -> -F List(Grade) {
+  case rulings {
+    Nil => (Nil : List(Grade)),
+    Cons(ruling, rest) => {
+      run graded <- grade(band, ruling);
+      run later <- grades[<](band, rest);
+      (Cons(graded, later) : List(Grade))
+    }
+  }
+}
+
+/// The table's ruling for a criterion holding: `read A A=0.9 B=0.1
+/// outside=0`.
+@[ checks ]
+def holding = (Read(Cons(900000, Cons(100000, Nil)), 0) : Ruling);
+
+/// The table's ruling for a criterion failing: `read B A=0.1 B=0.9
+/// outside=0`.
+@[ checks ]
+def failing = (Read(Cons(100000, Cons(900000, Nil)), 0) : Ruling);
+
+/// A readout of `holds` on `A` and the rest on `B`, nothing outside.
+@[ checks ]
+def readout(holds : Integer) -> -F Ruling {
+  run fails <- 1000000 - holds;
+  Read(Cons(holds, Cons(fails, Nil)), 0)
+}
+
+/// The band of the witness, `low = 0.25` and `high = 0.75`.
+@[ checks ]
+def quarters = (Bounds(250000, 750000) : Band);
+
+/// The table's rulings over the `met` member of a pair of six questions:
+/// every criterion holds.
+@[ checks ]
+def sixHolding : List(Ruling) ;
+def sixHolding = Cons(
+  holding,
+  Cons(holding, Cons(holding, Cons(holding, Cons(holding, Cons(holding, Nil)))))
+) ;
+
+/// The table's rulings over `rubrics/fixtures/code/unmet`: the sixth
+/// question, `test-names`, fails.
+@[ checks ]
+def codeUnmet : List(Ruling) ;
+def codeUnmet = Cons(
+  holding,
+  Cons(holding, Cons(holding, Cons(holding, Cons(holding, Cons(failing, Nil)))))
+) ;
+
+/// The table's rulings over `rubrics/fixtures/docs/unmet`: the fourth
+/// question, `present-tense`, fails.
+@[ checks ]
+def docsUnmet : List(Ruling) ;
+def docsUnmet = Cons(
+  holding,
+  Cons(holding, Cons(holding, Cons(failing, Cons(holding, Cons(holding, Nil)))))
+) ;
+
+/// Certain: met.
+@[ runs("Met") ]
+def certain : () => Grade ;
+def certain = thunk { run ruling <- readout(1000000); become grade(quarters, ruling) } ;
+
+/// At the high bound: met.
+@[ runs("Met") ]
+def atHigh : () => Grade ;
+def atHigh = thunk { run ruling <- readout(750000); become grade(quarters, ruling) } ;
+
+/// Just below the high bound: undecided.
+@[ runs("Undecided") ]
+def belowHigh : () => Grade ;
+def belowHigh = thunk { run ruling <- readout(700000); become grade(quarters, ruling) } ;
+
+/// Just above the low bound: undecided.
+@[ runs("Undecided") ]
+def aboveLow : () => Grade ;
+def aboveLow = thunk { run ruling <- readout(300000); become grade(quarters, ruling) } ;
+
+/// At the low bound: unmet.
+@[ runs("Unmet") ]
+def atLow : () => Grade ;
+def atLow = thunk { run ruling <- readout(250000); become grade(quarters, ruling) } ;
+
+/// Certainly not: unmet.
+@[ runs("Unmet") ]
+def certainlyNot : () => Grade ;
+def certainlyNot = thunk { run ruling <- readout(0); become grade(quarters, ruling) } ;
+
+/// An unread ruling is refused, never graded.
+@[ runs("Refused") ]
+def tied : () => Grade ;
+def tied = thunk { become grade(quarters, Unread(Tied)) } ;
+
+/// `code` over `rubrics/fixtures/code/met`: every question met.
+@[ runs("Cons(Met, Cons(Met, Cons(Met, Cons(Met, Cons(Met, Cons(Met, Nil))))))") ]
+def codeMetGrades : () => List(Grade) ;
+def codeMetGrades = thunk { run band <- bandOf(code); become grades(band, sixHolding) } ;
+
+/// `code` over `rubrics/fixtures/code/unmet`: `test-names` alone unmet.
+@[ runs("Cons(Met, Cons(Met, Cons(Met, Cons(Met, Cons(Met, Cons(Unmet, Nil))))))") ]
+def codeUnmetGrades : () => List(Grade) ;
+def codeUnmetGrades = thunk { run band <- bandOf(code); become grades(band, codeUnmet) } ;
+
+/// `docs` over `rubrics/fixtures/docs/met`: every question met.
+@[ runs("Cons(Met, Cons(Met, Cons(Met, Cons(Met, Cons(Met, Cons(Met, Nil))))))") ]
+def docsMetGrades : () => List(Grade) ;
+def docsMetGrades = thunk { run band <- bandOf(docs); become grades(band, sixHolding) } ;
+
+/// `docs` over `rubrics/fixtures/docs/unmet`: `present-tense` alone unmet.
+@[ runs("Cons(Met, Cons(Met, Cons(Met, Cons(Unmet, Cons(Met, Cons(Met, Nil))))))") ]
+def docsUnmetGrades : () => List(Grade) ;
+def docsUnmetGrades = thunk { run band <- bandOf(docs); become grades(band, docsUnmet) } ;

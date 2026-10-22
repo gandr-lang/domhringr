@@ -108,6 +108,12 @@ DOMHRINGR_JUDGE_ENDPOINT=http://127.0.0.1:8000/v1 DOMHRINGR_JUDGE_MODEL=<model> 
   -E 'test(a_configured_judge_grades_a_fixture_pair_of_the_set)'
 ```
 
+**The verdict is also written in gandr.** [`domhringr/strategy/`](../domhringr/strategy/) states the rubric, the grading against its band and the composition as gandr sources, with the `code` and `docs` documents as values; each source's `runs` exemplars give the grades and verdicts this table gives over those two pairs. The gandr driver, built from the sibling at its pin, checks and runs them:
+
+```sh
+mise run check:gandr
+```
+
 ## Deferred
 
 - Calibration: measuring where a judge's rulings fall on each rubric's met and unmet states, which sets each band and says which questions a model answers reliably.

@@ -1,0 +1,308 @@
+// A rubric: an Opponent strategy written down — the task's state it reads,
+// the band its grades stand against, and named questions, each a choice
+// between its criterion holding and failing. It follows the `Rubric` of
+// `domhringr-strategy-document` (`crates/strategy-document/src/rubric.rs`),
+// and `code` and `docs` are the documents `rubrics/code.toml` and
+// `rubrics/docs.toml`, their questions in their names' order.
+//
+// A probability is an integer count of millionths: 1000000 is one and 200000
+// is 0.2. The fragment reads no fractional number (gandr #1830), and every
+// bound and ruling the rubric set and its fixture table write is a whole
+// number of millionths. A list is the data type below: a list literal is
+// matched by no pattern yet (gandr #1051).
+
+/// Lists of elements of a type `a`.
+@[ checks ]
+data List(a : Type) : Type {
+  Nil : List(a);
+  Cons : (head : a, tail : List(a)) --> List(a);
+}
+
+/// Where a rubric's grades stand: the probability on a criterion holding at
+/// or below which it is unmet, and at or above which it is met. A data type
+/// read by a match: a synonym for a record type stands only in a module
+/// (gandr #1834), and a data field is read by no projection yet (gandr #1106).
+@[ checks ]
+data Band : Type {
+  Bounds : (low : Integer, high : Integer) --> Band;
+}
+
+/// A question: its name, the instructions the judge reads, and its two
+/// criteria, offered as `A` when it holds and `B` when it fails.
+@[ checks ]
+data Question : Type {
+  Asked : (name : String, instructions : String, holds : String, fails : String) --> Question;
+}
+
+/// A rubric: its name, the state files its transcript holds in order, its
+/// band and its questions in their names' order.
+@[ checks ]
+data Rubric : Type {
+  Written : (
+    name : String,
+    state : List(String),
+    band : Band,
+    questions : List(Question)
+  ) --> Rubric;
+}
+
+/// The band a rubric's grades stand against.
+@[ checks ]
+def bandOf(rubric : Rubric) -> -F Band {
+  case rubric {
+    Written(name, state, band, questions) => band
+  }
+}
+
+/// The questions of a rubric, in their names' order.
+@[ checks ]
+def questionsOf(rubric : Rubric) -> -F List(Question) {
+  case rubric {
+    Written(name, state, band, questions) => questions
+  }
+}
+
+/// Whether a band is one a rubric may hold: each bound a probability, from
+/// zero to one, and the low bound strictly below the high one, as
+/// `Band::read` admits. A failing comparison answers for itself where `false`
+/// would stand (gandr #1831).
+@[ checks ]
+def banded(band : Band) -> -F Bool {
+  case band {
+    Bounds(low, high) => {
+      run floor <- 0 <= low;
+      run below <- low < high;
+      run ceiling <- high <= 1000000;
+      case floor {
+        true => case below {
+          true => ceiling,
+          false => below
+        },
+        false => floor
+      }
+    }
+  }
+}
+
+/// How many elements a list holds.
+@[ checks ]
+def rec size(a : Type, xs : List(a)) -> -F Integer {
+  case xs {
+    Nil => 0,
+    Cons(x, rest) => { run n <- size[<](a, rest); n + 1 }
+  }
+}
+
+/// The names of a list of questions, in order.
+@[ checks ]
+def rec names(questions : List(Question)) -> -F List(String) {
+  case questions {
+    Nil => (Nil : List(String)),
+    Cons(question, rest) => {
+      run later <- names[<](rest);
+      case question {
+        Asked(name, instructions, holds, fails) => (Cons(name, later) : List(String))
+      }
+    }
+  }
+}
+
+/// The element of a list at an index counted from zero, or `fallback` past
+/// its end.
+@[ checks ]
+def rec nth(a : Type, xs : List(a), i : Integer, fallback : a) -> -F a {
+  case xs {
+    Nil => fallback,
+    Cons(x, rest) => {
+      run here <- i == 0;
+      case here {
+        true => x,
+        false => become nth[<](a, rest, i - 1, fallback)
+      }
+    }
+  }
+}
+
+/// The band every rubric of the set grades against, `low = 0.2` and
+/// `high = 0.8`.
+@[ checks ]
+def setBand = (Bounds(200000, 800000) : Band);
+
+/// `rubrics/code.toml`: the code a change adds carries its specifications,
+/// keeps every diagnostic, says why a value is absent, converts numbers
+/// totally, names its tests for what they witness and declares its
+/// dependencies once.
+@[ checks ]
+def code : Rubric ;
+def code = Written(
+  "code",
+  Cons("change.diff", Nil),
+  setBand,
+  Cons(
+    Asked(
+      "absence",
+      "Read the signatures the change adds or rewrites. Where a value may be absent, does the type say why, through an error that names the failure or an absence that carries its reason, rather than an Option whose None says nothing? A change that adds no such signature meets this.",
+      "Every absence in a new signature carries its reason, or there is none.",
+      "A new signature returns or takes an Option where the absence has a reason."
+    ),
+    Cons(
+      Asked(
+        "conversions",
+        "Read the code the change adds. Does it convert and compute numbers only through total or checked operations, such as from, try_from, and checked or saturating arithmetic, and never through an as cast or arithmetic that can overflow or wrap unchecked? A change that adds no such code meets this.",
+        "Every conversion and arithmetic step is total or checked, or there is none.",
+        "An as cast or unchecked arithmetic can truncate, overflow or wrap."
+      ),
+      Cons(
+        Asked(
+          "dependencies",
+          "Read the manifests the change edits. Is every dependency it adds declared once, in the root manifest's [workspace.dependencies], with default features off, a comment saying what it is, a features list naming the use that needs each feature it enables, and a consumers list naming every crate that uses it, each member taking it with workspace = true? A change that adds no dependency meets this.",
+          "Each added dependency is declared once at the root, defaults off, its features and consumers listed, or none is added.",
+          "A dependency is declared in a member, keeps its default features, or lacks its features or consumers list."
+        ),
+        Cons(
+          Asked(
+            "specifications",
+            "Read the code the change adds or rewrites. Does every function and method carry a one-line summary and a Specification section, either trivial. or its clauses in the order requires, ensures, provides, fails, panics, with an Errors section when it can fail? Test functions are exempt.",
+            "Every added or rewritten function carries its summary and its specification.",
+            "An added or rewritten function lacks its summary, its specification or its errors."
+          ),
+          Cons(
+            Asked(
+              "suppressions",
+              "Read the code the change adds. Does it leave every diagnostic standing, with no allow attribute and no crate-wide or file-wide suppression, and any expect attribute placed on one item and naming its reason? A change that adds no such attribute meets this.",
+              "No diagnostic is silenced, and any expect names its lint and its reason on one item.",
+              "The change silences a diagnostic with allow, a blanket suppression, or an expect without a reason."
+            ),
+            Cons(
+              Asked(
+                "test-names",
+                "Read the tests the change adds. Is each named for the behaviour it witnesses, as a sentence such as a_missing_state_file_is_refused_by_name, rather than for the function it calls, a ticket or a number? A change that adds no test meets this.",
+                "Each added test is named for the behaviour it witnesses, or none is added.",
+                "A test is named for the function it calls, a ticket or a number, such as test_grade_2."
+              ),
+              Nil
+            )
+          )
+        )
+      )
+    )
+  )
+) ;
+
+/// `rubrics/docs.toml`: a README states what its package is, why and how,
+/// the decisions it rests on and what it needs, as present fact.
+@[ checks ]
+def docs : Rubric ;
+def docs = Written(
+  "docs",
+  Cons("README.md", Nil),
+  setBand,
+  Cons(
+    Asked(
+      "decisions",
+      "Read the README's sections on its decisions. Does each decision state the choice and its reason, the alternatives it was chosen over with why each lost, and the condition that would reverse it?",
+      "Each decision states its choice and reason, its alternatives and why they lost, and its reversal.",
+      "A decision lacks its reason, its alternatives or the condition that would reverse it."
+    ),
+    Cons(
+      Asked(
+        "examples",
+        "Read the README's examples. Do they give runnable usage and the command that runs the package's tests?",
+        "The README gives runnable usage and the test command.",
+        "The README gives no runnable usage, or no test command."
+      ),
+      Cons(
+        Asked(
+          "expected-features",
+          "Read the README's expected features. Do they name only what a consumer or the environment must supply for the package to be useful, such as a runtime, a store, a target or a variable, and nothing the package lacks or plans?",
+          "Expected features name only what a consumer or the environment supplies.",
+          "Expected features list work the package lacks or plans."
+        ),
+        Cons(
+          Asked(
+            "present-tense",
+            "Read the whole README. Is it written as present fact, stating what is, with no history: no earlier designs, no account of what changed, no dates of decisions, and no notes that revise earlier text?",
+            "The README states the current design as present fact.",
+            "The README narrates history, revisions or earlier designs."
+          ),
+          Cons(
+            Asked(
+              "purpose",
+              "Read the README's opening. Does its title name the package, and does one sentence after the title state what the package is?",
+              "The title names the package and one sentence states what it is.",
+              "The title does not name the package, or no sentence states what it is."
+            ),
+            Cons(
+              Asked(
+                "synopsis",
+                "Read the README's synopsis. Does it state what the package is, the need it answers and the mechanism it answers it by, each concretely?",
+                "The synopsis states what, why and how, each concretely.",
+                "The synopsis misses what, why or how, or states one only in general terms."
+              ),
+              Nil
+            )
+          )
+        )
+      )
+    )
+  )
+) ;
+
+/// `code` holds its six questions.
+@[ runs("6") ]
+def codeAsks : () => Integer ;
+def codeAsks = thunk { run questions <- questionsOf(code); become size(Question, questions) } ;
+
+/// `docs` holds its six questions.
+@[ runs("6") ]
+def docsAsks : () => Integer ;
+def docsAsks = thunk { run questions <- questionsOf(docs); become size(Question, questions) } ;
+
+/// `code` asks its questions in their names' order.
+@[ runs("Cons(\"absence\", Cons(\"conversions\", Cons(\"dependencies\", Cons(\"specifications\", Cons(\"suppressions\", Cons(\"test-names\", Nil))))))") ]
+def codeNames : () => List(String) ;
+def codeNames = thunk { run questions <- questionsOf(code); become names(questions) } ;
+
+/// `docs` asks its questions in their names' order.
+@[ runs("Cons(\"decisions\", Cons(\"examples\", Cons(\"expected-features\", Cons(\"present-tense\", Cons(\"purpose\", Cons(\"synopsis\", Nil))))))") ]
+def docsNames : () => List(String) ;
+def docsNames = thunk { run questions <- questionsOf(docs); become names(questions) } ;
+
+/// The question `rubrics/fixtures/code/isolates` names is `code`'s sixth,
+/// found by its position: no admitted form compares two strings (gandr #1832).
+@[ runs("\"test-names\"") ]
+def codeIsolates : () => String ;
+def codeIsolates = thunk {
+  run questions <- questionsOf(code);
+  run named <- names(questions);
+  become nth(String, named, 5, "")
+} ;
+
+/// The question `rubrics/fixtures/docs/isolates` names is `docs`'s fourth.
+@[ runs("\"present-tense\"") ]
+def docsIsolates : () => String ;
+def docsIsolates = thunk {
+  run questions <- questionsOf(docs);
+  run named <- names(questions);
+  become nth(String, named, 3, "")
+} ;
+
+/// The set's band is one a rubric may hold.
+@[ runs("+{.0 = unit}") ]
+def setBanded : () => Bool ;
+def setBanded = thunk { become banded(setBand) } ;
+
+/// A band whose low bound is above its high one is not.
+@[ runs("+{.1 = unit}") ]
+def invertedBanded : () => Bool ;
+def invertedBanded = thunk { become banded(Bounds(750000, 250000)) } ;
+
+/// Nor is one whose bounds are equal.
+@[ runs("+{.1 = unit}") ]
+def equalBanded : () => Bool ;
+def equalBanded = thunk { become banded(Bounds(500000, 500000)) } ;
+
+/// Nor is one whose high bound is past one.
+@[ runs("+{.1 = unit}") ]
+def overBanded : () => Bool ;
+def overBanded = thunk { become banded(Bounds(250000, 1500000)) } ;

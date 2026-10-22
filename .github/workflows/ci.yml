@@ -379,6 +379,7 @@ jobs:
     env:
       CI_BUILD_STATE: cargo-test
       CI_WITNESSES: "true"
+      CI_GANDR: "true"
     steps: &workspace-test-steps
       - *git-checkout
       - *trust-workspace
@@ -411,6 +412,12 @@ jobs:
       - name: resolve adequacy witnesses
         if: ${{ !cancelled() && env.CI_WITNESSES == 'true' && steps.build-workspace.outcome == 'success' }}
         run: mise run check:witnesses
+      # The gandr sources under domhringr/ run through the driver built from
+      # the sibling this lane checked out. Their verdict is platform-neutral,
+      # so the Linux lane alone runs them.
+      - name: check the gandr sources with the sibling's driver
+        if: ${{ !cancelled() && env.CI_GANDR == 'true' }}
+        run: mise run check:gandr
       - *upload-test-report
       - *archive-build-state
       - *upload-build-state
