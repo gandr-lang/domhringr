@@ -255,13 +255,14 @@ if [[ $head != "$rev" ]]; then
 fi
 '''
 
-# The rubric verdict written in gandr: `domhringr/` holds gandr sources whose
-# `runs` exemplars state the verdicts the Rust crates give. The driver is
-# built from the sibling at the pin, release-profiled (gandr's release profile
-# builds faster than its debug one), in a target directory of its own so the
-# wall's parallel tasks never share a lock or flags with it. `gandr check`
-# settles every declaration, running each exemplar and comparing its value;
-# `gandr fmt --check` holds each source to the layout the formatter writes.
+# The rubric verdict and the record fold written in gandr: `domhringr/` holds
+# gandr sources whose `runs` exemplars state the values the Rust crates give.
+# The driver is built from the sibling at the pin, release-profiled (gandr's
+# release profile builds faster than its debug one), in a target directory of
+# its own so the wall's parallel tasks never share a lock or flags with it.
+# `gandr check` settles every declaration, running each exemplar and comparing
+# its value; `gandr fmt --check` holds each source to the layout the formatter
+# writes.
 ["check:gandr"]
 description = "The gandr sources under domhringr/, checked, run and formatted by the sibling's driver"
 dir = "{{config_root}}/vendor/gandr"

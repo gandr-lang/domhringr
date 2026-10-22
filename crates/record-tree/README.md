@@ -98,6 +98,8 @@ Mechanism, decisions with their alternatives and reversals, and witnesses live i
 | Networking | [`node`](src/node.rs) |
 | Dependencies, references | [`src/lib.rs`](src/lib.rs) |
 
+The fold is also written in gandr. [`domhringr/record/`](../../domhringr/record/) states the receipt kinds, the authority checks with their refusals, and the fold into the view as gandr sources; their `runs` exemplars give the views this crate's fold gives on its test sequences. `mise run check:gandr` checks and runs them with the driver built from the gandr sibling at its pin.
+
 ## License
 
 `Apache-2.0 WITH LLVM-exception`; see the workspace [Apache-2.0 license](../../LICENSE.Apache-2.0.txt) and [LLVM exception](../../LICENSE.LLVM-exception.txt).
