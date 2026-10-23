@@ -145,6 +145,10 @@ done
 mkdir -p "$action_cache" "$scratch/actions"
 cp -R "$action_cache/." "$scratch/actions/"
 git clone --quiet --local --no-hardlinks -- "{{config_root}}" "$scratch/checkout"
+# act names the repository after the clone's origin, a local path here, and
+# every checkout step refuses a path for `owner/repo`; the source's own origin
+# names it.
+git -C "$scratch/checkout" remote set-url origin "$(git -C "{{config_root}}" remote get-url origin)"
 mise run sibling:sync "$scratch/checkout"
 cd "$scratch/checkout"
 ACT_RUN_ID=${scratch##*/} yq '.name += "-" + strenv(ACT_RUN_ID)' .github/workflows/ci.yml > "$scratch/ci.yml"
