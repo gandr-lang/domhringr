@@ -1,0 +1,313 @@
+// A dialogue: a task's admitted moves, each placed at `(attempt, seq)`. It
+// follows `derive` of `domhringr-record-index`
+// (`crates/record-index/src/dialogue.rs`). Attempts count from one in the
+// fold's canonical order, and each dispatch holds sequence zero of its own
+// attempt. Every later move takes the next sequence of the attempt its
+// dispatch began. The order is the fold's, never arrival's. A receipt the
+// fold refused, or one that is no move, has no place. A move naming no
+// dispatch admitted before it is no dialogue.
+//
+// The exemplars place the steps the fold leaves for its own test sequences.
+// `concurrentCommits` is the sequence of the witness
+// `concurrent_moves_of_two_authors_take_distinct_keys`.
+//
+// A list built as a recursive call's argument states its type: a descent
+// call types no constructor argument by its parameter (gandr #2127).
+
+// Lists.
+import "../strategy/rubric.gandr" ;
+
+// Rulings and grades.
+import "../strategy/grade.gandr" ;
+
+// The receipt kinds.
+import "./receipt.gandr" ;
+
+// The checks and their refusals.
+import "./authority.gandr" ;
+
+// The channels' moves and the monitor that replays them.
+import "../arena/protocol.gandr" ;
+
+// The fold, its steps and its test sequences.
+import "./fold.gandr" ;
+
+/// A move's place: its attempt, counted from one, its sequence within the
+/// attempt, counted from zero at the dispatch, and its commit.
+@[ checks ]
+data Place : Type {
+  PlacedAt : (attempt : Integer, seq : Integer, commit : Integer) --> Place;
+}
+
+/// Where an attempt stands: the dispatch that began it, its number, and the
+/// last sequence placed in it.
+@[ checks ]
+data Position : Type {
+  Began : (dispatch : Integer, attempt : Integer, last : Integer) --> Position;
+}
+
+/// A task's steps placed: every move in place order with the number of the
+/// last attempt, zero for an undispatched task; or the dispatch a move names
+/// that no admitted dispatch before it is.
+@[ checks ]
+data Derivation : Type {
+  Derived : (moves : List(Place), attempts : Integer) --> Derivation;
+  NoDispatch : (dispatch : Integer) --> Derivation;
+}
+
+/// The dispatch a step's move answers, or none for a dispatch.
+@[ checks ]
+def answering(step : Step) -> -F Maybe(Integer) {
+  case step {
+    DispatchStep(edition, seat, brief) => (None : Maybe(Integer)),
+    ReportStep(dispatch, author, content, summary) => Some(dispatch),
+    HandoffStep(dispatch, giver, to) => Some(dispatch),
+    RetireStep(dispatch, author) => Some(dispatch),
+    PauseStep(dispatch, author) => Some(dispatch),
+    VerdictStep(dispatch, judge, rubric, transcript, answers) => Some(dispatch),
+    VerifiedStep(dispatch, runner, playbook, named, output, status) => Some(dispatch),
+    GradedStep(dispatch, verdict, rubric, grades, composed) => Some(dispatch),
+    DecideStep(dispatch, operator, decision) => Some(dispatch),
+    LandedStep(dispatch, decided, operator, merge) => Some(dispatch)
+  }
+}
+
+/// The position of the attempt `dispatch` began.
+@[ checks ]
+def rec positionOf(dispatch : Integer, positions : List(Position)) -> -F Maybe(Position) {
+  case positions {
+    Nil => (None : Maybe(Position)),
+    Cons(position, rest) => case position {
+      Began(began, attempt, last) => case began == dispatch {
+        true => Some(position),
+        false => become positionOf[<](dispatch, rest)
+      }
+    }
+  }
+}
+
+/// The positions with the attempt `dispatch` began standing at `last`.
+@[ checks ]
+def rec standAt(
+  dispatch : Integer,
+  last : Integer,
+  positions : List(Position)
+) -> -F List(Position) {
+  case positions {
+    Nil => (Nil : List(Position)),
+    Cons(position, rest) => {
+      run later <- standAt[<](dispatch, last, rest);
+      case position {
+        Began(began, attempt, was) => case began == dispatch {
+          true => (Cons(Began(began, attempt, last), later) : List(Position)),
+          false => (Cons(position, later) : List(Position))
+        }
+      }
+    }
+  }
+}
+
+/// Whether `a` stands before `b`: an earlier attempt, or the same attempt at
+/// an earlier sequence.
+@[ checks ]
+def before(a : Place, b : Place) -> -F Bool {
+  case a {
+    PlacedAt(attempt, seq, commit) => case b {
+      PlacedAt(other, otherSeq, otherCommit) => {
+        run earlier <- attempt < other;
+        case earlier {
+          true => earlier,
+          false => {
+            run same <- attempt == other;
+            case same {
+              true => seq < otherSeq,
+              false => same
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// `move` inserted into `places`, held in place order.
+@[ checks ]
+def rec inPlace(move : Place, places : List(Place)) -> -F List(Place) {
+  case places {
+    Nil => (Cons(move, Nil) : List(Place)),
+    Cons(held, rest) => {
+      run first <- before(move, held);
+      case first {
+        true => (Cons(move, places) : List(Place)),
+        false => {
+          run later <- inPlace[<](move, rest);
+          (Cons(held, later) : List(Place))
+        }
+      }
+    }
+  }
+}
+
+/// The steps placed, after `attempts` attempts whose positions are
+/// `positions`, with `placed` the moves placed so far in place order.
+@[ checks ]
+def rec placeSteps(
+  steps : List(Stepped),
+  attempts : Integer,
+  positions : List(Position),
+  placed : List(Place)
+) -> -F Derivation {
+  case steps {
+    Nil => Derived(placed, attempts),
+    Cons(stepped, rest) => case stepped {
+      StepAt(commit, step) => case answering(step) {
+        None => {
+          run next <- attempts + 1;
+          run more <- inPlace(PlacedAt(next, 0, commit), placed);
+          become placeSteps[<](
+            rest,
+            next,
+            (Cons(Began(commit, next, 0), positions) : List(Position)),
+            more
+          )
+        },
+        Some(dispatch) => case positionOf(dispatch, positions) {
+          None => NoDispatch(dispatch),
+          Some(position) => case position {
+            Began(began, attempt, last) => {
+              run seq <- last + 1;
+              run advanced <- standAt(dispatch, seq, positions);
+              run more <- inPlace(PlacedAt(attempt, seq, commit), placed);
+              become placeSteps[<](rest, attempts, advanced, more)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// A task's steps, in the fold's canonical order, placed as a dialogue.
+@[ checks ]
+def derive(steps : List(Stepped)) -> -F Derivation {
+  become placeSteps(steps, 0, Nil, Nil)
+}
+
+/// The dialogue of a folded tree, or none for an unopened one.
+@[ checks ]
+def dialogueOf(folded : Folded) -> -F Maybe(Derivation) {
+  case stepsOf(folded) {
+    None => (None : Maybe(Derivation)),
+    Some(steps) => {
+      run derived <- derive(steps);
+      Some(derived)
+    }
+  }
+}
+
+/// `concurrent_moves_of_two_authors_take_distinct_keys`: a dispatch, its
+/// report, the seat's retirement and the owner's verification, then the
+/// owner and the member granted dispatching concurrently. The retirement is
+/// placed before the verification, as the witness's order puts it.
+@[ checks ]
+def concurrentCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run granted <- child(2, 10, 1, Grant(80));
+  run dispatched <- child(3, 10, 2, Dispatch(1, 20, briefOne));
+  run reported <- child(4, 20, 3, Report(3, 701, "done"));
+  run retired <- child(5, 20, 4, Retire(3));
+  run verified <- child(6, 10, 4, Verified(3, 10, 904, "check", 706, Exited(0)));
+  run byOwner <- merged(7, 10, 5, 6, Dispatch(1, 20, briefOne));
+  run byMember <- merged(8, 80, 5, 6, Dispatch(1, 20, briefOne));
+  (Cons(
+    opened,
+    Cons(
+      granted,
+      Cons(
+        dispatched,
+        Cons(reported, Cons(retired, Cons(verified, Cons(byOwner, Cons(byMember, Nil)))))
+      )
+    )
+  ) : List(Commit))
+}
+
+/// Each move takes its own place: the first attempt's four, then each
+/// concurrent dispatch an attempt of its own, three in all.
+@[ runs("Some(Derived(Cons(PlacedAt(1, 0, 3), Cons(PlacedAt(1, 1, 4), Cons(PlacedAt(1, 2, 5), Cons(PlacedAt(1, 3, 6), Cons(PlacedAt(2, 0, 7), Cons(PlacedAt(3, 0, 8), Nil)))))), 3))") ]
+def concurrent : () => Maybe(Derivation) ;
+def concurrent = thunk {
+  run commits <- concurrentCommits();
+  run folded <- fold(100, commits);
+  become dialogueOf(folded)
+} ;
+
+/// The lifecycle through its landing: a move of every kind but a handoff and
+/// a pause, the rework's fresh dispatch beginning the second attempt.
+@[ runs("Some(Derived(Cons(PlacedAt(1, 0, 2), Cons(PlacedAt(1, 1, 3), Cons(PlacedAt(1, 2, 4), Cons(PlacedAt(1, 3, 5), Cons(PlacedAt(1, 4, 6), Cons(PlacedAt(1, 5, 7), Cons(PlacedAt(1, 6, 8), Cons(PlacedAt(2, 0, 9), Cons(PlacedAt(2, 1, 10), Cons(PlacedAt(2, 2, 11), Nil)))))))))), 2))") ]
+def lifecycle : () => Maybe(Derivation) ;
+def lifecycle = thunk {
+  run commits <- lifecycleCommits();
+  run reworked <- child(8, 10, 7, Decide(2, 10, Rework("lint red")));
+  run next <- child(9, 10, 8, Dispatch(1, 20, briefOne));
+  run land <- child(10, 10, 9, Decide(9, 10, Land));
+  run landing <- child(11, 10, 10, Landed(10, revision));
+  run all <- append(Commit, commits, reworked);
+  run more <- append(Commit, all, next);
+  run most <- append(Commit, more, land);
+  run every <- append(Commit, most, landing);
+  run folded <- fold(100, every);
+  become dialogueOf(folded)
+} ;
+
+/// Editions 1 and 2: the refused report, pause and edition-99 attempt have
+/// no place, and the second attempt's pause takes its sequence.
+@[ runs("Some(Derived(Cons(PlacedAt(1, 0, 3), Cons(PlacedAt(1, 1, 5), Cons(PlacedAt(1, 2, 6), Cons(PlacedAt(2, 0, 7), Cons(PlacedAt(2, 1, 8), Cons(PlacedAt(2, 2, 9), Cons(PlacedAt(2, 3, 10), Nil))))))), 2))") ]
+def editions : () => Maybe(Derivation) ;
+def editions = thunk {
+  run commits <- editionCommits();
+  run folded <- fold(100, commits);
+  become dialogueOf(folded)
+} ;
+
+/// A report concurrent with a later dispatch is placed in the attempt its
+/// dispatch began, before the later attempt, whatever its canonical place.
+@[ runs("Some(Derived(Cons(PlacedAt(1, 0, 2), Cons(PlacedAt(1, 1, 6), Cons(PlacedAt(2, 0, 3), Nil))), 2))") ]
+def superseded : () => Maybe(Derivation) ;
+def superseded = thunk {
+  run commits <- supersededCommits();
+  run folded <- fold(100, commits);
+  become dialogueOf(folded)
+} ;
+
+/// A handoff takes the next sequence of its attempt.
+@[ runs("Some(Derived(Cons(PlacedAt(1, 0, 2), Cons(PlacedAt(1, 1, 3), Cons(PlacedAt(1, 2, 4), Nil))), 1))") ]
+def handoffPlaces : () => Maybe(Derivation) ;
+def handoffPlaces = thunk {
+  run commits <- handoffCommits();
+  run folded <- fold(100, commits);
+  become dialogueOf(folded)
+} ;
+
+/// An opened tree with no move is a dialogue of no attempt.
+@[ runs("Some(Derived(Nil, 0))") ]
+def silent : () => Maybe(Derivation) ;
+def silent = thunk {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run folded <- fold(100, Cons(opened, Nil));
+  become dialogueOf(folded)
+} ;
+
+/// An unopened tree has no dialogue.
+@[ runs("None") ]
+def unopened : () => Maybe(Derivation) ;
+def unopened = thunk {
+  run folded <- fold(100, Nil);
+  become dialogueOf(folded)
+} ;
+
+/// A move naming no dispatch placed before it is no dialogue.
+@[ runs("NoDispatch(9)") ]
+def unanswered : () => Derivation ;
+def unanswered = thunk {
+  become derive(Cons(StepAt(5, RetireStep(9, 20)), Nil))
+} ;

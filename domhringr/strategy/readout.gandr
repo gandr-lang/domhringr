@@ -1,0 +1,367 @@
+// A readout: what a judge read out of a model for one question — one
+// probability per option, in letter order from `A`, the mass outside the
+// option letters, and the answer letter, the option holding the most alone.
+// It follows `Readout::new` of `domhringr-record-tree`
+// (`crates/record-tree/src/ruling.rs`), its exemplars the cases of the
+// witness `a_readout_names_the_option_holding_the_most`, and a refusal
+// becomes the ruling's reason as `judge-oracle`'s readout maps it
+// (`crates/judge-oracle/src/readout.rs`): a tie is `Tied`, any other an
+// `Endpoint` that answered no distribution.
+//
+// A probability is an integer count of millionths, as the rubric's are. The
+// Rust readout admits a sum within 1e-9 of one; no two sums of millionths
+// differ by less than 1e-6, so here the sum is exactly one million.
+
+// Lists, and the element at an index.
+import "./rubric.gandr" ;
+
+// Rulings and the reasons a ruling is unread.
+import "./grade.gandr" ;
+
+/// A readout: its answer letter, one probability per option in letter order,
+/// and the mass outside the option letters.
+@[ checks ]
+data Readout : Type {
+  ReadAs : (letter : String, probabilities : List(Integer), outside : Integer) --> Readout;
+}
+
+/// Why a vector is no readout.
+@[ checks ]
+data ReadoutError : Type {
+  Few : ReadoutError;
+  Many : ReadoutError;
+  Unsummed : ReadoutError;
+  Shared : ReadoutError;
+}
+
+/// A vector read: its readout, or why it is none.
+@[ checks ]
+data Reading : Type {
+  Reads : (readout : Readout) --> Reading;
+  Refuses : (error : ReadoutError) --> Reading;
+}
+
+/// Where the greatest probability stands: alone at an index counted from
+/// zero, or shared by two options.
+@[ checks ]
+data Most : Type {
+  Alone : (place : Integer) --> Most;
+  Tie : Most;
+}
+
+/// The option letters in order, `A` through `Z`.
+@[ checks ]
+def letters : List(String) ;
+def letters = Cons(
+  "A",
+  Cons(
+    "B",
+    Cons(
+      "C",
+      Cons(
+        "D",
+        Cons(
+          "E",
+          Cons(
+            "F",
+            Cons(
+              "G",
+              Cons(
+                "H",
+                Cons(
+                  "I",
+                  Cons(
+                    "J",
+                    Cons(
+                      "K",
+                      Cons(
+                        "L",
+                        Cons(
+                          "M",
+                          Cons(
+                            "N",
+                            Cons(
+                              "O",
+                              Cons(
+                                "P",
+                                Cons(
+                                  "Q",
+                                  Cons(
+                                    "R",
+                                    Cons(
+                                      "S",
+                                      Cons(
+                                        "T",
+                                        Cons(
+                                          "U",
+                                          Cons("V", Cons("W", Cons("X", Cons("Y", Cons("Z", Nil)))))
+                                        )
+                                      )
+                                    )
+                                  )
+                                )
+                              )
+                            )
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+) ;
+
+/// The sum of a list of integers.
+@[ checks ]
+def rec total(xs : List(Integer)) -> -F Integer {
+  case xs {
+    Nil => 0,
+    Cons(x, rest) => { run later <- total[<](rest); x + later }
+  }
+}
+
+/// Where the greatest of `xs` stands, `xs` following a prefix whose greatest
+/// is `best` at `place`, shared when `tied`, and `xs`'s first element at
+/// `index`. A probability below the greatest leaves it; one equal to it ties
+/// it; one above it stands alone.
+@[ checks ]
+def rec most(
+  xs : List(Integer),
+  index : Integer,
+  best : Integer,
+  place : Integer,
+  tied : Bool
+) -> -F Most {
+  case xs {
+    Nil => case tied {
+      true => Tie,
+      false => Alone(place)
+    },
+    Cons(x, rest) => {
+      run next <- index + 1;
+      run below <- x < best;
+      case below {
+        true => become most[<](rest, next, best, place, tied),
+        false => {
+          run equal <- x == best;
+          case equal {
+            true => become most[<](rest, next, best, place, true),
+            false => become most[<](rest, next, x, index, false)
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The readout of `probabilities`, one per option in letter order, with
+/// `outside` the mass outside the option letters: refused for fewer than two
+/// options, then for more than twenty-six, then for a sum other than one,
+/// then for two options sharing the greatest.
+@[ checks ]
+def readoutOf(probabilities : List(Integer), outside : Integer) -> -F Reading {
+  run count <- size(Integer, probabilities);
+  run few <- count < 2;
+  case few {
+    true => Refuses(Few),
+    false => {
+      run many <- count > 26;
+      case many {
+        true => Refuses(Many),
+        false => {
+          run sum <- total(probabilities);
+          run whole <- sum == 1000000;
+          case whole {
+            false => Refuses(Unsummed),
+            true => case probabilities {
+              Nil => Refuses(Few),
+              Cons(first, rest) => {
+                run greatest <- most(rest, 1, first, 0, false);
+                case greatest {
+                  Tie => Refuses(Shared),
+                  Alone(place) => {
+                    run letter <- nth(String, letters, place, "");
+                    Reads(ReadAs(letter, probabilities, outside))
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The ruling a reading records: the readout read, or the reason it is
+/// unread — a tie as tied, any other refusal as an endpoint that answered no
+/// distribution.
+@[ checks ]
+def ruling(reading : Reading) -> -F Ruling {
+  case reading {
+    Reads(read) => case read {
+      ReadAs(letter, probabilities, outside) => Read(probabilities, outside)
+    },
+    Refuses(error) => case error {
+      Shared => Unread(Tied),
+      Few => Unread(Endpoint),
+      Many => Unread(Endpoint),
+      Unsummed => Unread(Endpoint)
+    }
+  }
+}
+
+/// The answer letter of a reading, or the empty text for a refused one.
+@[ checks ]
+def letterOf(reading : Reading) -> -F String {
+  case reading {
+    Reads(read) => case read {
+      ReadAs(letter, probabilities, outside) => letter
+    },
+    Refuses(error) => ""
+  }
+}
+
+/// One zero per element of `xs`.
+@[ checks ]
+def rec zeroed(xs : List(String)) -> -F List(Integer) {
+  case xs {
+    Nil => (Nil : List(Integer)),
+    Cons(x, rest) => {
+      run later <- zeroed[<](rest);
+      (Cons(0, later) : List(Integer))
+    }
+  }
+}
+
+/// One probability per element of `xs`, the last holding all.
+@[ checks ]
+def rec lastHolds(xs : List(String)) -> -F List(Integer) {
+  case xs {
+    Nil => (Nil : List(Integer)),
+    Cons(x, rest) => case rest {
+      Nil => (Cons(1000000, Nil) : List(Integer)),
+      Cons(y, more) => {
+        run later <- lastHolds[<](rest);
+        (Cons(0, later) : List(Integer))
+      }
+    }
+  }
+}
+
+/// `0.75, 0.25`: `A`.
+@[ runs("\"A\"") ]
+def firstMost : () => String ;
+def firstMost = thunk {
+  run reading <- readoutOf(Cons(750000, Cons(250000, Nil)), 0);
+  become letterOf(reading)
+} ;
+
+/// `0.25, 0.75`: `B`.
+@[ runs("\"B\"") ]
+def lastMost : () => String ;
+def lastMost = thunk {
+  run reading <- readoutOf(Cons(250000, Cons(750000, Nil)), 0);
+  become letterOf(reading)
+} ;
+
+/// `0.25, 0.5, 0.25`: `B`.
+@[ runs("\"B\"") ]
+def middleMost : () => String ;
+def middleMost = thunk {
+  run reading <- readoutOf(Cons(250000, Cons(500000, Cons(250000, Nil))), 0);
+  become letterOf(reading)
+} ;
+
+/// `0.5, 0.25, 0.25`: `A`.
+@[ runs("\"A\"") ]
+def firstOfThree : () => String ;
+def firstOfThree = thunk {
+  run reading <- readoutOf(Cons(500000, Cons(250000, Cons(250000, Nil))), 0);
+  become letterOf(reading)
+} ;
+
+/// Twenty-six options, the last holding all: `Z`.
+@[ runs("\"Z\"") ]
+def lastOfAll : () => String ;
+def lastOfAll = thunk {
+  run all <- lastHolds(letters);
+  run reading <- readoutOf(all, 0);
+  become letterOf(reading)
+} ;
+
+/// One option is too few.
+@[ runs("Refuses(Few)") ]
+def one : () => Reading ;
+def one = thunk { become readoutOf(Cons(1000000, Nil), 0) } ;
+
+/// Twenty-seven options are too many.
+@[ runs("Refuses(Many)") ]
+def twentySeven : () => Reading ;
+def twentySeven = thunk {
+  run after <- zeroed(letters);
+  become readoutOf(Cons(1000000, after), 0)
+} ;
+
+/// A sum off one is refused.
+@[ runs("Refuses(Unsummed)") ]
+def offOne : () => Reading ;
+def offOne = thunk { become readoutOf(Cons(750000, Cons(250001, Nil)), 0) } ;
+
+/// Two halves share the greatest.
+@[ runs("Refuses(Shared)") ]
+def halves : () => Reading ;
+def halves = thunk { become readoutOf(Cons(500000, Cons(500000, Nil)), 0) } ;
+
+/// The first and the last share the greatest.
+@[ runs("Refuses(Shared)") ]
+def outerTie : () => Reading ;
+def outerTie = thunk { become readoutOf(Cons(400000, Cons(200000, Cons(400000, Nil))), 0) } ;
+
+/// The last two share the greatest.
+@[ runs("Refuses(Shared)") ]
+def innerTie : () => Reading ;
+def innerTie = thunk { become readoutOf(Cons(200000, Cons(400000, Cons(400000, Nil))), 0) } ;
+
+/// Two sharing a lesser value are not tied: `C`.
+@[ runs("\"C\"") ]
+def lesserTie : () => String ;
+def lesserTie = thunk {
+  run reading <- readoutOf(Cons(200000, Cons(200000, Cons(600000, Nil))), 0);
+  become letterOf(reading)
+} ;
+
+/// The readout holds its probabilities and its outside mass as given.
+@[ runs("Reads(ReadAs(\"B\", Cons(250000, Cons(750000, Nil)), 500000))") ]
+def held : () => Reading ;
+def held = thunk { become readoutOf(Cons(250000, Cons(750000, Nil)), 500000) } ;
+
+/// A readout's ruling is the ruling the record carries.
+@[ runs("Read(Cons(250000, Cons(750000, Nil)), 12500)") ]
+def readRuling : () => Ruling ;
+def readRuling = thunk {
+  run reading <- readoutOf(Cons(250000, Cons(750000, Nil)), 12500);
+  become ruling(reading)
+} ;
+
+/// A tie is ruled unread as tied.
+@[ runs("Unread(Tied)") ]
+def tiedRuling : () => Ruling ;
+def tiedRuling = thunk {
+  run reading <- readoutOf(Cons(500000, Cons(500000, Nil)), 0);
+  become ruling(reading)
+} ;
+
+/// A vector off one is ruled unread for its endpoint.
+@[ runs("Unread(Endpoint)") ]
+def unsummedRuling : () => Ruling ;
+def unsummedRuling = thunk {
+  run reading <- readoutOf(Cons(750000, Cons(250001, Nil)), 0);
+  become ruling(reading)
+} ;
