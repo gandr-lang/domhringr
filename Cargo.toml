@@ -607,14 +607,14 @@ private_intra_doc_links = "allow"
 # ownership cycles. Loaded from the pinned Git source by `mise run check:dylint`.
 [[workspace.metadata.dylint.libraries]]
 git = "https://github.com/gandr-lang/quenchant"
-rev = "83413e066658422dbd4105485e9c737537819465"
+rev = "85d9eae4432b2e7f6029653258ba1220f8202c60"
 pattern = "crates/quenchant-dylints"
 
 # Sibling checkouts a path dependency reaches under `vendor/`, each at the
 # revision this tree builds against. `mise run sibling:sync` materialises
 # them; CI checks each one out at its revision before the first cargo step.
 [workspace.metadata.siblings]
-gandr = "a901849d8a468f6d942c947645f4af061c83be18"
+gandr = "038f2d0fd42358c959ba3af2da4984a543ccd30a"
 
 # The everyday optimized build. Size-optimized and nothing else, so each crate
 # compiles independently in parallel; the whole-program work lives in `dist`.
