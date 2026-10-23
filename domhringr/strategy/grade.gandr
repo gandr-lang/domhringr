@@ -50,7 +50,7 @@ def grade(band : Band, ruling : Ruling) -> -F Grade {
     Read(probabilities, outside) => case probabilities {
       Nil => Refused,
       Cons(holds, rest) => case band {
-        Bounds(low, high) => {
+        #{.low = low, .high = high} => {
           run met <- holds >= high;
           case met {
             true => Met,
@@ -100,7 +100,8 @@ def readout(holds : Integer) -> -F Ruling {
 
 /// The band of the witness, `low = 0.25` and `high = 0.75`.
 @[ checks ]
-def quarters = (Bounds(250000, 750000) : Band);
+def quarters : Band ;
+def quarters = #{low = 250000, high = 750000} ;
 
 /// The table's rulings over the `met` member of a pair of six questions:
 /// every criterion holds.

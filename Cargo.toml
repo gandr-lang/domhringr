@@ -604,7 +604,7 @@ pattern = "crates/quenchant-dylints"
 # revision this tree builds against. `mise run sibling:sync` materialises
 # them; CI checks each one out at its revision before the first cargo step.
 [workspace.metadata.siblings]
-gandr = "350c5d4e5f96f465e8c1c168f8cdc1e7cb5331e8"
+gandr = "1c14fda6655ad51d8838c1825bad8f40d1645005"
 
 # The everyday optimized build. Size-optimized and nothing else, so each crate
 # compiles independently in parallel; the whole-program work lives in `dist`.
