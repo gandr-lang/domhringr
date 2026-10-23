@@ -1,0 +1,320 @@
+// A playbook's plan and run: its steps become the verifications its run
+// commits, in step order, and the gradings it asks of judges, one per rubric
+// in the order first named. It follows `Plan::gradings` of
+// `domhringr-strategy-document` (`crates/strategy-document/src/load.rs`) and
+// `run_playbook` of `domhringr-surface-peer`
+// (`crates/surface-peer/src/strategy.rs`). Its exemplars are the plan of the
+// witness `a_plan_reads_its_rubrics_beside_its_playbook` and the run of the
+// witness `a_playbook_runs_its_checks_and_replay_shows_the_receipts`; the
+// fold admits the run's verifications and grading.
+//
+// A rubric's file and a question are named by keys, since the fragment
+// compares no strings; the exemplars key a rubric by its hash and a question
+// by its hash. Running a verifier's process and reading the playbook's TOML
+// are effects the Rust crates keep: a run's output digest and status arrive
+// as values.
+
+// Lists, the rubric, its band and its questions.
+import "./rubric.gandr" ;
+
+// Rulings and grades.
+import "./grade.gandr" ;
+
+// A rubric's grades composed.
+import "./compose.gandr" ;
+
+// Rubric evaluation.
+import "./evaluate.gandr" ;
+
+// The receipt kinds.
+import "../record/receipt.gandr" ;
+
+// The checks and their refusals.
+import "../record/authority.gandr" ;
+
+// The channels' moves and the monitor that replays them.
+import "../arena/protocol.gandr" ;
+
+// The fold, its steps and its commit helpers.
+import "../record/fold.gandr" ;
+
+/// One step of a playbook: a verifier run on the task's state, or a question
+/// of a rubric, each with the step's identifier.
+@[ checks ]
+data Check : Type {
+  VerifierCheck : (id : String) --> Check;
+  QuestionCheck : (id : String, rubric : Integer, question : Integer) --> Check;
+}
+
+/// A playbook: what it is called and its steps, in order.
+@[ checks ]
+data Playbook : Type {
+  PlaybookOf : (name : String, checks : List(Check)) --> Playbook;
+}
+
+/// One rubric a plan grades, by its key, with the questions its steps ask.
+@[ checks ]
+data Grading : Type {
+  GradingOf : (rubric : Integer, questions : List(Integer)) --> Grading;
+}
+
+/// What one verifier's run left: its output's digest and its status.
+@[ checks ]
+data Ran : Type {
+  RanAs : (output : Integer, status : Status) --> Ran;
+}
+
+/// `questions` with `question` after them, unless they ask it already.
+@[ checks ]
+def rec askedOnce(question : Integer, questions : List(Integer)) -> -F List(Integer) {
+  case questions {
+    Nil => (Cons(question, Nil) : List(Integer)),
+    Cons(held, rest) => case held == question {
+      true => questions,
+      false => {
+        run later <- askedOnce[<](question, rest);
+        (Cons(held, later) : List(Integer))
+      }
+    }
+  }
+}
+
+/// `gradings` with `question` asked of `rubric`: in its grading, once, or in
+/// a new grading after the others.
+@[ checks ]
+def rec added(rubric : Integer, question : Integer, gradings : List(Grading)) -> -F List(Grading) {
+  case gradings {
+    Nil => (Cons(GradingOf(rubric, Cons(question, Nil)), Nil) : List(Grading)),
+    Cons(grading, rest) => case grading {
+      GradingOf(held, questions) => case held == rubric {
+        true => {
+          run asked <- askedOnce(question, questions);
+          (Cons(GradingOf(held, asked), rest) : List(Grading))
+        },
+        false => {
+          run later <- added[<](rubric, question, rest);
+          (Cons(grading, later) : List(Grading))
+        }
+      }
+    }
+  }
+}
+
+/// `gradings` with each question step of `checks` asked, in step order.
+@[ checks ]
+def rec gradingsAfter(checks : List(Check), gradings : List(Grading)) -> -F List(Grading) {
+  case checks {
+    Nil => gradings,
+    Cons(check, rest) => case check {
+      VerifierCheck(id) => become gradingsAfter[<](rest, gradings),
+      QuestionCheck(id, rubric, question) => {
+        run next <- added(rubric, question, gradings);
+        become gradingsAfter[<](rest, next)
+      }
+    }
+  }
+}
+
+/// What `playbook` asks of judges: one grading per rubric its question steps
+/// name, in the order first named, with the questions they name in it, in
+/// step order, a question named twice asked once.
+@[ checks ]
+def gradings(playbook : Playbook) -> -F List(Grading) {
+  case playbook {
+    PlaybookOf(name, checks) => become gradingsAfter(checks, (Nil : List(Grading)))
+  }
+}
+
+/// The identifier of each verifier step of `checks`, in step order.
+@[ checks ]
+def rec verifierSteps(checks : List(Check)) -> -F List(String) {
+  case checks {
+    Nil => (Nil : List(String)),
+    Cons(check, rest) => case check {
+      QuestionCheck(id, rubric, question) => become verifierSteps[<](rest),
+      VerifierCheck(id) => {
+        run later <- verifierSteps[<](rest);
+        (Cons(id, later) : List(String))
+      }
+    }
+  }
+}
+
+/// The verification of each step of `steps` by `runner` on `dispatch`,
+/// under the playbook hashed as `hash`, paired in order with `runs`; a step
+/// past the last run, or a run past the last step, commits nothing.
+@[ checks ]
+def rec verifiedEach(
+  dispatch : Integer,
+  runner : Integer,
+  hash : Integer,
+  steps : List(String),
+  runs : List(Ran)
+) -> -F List(Kind) {
+  case steps {
+    Nil => (Nil : List(Kind)),
+    Cons(id, rest) => case runs {
+      Nil => (Nil : List(Kind)),
+      Cons(ran, more) => case ran {
+        RanAs(output, status) => {
+          run later <- verifiedEach[<](dispatch, runner, hash, rest, more);
+          (Cons(Verified(dispatch, runner, hash, id, output, status), later) : List(Kind))
+        }
+      }
+    }
+  }
+}
+
+/// What `playbook`, hashed as `hash`, commits of its verifier steps when
+/// `runner` runs it on `dispatch` and the runs leave `runs`, in step order.
+@[ checks ]
+def verifications(
+  playbook : Playbook,
+  hash : Integer,
+  dispatch : Integer,
+  runner : Integer,
+  runs : List(Ran)
+) -> -F List(Kind) {
+  case playbook {
+    PlaybookOf(name, checks) => {
+      run steps <- verifierSteps(checks);
+      become verifiedEach(dispatch, runner, hash, steps, runs)
+    }
+  }
+}
+
+/// `grading` evaluated against `rubric` on `dispatch` by `judge` over the
+/// transcript `transcript`, from `rulings`, one per question in the grading's
+/// order.
+@[ checks ]
+def gradingEvaluated(
+  grading : Grading,
+  rubric : Rubric,
+  dispatch : Integer,
+  judge : Integer,
+  transcript : Integer,
+  rulings : List(Ruling)
+) -> -F Evaluation {
+  case grading {
+    GradingOf(
+      hash,
+      questions
+    ) => become evaluate(rubric, hash, questions, dispatch, judge, transcript, rulings)
+  }
+}
+
+/// The plan witness's playbook: a verifier, then questions of rubric `1`
+/// (`one` keyed `11`, `two` keyed `12`) and of rubric `2` (`three` keyed
+/// `21`), interleaved, `two` asked twice.
+@[ checks ]
+def interleaved : Playbook ;
+def interleaved = PlaybookOf(
+  "p",
+  Cons(
+    VerifierCheck("a"),
+    Cons(
+      QuestionCheck("b", 1, 12),
+      Cons(
+        QuestionCheck("c", 2, 21),
+        Cons(QuestionCheck("d", 1, 11), Cons(QuestionCheck("e", 1, 12), Nil))
+      )
+    )
+  )
+) ;
+
+/// Rubrics in the order first named, their questions in step order, each
+/// once.
+@[ runs("Cons(GradingOf(1, Cons(12, Cons(11, Nil))), Cons(GradingOf(2, Cons(21, Nil)), Nil))") ]
+def interleavedGradings : () => List(Grading) ;
+def interleavedGradings = thunk { become gradings(interleaved) } ;
+
+/// The run witness's playbook `landing`: the verifiers `note` and `failing`,
+/// then the rubric `landing`'s three questions, keyed by their hashes.
+@[ checks ]
+def landingPlaybook : Playbook ;
+def landingPlaybook = PlaybookOf(
+  "landing",
+  Cons(
+    VerifierCheck("note"),
+    Cons(
+      VerifierCheck("failing"),
+      Cons(
+        QuestionCheck("landed", 903, 911),
+        Cons(QuestionCheck("passed", 903, 912), Cons(QuestionCheck("tested", 903, 913), Nil))
+      )
+    )
+  )
+) ;
+
+/// The verifiers' runs: `note` exits 0 with output `706`, `failing` exits 3
+/// with output `707`.
+@[ checks ]
+def landingRuns : List(Ran) ;
+def landingRuns = Cons(RanAs(706, Exited(0)), Cons(RanAs(707, Exited(3)), Nil)) ;
+
+/// One grading: the rubric `landing`, its questions in step order.
+@[ runs("Cons(GradingOf(903, Cons(911, Cons(912, Cons(913, Nil)))), Nil)") ]
+def landingGradings : () => List(Grading) ;
+def landingGradings = thunk { become gradings(landingPlaybook) } ;
+
+/// The owner `10` runs the playbook hashed `904` on the dispatch `2`: each
+/// verifier's step, output and status, in step order.
+@[ runs("Cons(Verified(2, 10, 904, \"note\", 706, Exited(0)), Cons(Verified(2, 10, 904, \"failing\", 707, Exited(3)), Nil))") ]
+def landingVerifications : () => List(Kind) ;
+def landingVerifications = thunk {
+  become verifications(landingPlaybook, 904, 2, 10, landingRuns)
+} ;
+
+/// The commits of a task the owner dispatches to `20`, then runs the
+/// playbook on: its two verifications, then its grading's verdict and
+/// grading, `tested` unread.
+@[ checks ]
+def ranCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run dispatched <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run verified <- verifications(landingPlaybook, 904, 2, 10, landingRuns);
+  run asked <- gradings(landingPlaybook);
+  case verified {
+    Nil => (Nil : List(Commit)),
+    Cons(note, rest) => case rest {
+      Nil => (Nil : List(Commit)),
+      Cons(failing, after) => case asked {
+        Nil => (Nil : List(Commit)),
+        Cons(grading, more) => {
+          run evaluation <- gradingEvaluated(grading, landingRubric, 2, 10, 705, partial);
+          case evaluation {
+            Evaluated(verdict, grades, composed) => {
+              run noted <- child(3, 10, 2, note);
+              run failed <- child(4, 10, 3, failing);
+              run ruled <- child(5, 10, 4, verdict);
+              run gradedBy <- child(6, 10, 5, Graded(5, grades, composed));
+              (Cons(
+                opened,
+                Cons(dispatched, Cons(noted, Cons(failed, Cons(ruled, Cons(gradedBy, Nil)))))
+              ) : List(Commit))
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The fold refuses none of the run's commits.
+@[ runs("Some(Nil)") ]
+def ranRefused : () => Maybe(List(RefusedCommit)) ;
+def ranRefused = thunk {
+  run commits <- ranCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The grading stands over the verifications: the attempt graded refused,
+/// `tested` unread.
+@[ runs("Some(Attempt(2, 1, BriefAt(\"domhringr://100/briefs/one\"), Held(20), Awaited, GradedBy(6, Refused)))") ]
+def ranCurrent : () => Maybe(Current) ;
+def ranCurrent = thunk {
+  run commits <- ranCommits();
+  run folded <- fold(100, commits);
+  become currentOf(folded)
+} ;
