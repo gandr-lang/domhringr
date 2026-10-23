@@ -141,6 +141,10 @@ jobs:
         with:
           path: &dylint-drivers ~/.dylint_drivers
           key: dylint-drivers-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'mise.toml', 'mise.lock') }}
+      # The policy state holds the lint records (`target/evidence`) beside the
+      # build that wrote them: a restored build that is fresh lints nothing
+      # and writes no record, so the obligations listing reads the records
+      # the state was built with.
       - &restore-policy-state
         name: restore Dylint library and gate binary
         id: policy-state-restore
@@ -148,8 +152,9 @@ jobs:
         with:
           path: &policy-state |
             target/dylint
+            target/evidence
             target/workflow-tools
-          key: &policy-state-key policy-state-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'mise.toml', 'mise.lock', 'Cargo.toml', 'Cargo.lock') }}
+          key: &policy-state-key policy-state-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'mise.toml', 'mise.lock', 'Cargo.toml', 'Cargo.lock') }}
       - &save-policy-state
         name: save Dylint library and gate binary
         if: ${{ !cancelled() && env.ACT != 'true' && ((github.event_name == 'push' && hashFiles('build-state-cargo-dylint-crate.tar.zst') != '') || (github.event_name == 'workflow_dispatch' && steps.policy-library.outcome == 'success' && steps.invocation-state.outcome == 'success')) && steps.policy-state-restore.outputs.cache-hit != 'true' }}
@@ -577,7 +582,9 @@ jobs:
         id: build-state-archive
         if: ${{ !cancelled() && github.event_name == 'merge_group' && steps.policy-library.outcome == 'success' && steps.invocation-state.outcome == 'success' && steps.policy-state-restore.outputs.cache-hit != 'true' }}
         shell: bash
-        run: tar -cf - target/dylint target/workflow-tools | zstd -T0 -3 -o "build-state-$GITHUB_JOB.tar.zst"
+        run: |
+          mkdir -p target/evidence
+          tar -cf - target/dylint target/evidence target/workflow-tools | zstd -T0 -3 -o "build-state-$GITHUB_JOB.tar.zst"
       - *upload-build-state
       - *save-policy-state
       - name: archive Dylint drivers
