@@ -172,6 +172,181 @@ for entry in "$publish/"*; do
 done
 '''
 
+# A worktree is removed when its branch lands, mechanically: nothing else
+# removed one but a seat remembering to, and a `pr:watch` that dies with its
+# shell never prints `pr-merged`, so landed worktrees and their build
+# directories piled up until a disk filled (gandr-lang/gandr#2008). `pr:open`,
+# `pr:land` and the `pre-start` hook run this sweep, and `pr:land` and
+# `pr:watch` remove the landed pull request's own worktree, so no seat has to
+# remember.
+#
+# The decisions are `.config/pr-stack/sweep.jq`'s, its cases held by
+# `check:pr-stack`; this task reads the facts and acts. A branch has landed
+# when Worktrunk reads it integrated into the default branch (`wt list`: the
+# same commit, an ancestor, or its changes already there, which holds a
+# branch whose server copy a restack moved) and its head is off origin/main's
+# first-parent line: the merge queue lands a branch as a merge's second
+# parent, while a branch cut from main and not yet committed to sits on that
+# line. A landed branch's worktree goes by `wt remove --foreground`, which
+# deletes the branch as merged and refuses a dirty or otherwise unsafe tree;
+# the sweep makes no safety check of its own, prints a refusal and keeps that
+# tree. The primary worktree, the caller's own and `wip/` branches stay. A
+# scratch worktree (`restack`'s, named `domhringr-scratch-<pid>.`) goes once
+# its process is gone, and an unnamed detached one under a temporary
+# directory once unchanged for 4 hours. Then `git worktree prune`, and
+# Worktrunk's trash (`.git/wt/trash`), whose background deletes die with the
+# shell that started them, is emptied.
+#
+# With `--guard` (`pr:open`, `pre-start`) the task refuses when the free
+# space left is under 150 GB, naming the largest build directories.
+["wt:sweep"]
+description = "Remove this clone's landed worktrees and leaked scratch, and with --guard refuse under 150 GB free"
+tools.jq = "1.8.1"
+usage = '''
+flag "--guard" help="refuse when the free space after the sweep is under 150 GB"
+flag "--dry-run" help="print each worktree's decision and act on none"
+'''
+run = '''
+{% raw %}#!/usr/bin/env bash
+set -euo pipefail
+floor_gb=150
+command -v wt > /dev/null || { echo "wt:sweep needs Worktrunk's wt on PATH" >&2; exit 2; }
+here=$(realpath "$(git rev-parse --show-toplevel)")
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+trunk_ref=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD) || trunk_ref=origin/main
+git fetch --quiet origin "${trunk_ref#origin/}" || echo "wt:sweep: fetching $trunk_ref failed; sweeping against the last fetch" >&2
+declare -A first_parent=()
+while IFS= read -r commit; do first_parent[$commit]=1; done < <(git rev-list --first-parent "$trunk_ref")
+declare -A integrated=()
+while IFS=$'\t' read -r tree_path reason; do
+  integrated[$(realpath "$tree_path" 2> /dev/null || printf '%s' "$tree_path")]=$reason
+done < <(wt list --format=json | jq -r '.items[] | select(.worktree != null and .worktree.path != null) | [.worktree.path, (.default_branch.integration.reason // "")] | @tsv')
+tmp_roots=()
+for root in "${TMPDIR:-/tmp}" /tmp /var/folders; do
+  [[ -d "$root" ]] || continue
+  tmp_roots+=("${root%/}/" "$(realpath "$root")/")
+done
+under_tmp() {
+  local root
+  for root in "${tmp_roots[@]}"; do [[ "$1" == "$root"* ]] && return 0; done
+  return 1
+}
+# One fact line per worktree, then the decisions; the primary is listed
+# first by Git.
+facts=()
+kept=()
+pruned=()
+tree() {
+  local merged=false scratch=null holder=null alive=false young=false gitdir
+  [[ -n "$path" ]] || return 0
+  if [[ "$flag" == prunable ]]; then pruned+=("pruned $path${branch:+ ($branch)}: its directory is gone"); return 0; fi
+  if [[ -n "$flag" ]]; then kept+=("kept $path${branch:+ ($branch)}: $flag"); return 0; fi
+  if [[ -n "$branch" && -z "${first_parent[$head]:-}" && -n "${integrated[$(realpath "$path")]:-}" ]]; then merged=true; fi
+  if [[ "$path" =~ /domhringr-scratch-([0-9]+)\. ]] || { [[ -z "$branch" ]] && under_tmp "$path"; }; then
+    if [[ "$path" =~ /domhringr-scratch-([0-9]+)\. ]]; then
+      holder=${BASH_REMATCH[1]}
+      if kill -0 "$holder" 2> /dev/null; then alive=true; fi
+    fi
+    gitdir=$(sed -n 's/^gitdir: //p' "$path/.git" 2> /dev/null) || gitdir=
+    if [[ -n "$gitdir" && -n $(find "$gitdir" -maxdepth 1 -name index -mmin -240 2> /dev/null) ]]; then young=true; fi
+    scratch=$(jq -nc --argjson holder "$holder" --argjson alive "$alive" --argjson young "$young" '{holder: $holder, alive: $alive, young: $young}')
+  fi
+  facts+=("$(jq -nc --arg path "$path" --arg branch "$branch" --argjson primary "$primary" \
+    --argjson cwd "$([[ $(realpath "$path") == "$here" ]] && echo true || echo false)" \
+    --argjson merged "$merged" --argjson scratch "$scratch" \
+    '{path: $path, branch: (if $branch == "" then null else $branch end), primary: $primary, cwd: $cwd, merged: $merged, scratch: $scratch}')")
+}
+path= head= branch= flag= primary=true
+while IFS= read -r line; do
+  case "$line" in
+    "worktree "*) path=${line#worktree } ;;
+    "HEAD "*) head=${line#HEAD } ;;
+    "branch "*) branch=${line#branch refs/heads/} ;;
+    locked*) flag="locked" ;;
+    prunable*) flag=prunable ;;
+    "")
+      tree
+      if [[ -n "$path" ]]; then primary=false; fi
+      path= head= branch= flag=
+      ;;
+  esac
+done < <(git worktree list --porcelain; echo)
+removed=0
+dry_run=${usage_dry_run:-false}
+# A detached worktree's branch reads `-`: a tab field cannot be empty.
+while IFS=$'\t' read -r action path branch reason; do
+  if [[ "$branch" == - ]]; then branch=; fi
+  label="$path${branch:+ ($branch)}"
+  if [[ "$dry_run" == true ]]; then printf '%s %s: %s\n' "$action" "$label" "$reason"; continue; fi
+  case "$action" in
+    remove)
+      if out=$(wt remove --foreground --yes "$path" 2>&1); then
+        echo "removed $label: $reason"
+        removed=$((removed + 1))
+      else
+        kept+=("kept $label: $reason, but wt remove refused: ${out##*$'\n'}")
+      fi
+      ;;
+    force)
+      if git worktree remove --force "$path" 2> /dev/null || { [[ ! -e "$path/.git" ]] && rm -rf "$path"; }; then
+        echo "removed $label: $reason"
+        removed=$((removed + 1))
+        if [[ "$path" =~ ^(.*/domhringr-scratch-[0-9]+\.[^/]+)/ ]]; then rmdir "${BASH_REMATCH[1]}" 2> /dev/null || true; fi
+      else
+        kept+=("kept $label: $reason, but git worktree remove failed")
+      fi
+      ;;
+    *) kept+=("kept $label: $reason") ;;
+  esac
+done < <(printf '%s\n' "${facts[@]}" | jq -s -f .config/pr-stack/sweep.jq | jq -r '.[] | [.action, .path, (.branch // "-"), .reason] | @tsv')
+if (( ${#kept[@]} > 0 )); then printf '%s\n' "${kept[@]}"; fi
+[[ "$dry_run" != true ]] || exit 0
+git worktree prune
+if (( ${#pruned[@]} > 0 )); then printf '%s\n' "${pruned[@]}"; fi
+trash="$common/wt/trash"
+if [[ -d "$trash" ]] && [[ -n $(find "$trash" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
+  find "$trash" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2> /dev/null || true
+  echo "emptied $trash"
+fi
+free_gb=$(( $(df -Pk "$common" | awk 'NR == 2 { print $4 }') / 1048576 ))
+echo "wt:sweep removed $removed worktrees; ${free_gb} GB free"
+if [[ "${usage_guard:-false}" == true ]] && (( free_gb < floor_gb )); then
+  echo "refused: ${free_gb} GB free is under the ${floor_gb} GB floor; the largest build directories:" >&2
+  git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r tree; do
+    if [[ -d "$tree/target" ]]; then du -sk "$tree/target"; fi
+  done | sort -rn | awk 'NR <= 10 { printf "  %d GB  %s\n", $1 / 1048576, $2 }' >&2
+  exit 1
+fi
+{% endraw %}'''
+
+# A new worktree starts warm (`.config/wt.toml`'s `post-start`): every
+# gitignored artifact of the primary worktree — the build directory, the code
+# index — is copied in by `wt step copy-ignored`, only where the filesystem
+# clones: APFS and btrfs share the blocks until one side writes, while a full
+# copy of the build directory per worktree fills a disk. A filesystem that
+# cannot clone skips the copy, and the worktree's first build is cold.
+# Existing files are never overwritten, so the step is safe to re-run.
+["wt:warm"]
+description = "Clone the primary worktree's gitignored artifacts into this one, or skip where the filesystem cannot clone"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+primary=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+here=$(git rev-parse --show-toplevel)
+[[ "$(realpath "$primary")" != "$(realpath "$here")" ]] || exit 0
+probe=$(mktemp "$primary/.wt-warm-probe.XXXXXX")
+trap 'rm -f "$probe" "$here/.wt-warm-probe"' EXIT
+case "$(uname -s)" in
+  Darwin) clone=(cp -c) ;;
+  *) clone=(cp --reflink=always) ;;
+esac
+if ! "${clone[@]}" "$probe" "$here/.wt-warm-probe" 2> /dev/null; then
+  echo "wt:warm: $here's filesystem cannot clone from $primary; skipping the copy, the first build is cold"
+  exit 0
+fi
+wt step copy-ignored
+'''
+
 # The pull request's title becomes the header of its merge commit on main: a
 # conventional header of at most 72 characters, its type and scope from
 # commitlint.config.mjs. The body carries the change's prose obligations as
@@ -234,6 +409,9 @@ done
 # its own (gandr-lang/gandr#1353). The body must name #n. Once it merges,
 # `pr:land` from the stack's top rebases the chain onto it. Every other second
 # bottom is refused.
+#
+# Before anything else the task sweeps the clone's landed worktrees and
+# refuses under the disk floor (`wt:sweep --guard`).
 ["pr:open"]
 description = "Open the pull request on the server's top once its body acknowledges every prose obligation"
 usage = '''
@@ -254,6 +432,9 @@ if existing=$(gh pr view "$own" -R "$repo" --json number,state --jq 'select(.sta
   echo "$own already has PR #$existing open; land it with \`pr:land\`" >&2
   exit 2
 fi
+# Landed worktrees go before anything else, and under the disk floor the
+# task refuses (`wt:sweep --guard`).
+mise run wt:sweep --guard
 stacking_current || exit 2
 unblocks=${usage_unblocks:-}
 if [[ -n "$unblocks" ]]; then
@@ -347,6 +528,8 @@ fi
 # Head checks and merge-group checks are separate runs. Watch the queue entry
 # as well as the pull request; green head checks alone do not prove landing.
 # The entry runs every workflow with a merge_group trigger; each is reported.
+# The task sweeps the clone's landed worktrees first (`wt:sweep`), and once
+# the pull request merged it removes the branch's own worktree.
 # Open the pull request with `pr:open`; never `gh pr create --fill` on a branch
 # of several commits: it titles the pull request with the branch name.
 #
@@ -485,7 +668,12 @@ own_head=$(git branch --show-current)
 # read of the top follows this label refuses, and one whose last read came
 # before it opens a pull request the read below, or the one before queueing,
 # finds above the top.
-trap release_landing EXIT
+trap 'release_landing; drop_scratch' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+# Landed worktrees go first; a sweep that fails never holds a landing.
+mise run wt:sweep || echo "wt:sweep failed; landing regardless" >&2
 hold_landing "[$number]"
 while :; do
   server=$(server_stack "$number")
@@ -602,6 +790,7 @@ while (( SECONDS < deadline )); do
         printf 'Merge-group run: %s\n' "$url"
         job_times "$run_id"
       done 3<<< "$entry_runs"
+      remove_landed_worktree "$number"
       exit 0
     fi
   elif [[ "$queue_status" == UNMERGEABLE ]]; then
@@ -669,7 +858,7 @@ exit 2
 # The wake-up a seat arms after `pr:land`: it polls the pull request and its
 # queue entry and exits the moment one of these holds, printing one line and
 # nothing else on stdout:
-#   pr-merged #n               landed (exit 0)
+#   pr-merged #n               landed, its branch's worktree removed (exit 0)
 #   pr-closed #n               closed without merging
 #   pr-dirty #n                a landing ahead conflicts: rebase, `pr:land`
 #   pr-red #n <job>            a required check, or the queue entry's run,
@@ -738,16 +927,37 @@ snapshot() {
     }" --jq '.data.repository.pullRequest | [.state, .mergeStateStatus, .isInMergeQueue, (.mergeQueueEntry.state // "-"), (.mergeQueueEntry.headCommit.oid // "-"), ((.timelineItems.nodes[0].reason // "") | if . == "" then "-" else ascii_downcase end), any(.labels.nodes[]; .name == "landing")] | @tsv'
 }
 # The first failed required check on the head of `$1`, this pull request by
-# default, if any.
+# default, if any. A cancelled check is red unless a later run of its
+# workflow started on the same head: two pull_request events for one head
+# start two runs, the concurrency group cancels the older, and its cancelled
+# checks stay listed until the newer run's jobs start.
 red_check() {
-  local status=0 failed
-  failed=$(gh pr checks "${1:-$number}" -R "$repo" --required --json bucket,name --jq '[.[] | select(.bucket == "fail" or .bucket == "cancel") | .name] | first // empty') || status=$?
+  local status=0 checks red link run newer
+  checks=$(gh pr checks "${1:-$number}" -R "$repo" --required --json bucket,name,link) || status=$?
   # 1: some check failed; 8: some check pending.
   if [[ "$status" != 0 && "$status" != 1 && "$status" != 8 ]]; then return "$status"; fi
-  printf '%s' "$failed"
+  while IFS=$'\t' read -r red link; do
+    [[ -n "$red" ]] || continue
+    if [[ "$link" =~ /actions/runs/([0-9]+)/ ]]; then
+      run=${BASH_REMATCH[1]}
+      newer=$(gh api "repos/$repo/actions/runs/$run" --jq '"\(.head_sha)\t\(.workflow_id)\t\(.conclusion)"' |
+        while IFS=$'\t' read -r sha workflow conclusion; do
+          [[ "$conclusion" == cancelled ]] || continue
+          gh api "repos/$repo/actions/workflows/$workflow/runs?head_sha=$sha&per_page=100" \
+            --jq "[.workflow_runs[] | select(.id > $run)] | length"
+        done) || newer=
+      if [[ "${newer:-0}" != 0 ]]; then continue; fi
+    fi
+    printf '%s' "$red"
+    return 0
+  done < <(jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | "\(.name)\t\(if .bucket == "cancel" then .link else "" end)"' <<< "$checks")
 }
 trunk=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
 source "$(git rev-parse --show-toplevel)/.config/pr-stack/stack.bash"
+trap drop_scratch EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 heals=0
 # Restack this pull request's server stack onto main and queue it again, when
 # no pull request in it has a red check; succeeds once it is queued.
@@ -813,7 +1023,7 @@ while (( SECONDS < deadline )); do
     gh pr edit "$number" -R "$repo" --remove-label landing > /dev/null 2>&1 || true
   fi
   case "$state" in
-    MERGED) echo "pr-merged #$number"; exit 0 ;;
+    MERGED) remove_landed_worktree "$number"; echo "pr-merged #$number"; exit 0 ;;
     CLOSED) echo "pr-closed #$number"; exit 1 ;;
     OPEN) ;;
     *) echo "unexpected pull request state: $state" >&2; exit 2 ;;

@@ -1,15 +1,19 @@
 # Worktree creation refreshes clone-shared hook runners, including pinned
 # executable paths. Existing checkouts run the same installer during setup.
+# No worktree is created without a sweep: the clone's landed worktrees and
+# leaked scratch go first, and under the disk floor the creation is refused
+# (`wt:sweep --guard`).
 [pre-start]
 hooks = "mise exec -- prek install"
+sweep = "mise run wt:sweep --guard"
 
-# A new worktree starts warm: every gitignored artifact of the primary
-# worktree — the build directory, the code index — is copied in (a reflink
-# where the filesystem clones). Existing files are never overwritten, so the
-# step is safe to re-run; a mutation run's output stays with the worktree
-# that produced it.
+# A new worktree starts warm where the filesystem clones (`wt:warm`): every
+# gitignored artifact of the primary worktree — the build directory, the code
+# index — is copied in as a reflink, and a filesystem that cannot clone skips
+# the copy. Existing files are never overwritten, so the step is safe to
+# re-run; a mutation run's output stays with the worktree that produced it.
 [post-start]
-copy = "wt step copy-ignored"
+copy = "mise run wt:warm"
 
 [step.copy-ignored]
 exclude = ["mutants.out/"]

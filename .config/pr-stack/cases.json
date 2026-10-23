@@ -615,5 +615,164 @@
       }
     ],
     "output": "{\"failed\":[],\"pending\":[\"lint the pull request title\"]}"
+  },
+  {
+    "name": "a landed branch's worktree is removed, its branch deleted as merged",
+    "program": "sweep.jq",
+    "input": [
+      {
+        "path": "/w/unit",
+        "branch": "unit",
+        "primary": false,
+        "cwd": false,
+        "merged": true,
+        "scratch": null
+      }
+    ],
+    "output": "[{\"path\":\"/w/unit\",\"branch\":\"unit\",\"action\":\"remove\",\"reason\":\"landed in origin/main\"}]"
+  },
+  {
+    "name": "a branch not landed keeps its worktree",
+    "program": "sweep.jq",
+    "input": [
+      {
+        "path": "/w/unit",
+        "branch": "unit",
+        "primary": false,
+        "cwd": false,
+        "merged": false,
+        "scratch": null
+      }
+    ],
+    "output": "[{\"path\":\"/w/unit\",\"branch\":\"unit\",\"action\":\"keep\",\"reason\":\"not landed\"}]"
+  },
+  {
+    "name": "a landed wip/ branch keeps its worktree",
+    "program": "sweep.jq",
+    "input": [
+      {
+        "path": "/w/try",
+        "branch": "wip/try",
+        "primary": false,
+        "cwd": false,
+        "merged": true,
+        "scratch": null
+      }
+    ],
+    "output": "[{\"path\":\"/w/try\",\"branch\":\"wip/try\",\"action\":\"keep\",\"reason\":\"a wip/ branch\"}]"
+  },
+  {
+    "name": "the caller's own worktree is kept though its branch landed",
+    "program": "sweep.jq",
+    "input": [
+      {
+        "path": "/w/unit",
+        "branch": "unit",
+        "primary": false,
+        "cwd": true,
+        "merged": true,
+        "scratch": null
+      }
+    ],
+    "output": "[{\"path\":\"/w/unit\",\"branch\":\"unit\",\"action\":\"keep\",\"reason\":\"the caller's own worktree\"}]"
+  },
+  {
+    "name": "the primary worktree is kept on main",
+    "program": "sweep.jq",
+    "input": [
+      {
+        "path": "/w/clone",
+        "branch": "main",
+        "primary": true,
+        "cwd": false,
+        "merged": true,
+        "scratch": null
+      }
+    ],
+    "output": "[{\"path\":\"/w/clone\",\"branch\":\"main\",\"action\":\"keep\",\"reason\":\"the primary worktree\"}]"
+  },
+  {
+    "name": "a scratch whose process is gone is force-removed",
+    "program": "sweep.jq",
+    "input": [
+      {
+        "path": "/tmp/domhringr-scratch-41.ab",
+        "branch": null,
+        "primary": false,
+        "cwd": false,
+        "merged": false,
+        "scratch": {
+          "holder": 41,
+          "alive": false,
+          "young": true
+        }
+      }
+    ],
+    "output": "[{\"path\":\"/tmp/domhringr-scratch-41.ab\",\"branch\":null,\"action\":\"force\",\"reason\":\"scratch whose process 41 is gone\"}]"
+  },
+  {
+    "name": "a scratch its live process holds is kept",
+    "program": "sweep.jq",
+    "input": [
+      {
+        "path": "/tmp/domhringr-scratch-42.ab",
+        "branch": null,
+        "primary": false,
+        "cwd": false,
+        "merged": false,
+        "scratch": {
+          "holder": 42,
+          "alive": true,
+          "young": false
+        }
+      }
+    ],
+    "output": "[{\"path\":\"/tmp/domhringr-scratch-42.ab\",\"branch\":null,\"action\":\"keep\",\"reason\":\"scratch held by live process 42\"}]"
+  },
+  {
+    "name": "an unnamed scratch is force-removed after 4 hours unchanged, kept before",
+    "program": "sweep.jq",
+    "input": [
+      {
+        "path": "/tmp/tmp.old",
+        "branch": null,
+        "primary": false,
+        "cwd": false,
+        "merged": false,
+        "scratch": {
+          "holder": null,
+          "alive": false,
+          "young": false
+        }
+      },
+      {
+        "path": "/tmp/tmp.new",
+        "branch": null,
+        "primary": false,
+        "cwd": false,
+        "merged": false,
+        "scratch": {
+          "holder": null,
+          "alive": false,
+          "young": true
+        }
+      }
+    ],
+    "output": "[{\"path\":\"/tmp/tmp.old\",\"branch\":null,\"action\":\"force\",\"reason\":\"unnamed scratch unchanged for 4 hours\"},{\"path\":\"/tmp/tmp.new\",\"branch\":null,\"action\":\"keep\",\"reason\":\"unnamed scratch changed within 4 hours\"}]"
+  },
+  {
+    "name": "a detached worktree outside the temporary directories is kept",
+    "program": "sweep.jq",
+    "input": [
+      {
+        "path": "/w/bisect",
+        "branch": null,
+        "primary": false,
+        "cwd": false,
+        "merged": false,
+        "scratch": null
+      }
+    ],
+    "output": "[{\"path\":\"/w/bisect\",\"branch\":null,\"action\":\"keep\",\"reason\":\"detached, not a scratch\"}]"
   }
 ]

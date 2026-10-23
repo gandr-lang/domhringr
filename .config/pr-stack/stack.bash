@@ -117,7 +117,10 @@ stack_link() {
 # touched: a branch checked out in another worktree moves on the server, and
 # its seat's next fetch reads it. Prints one line per branch that moved.
 # Refuses a stack whose branch does not contain the one below it, and stops
-# at a conflict, naming the branch, with nothing pushed.
+# at a conflict, naming the branch, with nothing pushed. The scratch is named
+# for this process (`domhringr-scratch-<pid>.`), and the caller's exit trap
+# runs `drop_scratch`, so a failure anywhere removes it; a scratch a hard kill
+# leaves, its process gone, is `wt:sweep`'s.
 restack() {
   local stack=$1 heads head below fork scratch status=0 moved=() pushes=() leases=() old new
   mapfile -t heads < <(jq -r '.[].head' <<< "$stack")
@@ -131,7 +134,8 @@ restack() {
     below=$head
   done
   fork=$(git merge-base "origin/${heads[0]}" "origin/$trunk")
-  scratch=$(mktemp -d)
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/domhringr-scratch-$$.XXXXXX")
+  pr_stack_scratch=$scratch
   git worktree add --quiet --detach "$scratch" "origin/${heads[-1]}"
   for head in "${heads[@]::${#heads[@]}-1}"; do
     git -C "$scratch" branch --quiet --force "pr-stack/$head" "origin/$head"
@@ -162,10 +166,37 @@ restack() {
   for head in "${heads[@]::${#heads[@]}-1}"; do
     git branch --quiet --delete --force "pr-stack/$head" > /dev/null 2>&1 || true
   done
-  git worktree remove --force "$scratch"
+  drop_scratch
   (( status == 0 )) || return "$status"
   if (( ${#moved[@]} > 0 )); then printf 'moved %s\n' "${moved[@]}"; fi
   git fetch --quiet origin "${heads[@]}"
+}
+
+# The scratch worktree `restack` made, removed; a no-op when there is none.
+# `pr:land` and `pr:watch` run it on every exit.
+pr_stack_scratch=
+drop_scratch() {
+  [[ -n "$pr_stack_scratch" ]] || return 0
+  git worktree remove --force "$pr_stack_scratch" 2> /dev/null || rm -rf "$pr_stack_scratch"
+  git worktree prune
+  pr_stack_scratch=
+}
+
+# Remove this clone's worktree of pull request `$1`'s branch once it merged,
+# in the foreground: `wt remove` deletes the branch as merged and refuses a
+# dirty or otherwise unsafe tree, whose refusal is printed and the tree kept.
+# The primary worktree is never removed. Prints on stderr only.
+remove_landed_worktree() {
+  local branch path primary out
+  branch=$(gh pr view "$1" -R "$repo" --json headRefName --jq .headRefName) || return 0
+  primary=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+  path=$(git worktree list --porcelain | awk -v ref="branch refs/heads/$branch" '/^worktree / { tree = substr($0, 10) } $0 == ref { print tree }')
+  [[ -n "$path" && "$path" != "$primary" ]] || return 0
+  if out=$(wt remove --foreground --yes "$path" 2>&1); then
+    echo "removed the worktree of #$1 at $path" >&2
+  else
+    echo "kept the worktree of #$1 at $path: ${out##*$'\n'}" >&2
+  fi
 }
 
 # The trunk's required status contexts, from its rules, as a JSON array.
