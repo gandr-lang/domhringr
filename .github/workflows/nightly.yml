@@ -1,0 +1,97 @@
+# <critical>
+# MUST preserve anchor-first CI: maximal sharing, no copied orchestration.
+# New functionality MUST reuse template anchors or add anchors for likely reuse.
+# MUST parameterize differences; performance exceptions require measured evidence.
+# Share exceptional logic through actions; preserve parallelism, caches, and gates.
+# </critical>
+name: Nightly
+
+# Every day, each CI lane's median job time against its budget, as gandr's
+# nightly holds its own: CI time drifts one small change at a time, and a
+# daily comparison names the lane within a day without blocking a landing.
+# A dispatch always runs.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# One run at a time; a dispatch during the scheduled run replaces it.
+concurrency:
+  group: nightly-main
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
+  MISE_CARGO_BINSTALL_QUICKINSTALL: "true"
+  MISE_CARGO_BINSTALL_NATIVE: "true"
+  # Must match ci.yml and the image. The image checks the list at build time.
+  MISE_DISABLE_TOOLS: "github:orhun/git-cliff,github:max-sixty/worktrunk,github:j178/prek,github:nektos/act"
+
+jobs:
+  # Each budget is about a quarter over the lane's median across the ten
+  # newest runs when the job was added: the workspace's tests 6 m 45 s,
+  # Clippy 2 m 19 s, the obligations lane 2 m 45 s, the compiler policy
+  # 1 m 3 s and the formatting gates 47 s. No landing here is classified
+  # deep by gandr's cone (a kernel or core crate, the lockfile, the
+  # toolchain), so each lane holds one budget. The job runs on the bare
+  # runner, whose `gh` the tool reads the runs and the issue through; the CI
+  # image carries no `gh`.
+  lane-budget:
+    name: hold each CI lane to its budget
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    timeout-minutes: 15
+    steps:
+      - name: git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      # The tool is gandr's, built from the sibling at the revision the root
+      # manifest pins.
+      - id: siblings
+        name: read the sibling pins
+        shell: bash
+        run: |
+          gandr=$(sed -n '/^\[workspace\.metadata\.siblings\]$/,/^\[/s/^gandr = "\([0-9a-f]*\)"$/\1/p' Cargo.toml)
+          test -n "$gandr"
+          echo "gandr=$gandr" >> "$GITHUB_OUTPUT"
+      - name: check out the gandr sibling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gandr-lang/gandr
+          ref: ${{ steps.siblings.outputs.gandr }}
+          path: vendor/gandr
+          persist-credentials: false
+      - name: install mise-managed policy tools
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          version: 2026.10.3
+          cache: true
+          cache_key: mise-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml', 'mise.lock', 'rust-toolchain.toml') }}
+          cache_save: false
+      - name: setup rust
+        uses: ./.github/actions/setup-rust # zizmor: ignore[self-repository]
+        with:
+          install-toolchain: true
+          cache-save: false
+      - name: compare each lane with its budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: >-
+          mise run ci:lane-budget --issue "CI lane budgets"
+          --budget "test the workspace (linux)=480"
+          --budget "check Clippy wall=180"
+          --budget "re-verify obligated specifications (linux)=210"
+          --budget "check quenchant compiler policy=90"
+          --budget "check formatting and lint gates (treefmt)=75"
+          >> "$GITHUB_STEP_SUMMARY"

@@ -176,6 +176,16 @@ for entry in "$publish/"*; do
 done
 '''
 
+# Each CI lane's median job time over the newest merge-queue and
+# pull-request runs of `ci.yml`, against the budgets the nightly workflow
+# states, and with `--issue` the one issue that stays open while a lane is
+# over its budget. The tool is gandr's (`crates/workflow-lane-budget` in the
+# sibling), built in the sibling's own workspace and lockfile, so domhringr
+# keeps no second copy of it.
+["ci:lane-budget"]
+description = "Each CI lane's median job time over recent runs against its budget"
+run = "cargo run --manifest-path vendor/gandr/Cargo.toml --locked --quiet --package gandr-workflow-lane-budget --"
+
 # A worktree is removed when its branch lands, mechanically: nothing else
 # removed one but a seat remembering to, and a `pr:watch` that dies with its
 # shell never prints `pr-merged`, so landed worktrees and their build
