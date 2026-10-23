@@ -56,7 +56,7 @@ jobs:
   # Definitions only: aliases run in each consuming job's context.
   template:
     if: false
-    needs: &rust-needs [changes, ci-image-ref]
+    needs: &rust-needs [prepare, ci-image]
     # arm64, as gandr's lanes (gandr-lang/gandr#702: its suite 27% and a warm
     # rebuild 9% faster than ubuntu-latest's x86-64). coverage.yml's measuring
     # run is the one x86-64 Linux job, so the image is published for both.
@@ -115,13 +115,13 @@ jobs:
         if: ${{ github.event_name != 'push' || hashFiles('build-state-*.tar.zst') != '' }}
         uses: ./.github/actions/setup-rust # zizmor: ignore[self-repository]
         with:
-          install-toolchain: ${{ env.CI_INSTALL_TOOLCHAIN || needs.ci-image-ref.outputs.ref == '' }}
+          install-toolchain: ${{ env.CI_INSTALL_TOOLCHAIN || needs.prepare.outputs.image == '' }}
           cache-save: ${{ hashFiles('build-state-*.tar.zst') != '' || (github.event_name == 'workflow_dispatch' && startsWith(github.job, 'cargo-test')) }}
       # Install the whole CI subset in the cached setup step: later mise
       # auto-installs otherwise escape that cache.
       - &install-policy-tools
         name: install mise-managed policy tools
-        if: &without-image ${{ needs.ci-image-ref.outputs.ref == '' || env.CI_INSTALL_TOOLCHAIN == 'true' }}
+        if: &without-image ${{ needs.prepare.outputs.image == '' || env.CI_INSTALL_TOOLCHAIN == 'true' }}
         # The pinned mise must read mise.lock's format version 2; an older one
         # warns and resolves every tool unlocked. The CI image parses this
         # step for the version it bakes, so the two cannot drift.
@@ -239,16 +239,16 @@ jobs:
       # state is never downloaded.
       - &drop-older-state
         name: drop main's state for the newer queue build
-        if: ${{ github.event_name != 'push' && steps.test-state-restore.outputs.cache-hit != 'true' && steps.test-state-restore.outputs.cache-matched-key != '' && needs.build-state.outputs.queue-newer == 'true' && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), format('build-state-{0}--{1}', env.CI_BUILD_STATE, env.CI_BUILD_GENERATION)) }}
+        if: ${{ github.event_name != 'push' && steps.test-state-restore.outputs.cache-hit != 'true' && steps.test-state-restore.outputs.cache-matched-key != '' && needs.prepare.outputs.queue-newer == 'true' && contains(fromJSON(needs.prepare.outputs.artifacts || '[]'), format('build-state-{0}--{1}', env.CI_BUILD_STATE, env.CI_BUILD_GENERATION)) }}
         shell: bash
         run: rm -f "build-state-$CI_BUILD_STATE.tar.zst"
       - &download-build-state
         name: download reusable queue build state
-        if: ${{ (github.event_name == 'push' && steps.test-state-restore.outputs.cache-hit != 'true' || github.event_name != 'push' && steps.test-state-restore.outputs.cache-hit != 'true' && (steps.test-state-restore.outputs.cache-matched-key == '' || needs.build-state.outputs.queue-newer == 'true')) && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), format('build-state-{0}--{1}', env.CI_BUILD_STATE, env.CI_BUILD_GENERATION)) }}
+        if: ${{ (github.event_name == 'push' && steps.test-state-restore.outputs.cache-hit != 'true' || github.event_name != 'push' && steps.test-state-restore.outputs.cache-hit != 'true' && (steps.test-state-restore.outputs.cache-matched-key == '' || needs.prepare.outputs.queue-newer == 'true')) && contains(fromJSON(needs.prepare.outputs.artifacts || '[]'), format('build-state-{0}--{1}', env.CI_BUILD_STATE, env.CI_BUILD_GENERATION)) }}
         uses: &download-artifact actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: build-state-${{ env.CI_BUILD_STATE }}--${{ env.CI_BUILD_GENERATION }}
-          run-id: ${{ needs.build-state.outputs.run-id }}
+          run-id: ${{ needs.prepare.outputs.run-id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - &unpack-build-state
         name: unpack build state
@@ -261,32 +261,75 @@ jobs:
         if: *state-found
         run: cargo fetch --locked
 
+  # One job reads everything the run's lanes decide on, so each lookup costs
+  # no runner of its own:
+  # - the changed-file categories. A missing base or a failed fetch or diff
+  #   forces the Rust checks, never skips them; the queue always checks its
+  #   complete merge result, and main's push runs no checks;
+  # - whether the pull request is a stacked member, based on another pull
+  #   request's branch rather than main. Its run is the lint, Clippy and
+  #   formatting; the merge group tests its tree, and the obligations report
+  #   runs on the stack's bottom;
+  # - the pin-file tag of this checkout and whether it is published. A pull
+  #   request from a fork cannot publish with its read-only token, so a
+  #   missing tag there selects the bare runner instead of a build. Only the
+  #   registry's `manifest unknown` reads as missing; any other lookup error
+  #   fails the job, and with it the required check this job is;
+  # - the reusable queue build state, on a push to main, in the queue and on
+  #   a dispatch. Completed queue runs supply successful builds independently
+  #   of their test verdict, and a new queue ref can read their artifacts
+  #   even when it cannot read its predecessor's branch-local cache; Cargo
+  #   still checks all fingerprints. Main promotion requires the exact
+  #   landing SHA; a test lane reuses the latest successful queue build when
+  #   no cached state of its generation matched or when that build completed
+  #   after main's newest state was saved. Artifact discovery is skipped
+  #   under act, and a failed lookup means no reuse, not a failed run.
+  #   Official artifact actions plus the GitHub API retain #44's trust
+  #   boundary; dawidd6/action-download-artifact remains outside the
+  #   admitted action set;
+  # - the comment the obligations lane updates in place, on a pull request of
+  #   this repository: only this workflow's own comment is updated, a comment
+  #   by anyone else that copies the marker is ignored.
   # Always trigger the workflow: a skipped workflow supplies no required
-  # check, whereas a skipped job succeeds. Formatting sees docs-only changes.
-  # Dependency updates land through a maintainer's pull request, so a
-  # dependabot pull request runs nothing: the entry jobs and formatting skip,
-  # and the rest skip without `changes`' outputs or without the image.
-  changes:
-    name: detect changed-file categories
-    if: &checked-event ${{ !cancelled() && !failure() && github.event_name != 'push' && github.actor != 'dependabot[bot]' }}
+  # check, whereas a skipped job succeeds. Dependency updates land through a
+  # maintainer's pull request, so a dependabot pull request runs nothing:
+  # this job skips, and every job after it skips without its outputs.
+  prepare:
+    name: prepare the run
+    if: ${{ github.actor != 'dependabot[bot]' }}
     runs-on: *linux
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+      pull-requests: read
     outputs:
-      # Missing bases and failed fetches/diffs force Rust checks, never skip
-      # them. The queue always checks its complete merge result.
-      rust: ${{ github.event_name != 'pull_request' || steps.fetch.outcome != 'success' || steps.filter.outcome != 'success' || steps.filter.outputs.rust == 'true' }}
-    env:
-      CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      rust: ${{ github.event_name != 'push' && (github.event_name != 'pull_request' || steps.fetch.outcome != 'success' || steps.filter.outcome != 'success' || steps.filter.outputs.rust == 'true') }}
+      stacked: ${{ github.event_name == 'pull_request' && github.base_ref != github.event.repository.default_branch }}
+      image: ${{ steps.pin_tag.outputs.tag != '' && (steps.lookup.outputs.found == 'true' || !github.event.pull_request.head.repo.fork) && format('ghcr.io/gandr-lang/domhringr-ci:{0}', steps.pin_tag.outputs.tag) || '' }}
+      build: ${{ steps.pin_tag.outputs.tag != '' && steps.lookup.outputs.found == 'false' && !github.event.pull_request.head.repo.fork }}
+      run-id: &queue-run ${{ steps.run.outputs.run-id || steps.previous.outputs.run-id }}
+      queue-newer: ${{ steps.fresher.outputs.queue-newer }}
+      artifacts: ${{ steps.artifacts.outputs.artifacts }}
+      obligations-comment: ${{ steps.obligations-comment.outputs.id }}
+    env: &obligations-comment-env
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - *git-checkout
       - id: fetch
         name: fetch the comparison tree
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
+        env: &base-sha
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: git fetch --depth=1 origin "$CI_BASE_SHA"
       - id: filter
         name: filter changed paths
         if: ${{ github.event_name == 'pull_request' && steps.fetch.outcome == 'success' }}
         continue-on-error: true
+        env: *base-sha
         # One pipeline, no shell control flow or third-party filter action.
         # NUL framing preserves filenames; no-renames retains source deletions.
         # pipefail makes a failed diff distinguishable from an empty diff.
@@ -295,22 +338,6 @@ jobs:
           git diff --no-renames --name-only -z "$CI_BASE_SHA" HEAD |
           jq -rRs '"rust=" + (split("\u0000") | any(length > 0 and ((endswith(".md") or startswith("docs/") or startswith("LICENSE") or . == ".gitignore") | not)) | tostring)'
           >> "$GITHUB_OUTPUT"
-
-  # Finds the pin-file tag of this checkout and whether it is published. A pull
-  # request from a fork cannot publish with its read-only token, so a missing
-  # tag there selects the bare runner instead of a build. Only the registry's
-  # `manifest unknown` reads as missing; any other lookup error fails the job,
-  # which fails the image reference rather than rebuilding.
-  ci-image-tag:
-    name: find the CI image for this checkout
-    if: ${{ github.actor != 'dependabot[bot]' }}
-    runs-on: *linux
-    permissions: *image-read-permissions
-    outputs:
-      ref: ${{ steps.pin_tag.outputs.tag != '' && (steps.lookup.outputs.found == 'true' || !github.event.pull_request.head.repo.fork) && format('ghcr.io/gandr-lang/domhringr-ci:{0}', steps.pin_tag.outputs.tag) || '' }}
-      build: ${{ steps.pin_tag.outputs.tag != '' && steps.lookup.outputs.found == 'false' && !github.event.pull_request.head.repo.fork }}
-    steps:
-      - *git-checkout
       - id: pin_tag
         name: compute the pin-file image tag
         if: ${{ env.DOMHRINGR_CI_IMAGE != '' }}
@@ -338,39 +365,73 @@ jobs:
             printf '%s\n' "$error" >&2
             exit 1
           fi
+      - id: run
+        name: find the completed queue run for this landing
+        if: ${{ env.ACT != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        env:
+          CI_SHA: ${{ github.sha }}
+        run: >-
+          gh api --method GET "repos/$GH_REPO/actions/workflows/ci.yml/runs"
+          -f event=merge_group -f status=completed -f head_sha="$CI_SHA"
+          --jq '"run-id=" + ((.workflow_runs[0].id // "") | tostring)'
+          >> "$GITHUB_OUTPUT"
+      - id: previous
+        name: find the latest successful queue run
+        if: ${{ env.ACT != 'true' && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
+        continue-on-error: true
+        run: >-
+          gh api --method GET "repos/$GH_REPO/actions/workflows/ci.yml/runs"
+          -f event=merge_group -f status=success -f per_page=1
+          --jq '.workflow_runs[0] // {} | "run-id=\(.id // "")\ncompleted=\(.updated_at // "")"'
+          >> "$GITHUB_OUTPUT"
+      # Main's state is a promoted queue build, saved after its run completed,
+      # or a push's own build. A queue build that completed after main's
+      # newest test state was saved holds every landing that state holds and
+      # the entries queued ahead of this group besides.
+      - id: fresher
+        name: compare it with main's newest test state
+        if: ${{ steps.previous.outputs.completed != '' }}
+        continue-on-error: true
+        env:
+          CI_QUEUE_COMPLETED: ${{ steps.previous.outputs.completed }}
+        run: >-
+          gh api --method GET "repos/$GH_REPO/actions/caches"
+          -f ref=refs/heads/main -f key=domhringr-v2-test-state- -f sort=created_at -f direction=desc -f per_page=1
+          --jq '(.actions_caches[0].created_at // "") as $main | "queue-newer=\($main == "" or env.CI_QUEUE_COMPLETED > $main)"'
+          >> "$GITHUB_OUTPUT"
+      - id: artifacts
+        name: list its build-state artifacts
+        if: ${{ steps.run.outputs.run-id != '' || steps.previous.outputs.run-id != '' }}
+        continue-on-error: true
+        env:
+          CI_RUN_ID: *queue-run
+        run: >-
+          gh api "repos/$GH_REPO/actions/runs/$CI_RUN_ID/artifacts"
+          --jq '"artifacts=" + ([.artifacts[] | select(.expired == false) | .name] | tojson)'
+          >> "$GITHUB_OUTPUT"
+      - id: obligations-comment
+        name: find the obligations comment
+        if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork && github.base_ref == github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          id=$(gh api --paginate --slurp "repos/$GH_REPO/issues/$PR_NUMBER/comments" |
+            jq -r '[.[][] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- quenchant-obligations -->")))] | first | .id // ""')
+          printf 'id=%s\n' "$id" >> "$GITHUB_OUTPUT"
 
   # Builds and publishes the missing tag with the image workflow itself.
+  # Every image job needs it, so all of them wait for a build. A job's
+  # default condition skips it when any ancestor was skipped, so every job
+  # downstream states `!cancelled() && !failure()`: a skipped build lets it
+  # run, and a failed one stops it.
   ci-image:
     name: build the missing CI image
-    needs: ci-image-tag
-    if: ${{ needs.ci-image-tag.outputs.build == 'true' }}
+    needs: prepare
+    if: ${{ needs.prepare.outputs.build == 'true' }}
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/ci-image.yml # zizmor: ignore[self-repository]
-
-  # container cannot read env directly; needs carries the resolved reference.
-  # Every image job needs this job alone, so all of them wait for a build. It
-  # runs even when the build was skipped, and fails rather than skips when the
-  # lookup or the build failed: a skipped required check would pass. A job's
-  # default condition also skips it when any ancestor was skipped, so every
-  # job downstream states `!cancelled() && !failure()`: a skipped build lets
-  # it run, and a failed ancestor still stops it.
-  ci-image-ref:
-    name: resolve the CI image reference
-    needs: [ci-image-tag, ci-image]
-    if: ${{ !cancelled() && github.actor != 'dependabot[bot]' }}
-    runs-on: *linux
-    outputs:
-      ref: ${{ steps.resolve.outputs.ref }}
-    steps:
-      - id: resolve
-        name: resolve the image reference
-        env:
-          TAG_RESULT: ${{ needs.ci-image-tag.result }}
-          BUILD_RESULT: ${{ needs.ci-image.result }}
-          IMAGE_REF: ${{ needs.ci-image-tag.outputs.ref }}
-        run: test "$TAG_RESULT" = success && test "$BUILD_RESULT" != failure && echo "ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
 
   # The enforcing run is the full test pass on each platform: no test is gated
   # off under enforcement, so a plain pass would rerun the same tests with the
@@ -378,14 +439,14 @@ jobs:
   # The manual event exercises this lane under act.
   cargo-test:
     name: test the workspace (linux)
-    needs: &cached-test-needs [changes, ci-image-ref, build-state]
-    if: &heavy-lane ${{ !cancelled() && !failure() && needs.changes.outputs.rust == 'true' && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
+    needs: *rust-needs
+    if: &heavy-lane ${{ !cancelled() && !failure() && needs.prepare.outputs.rust == 'true' && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
     runs-on: *linux
     permissions: &build-state-read-permissions
       contents: read
       packages: read
       actions: read
-    container: &ci-image ${{ needs.ci-image-ref.outputs.ref }} # zizmor: ignore[unpinned-images]
+    container: &ci-image ${{ needs.prepare.outputs.image }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 30
     env:
       CI_BUILD_STATE: cargo-test
@@ -440,7 +501,7 @@ jobs:
   # Witness resolution is platform-neutral and runs on Linux.
   cargo-test-macos:
     name: test the workspace (macos-arm64)
-    needs: *cached-test-needs
+    needs: *rust-needs
     if: *heavy-lane
     runs-on: macos-latest
     permissions: &macos-read-permissions
@@ -462,7 +523,7 @@ jobs:
   cargo-clippy-crate:
     name: check Clippy wall
     needs: *rust-needs
-    if: &light-rust-lane ${{ !cancelled() && !failure() && needs.changes.outputs.rust == 'true' && github.event_name != 'push' }}
+    if: &light-rust-lane ${{ !cancelled() && !failure() && needs.prepare.outputs.rust == 'true' }}
     runs-on: *linux
     permissions: *image-read-permissions
     container: *ci-image # zizmor: ignore[unpinned-images]
@@ -520,7 +581,7 @@ jobs:
       - *upload-build-state
       - *save-policy-state
       - name: archive Dylint drivers
-        if: ${{ !cancelled() && github.event_name == 'merge_group' && steps.policy-library.outcome == 'success' && needs.ci-image-ref.outputs.ref == '' && steps.dylint-drivers-restore.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && github.event_name == 'merge_group' && steps.policy-library.outcome == 'success' && needs.prepare.outputs.image == '' && steps.dylint-drivers-restore.outputs.cache-hit != 'true' }}
         run: tar -cf dylint-drivers.tar -C "$HOME" .dylint_drivers
       - name: upload Dylint drivers
         if: ${{ !cancelled() && env.ACT != 'true' && hashFiles('dylint-drivers.tar') != '' }}
@@ -540,39 +601,18 @@ jobs:
   # of its boxes is unticked, the lint assessment a performance fix owes
   # among them. Dispatches run the lane too, against the parent commit and
   # without a body, so `ci:act` exercises it. A fork's read-only token cannot
-  # comment: its witnesses stay in the log. The comment is found before the
-  # lane and posted after it, from bare runners, so the job running the
-  # change's code holds no write token.
-  obligations-comment-read:
-    name: find the obligations comment
-    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]' }}
-    runs-on: *linux
-    permissions:
-      pull-requests: read
-    outputs:
-      id: ${{ steps.find.outputs.id }}
-    env: &obligations-comment-env
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_REPO: ${{ github.repository }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-    steps:
-      # Only this workflow's own comment is updated: a comment by anyone else
-      # that copies the marker is ignored.
-      - id: find
-        name: find this workflow's comment
-        shell: bash
-        run: |
-          id=$(gh api --paginate --slurp "repos/$GH_REPO/issues/$PR_NUMBER/comments" |
-            jq -r '[.[][] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- quenchant-obligations -->")))] | first | .id // ""')
-          printf 'id=%s\n' "$id" >> "$GITHUB_OUTPUT"
-
+  # comment: its witnesses stay in the log. A stacked member skips the lane:
+  # the stack's bottom reports against main. The comment is found by
+  # `prepare` and posted after the lane, from bare runners, so the job
+  # running the change's code holds no write token.
+  #
   # The policy pass that writes the records and the rustdoc JSON run here, on
   # main's policy state; the witnesses reuse main's enforcing test state.
   # Nothing is saved.
   obligations:
     name: re-verify obligated specifications (linux)
-    needs: [changes, ci-image-ref, obligations-comment-read]
-    if: ${{ !cancelled() && !failure() && needs.changes.outputs.rust == 'true' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') }}
+    needs: *rust-needs
+    if: ${{ !cancelled() && !failure() && needs.prepare.outputs.rust == 'true' && needs.prepare.outputs.stacked != 'true' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') }}
     runs-on: *linux
     permissions:
       contents: read
@@ -663,7 +703,7 @@ jobs:
   # boundary below that, and the comment links the full report's artifact.
   obligations-comment:
     name: post the obligations comment
-    needs: [obligations-comment-read, obligations]
+    needs: [prepare, obligations]
     if: ${{ !cancelled() && needs.obligations.outputs.comment == 'true' && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork }}
     runs-on: *linux
     permissions:
@@ -677,7 +717,7 @@ jobs:
       - name: create or update the comment
         shell: bash
         env:
-          COMMENT_ID: ${{ needs.obligations-comment-read.outputs.id }}
+          COMMENT_ID: ${{ needs.prepare.outputs.obligations-comment }}
           REPORT_URL: ${{ needs.obligations.outputs.report }}
         run: |
           if (( $(wc -c < comment.md) > 60000 )); then
@@ -694,11 +734,14 @@ jobs:
             gh api --method POST "repos/$GH_REPO/issues/$PR_NUMBER/comments" -F body=@comment.md --silent
           fi
 
-  # Formatting and workflow security lint share the treefmt pass (#53).
+  # Formatting and workflow security lint share the treefmt pass (#53). It
+  # runs over a failed image build and fails pulling the missing image, so a
+  # failed build fails a required check rather than skipping them all, which
+  # would pass. Formatting sees docs-only changes.
   format-gate:
     name: check formatting and lint gates (treefmt)
-    needs: ci-image-ref
-    if: *checked-event
+    needs: [prepare, ci-image]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && github.event_name != 'push' }}
     runs-on: *linux
     permissions: *image-read-permissions
     container: *ci-image # zizmor: ignore[unpinned-images]
@@ -752,80 +795,10 @@ jobs:
             fi
           done
 
-  # Completed queue runs supply successful builds independently of their test
-  # verdict. A new queue ref can read these artifacts even when it cannot read
-  # its predecessor's branch-local cache. Cargo still checks all fingerprints.
-  # Main promotion requires the exact landing SHA; a test lane reuses the
-  # latest successful queue build when no cached state of its generation
-  # matched or when that build completed after main's newest state was saved.
-  # Hosted artifact discovery is skipped under act, never a compilation gate.
-  # A failed lookup means no reuse, never a failed job: the test lanes need
-  # this one, and a required lane skipped behind a failure reports success.
-  # Official artifact actions plus the GitHub API retain #44's trust boundary;
-  # dawidd6/action-download-artifact remains outside the admitted action set.
-  build-state:
-    name: find reusable queue build state
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}
-    runs-on: *linux
-    permissions:
-      actions: read
-    outputs:
-      run-id: &queue-run ${{ steps.run.outputs.run-id || steps.previous.outputs.run-id }}
-      queue-newer: ${{ steps.fresher.outputs.queue-newer }}
-      artifacts: ${{ steps.artifacts.outputs.artifacts }}
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_REPO: ${{ github.repository }}
-      CI_SHA: ${{ github.sha }}
-    steps:
-      - id: run
-        name: find the completed queue run for this landing
-        if: ${{ env.ACT != 'true' && github.event_name == 'push' }}
-        continue-on-error: true
-        run: >-
-          gh api --method GET "repos/$GH_REPO/actions/workflows/ci.yml/runs"
-          -f event=merge_group -f status=completed -f head_sha="$CI_SHA"
-          --jq '"run-id=" + ((.workflow_runs[0].id // "") | tostring)'
-          >> "$GITHUB_OUTPUT"
-      - id: previous
-        name: find the latest successful queue run
-        if: ${{ env.ACT != 'true' && github.event_name != 'push' }}
-        continue-on-error: true
-        run: >-
-          gh api --method GET "repos/$GH_REPO/actions/workflows/ci.yml/runs"
-          -f event=merge_group -f status=success -f per_page=1
-          --jq '.workflow_runs[0] // {} | "run-id=\(.id // "")\ncompleted=\(.updated_at // "")"'
-          >> "$GITHUB_OUTPUT"
-      # Main's state is a promoted queue build, saved after its run completed,
-      # or a push's own build. A queue build that completed after main's
-      # newest test state was saved holds every landing that state holds and
-      # the entries queued ahead of this group besides.
-      - id: fresher
-        name: compare it with main's newest test state
-        if: ${{ steps.previous.outputs.completed != '' }}
-        continue-on-error: true
-        env:
-          CI_QUEUE_COMPLETED: ${{ steps.previous.outputs.completed }}
-        run: >-
-          gh api --method GET "repos/$GH_REPO/actions/caches"
-          -f ref=refs/heads/main -f key=domhringr-v2-test-state- -f sort=created_at -f direction=desc -f per_page=1
-          --jq '(.actions_caches[0].created_at // "") as $main | "queue-newer=\($main == "" or env.CI_QUEUE_COMPLETED > $main)"'
-          >> "$GITHUB_OUTPUT"
-      - id: artifacts
-        name: list its build-state artifacts
-        if: ${{ steps.run.outputs.run-id != '' || steps.previous.outputs.run-id != '' }}
-        continue-on-error: true
-        env:
-          CI_RUN_ID: *queue-run
-        run: >-
-          gh api "repos/$GH_REPO/actions/runs/$CI_RUN_ID/artifacts"
-          --jq '"artifacts=" + ([.artifacts[] | select(.expired == false) | .name] | tojson)'
-          >> "$GITHUB_OUTPUT"
-
   promote-cargo-test:
     name: promote the build state (linux)
-    needs: &promote-needs [build-state, ci-image-ref]
-    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(join(fromJSON(needs.build-state.outputs.artifacts || '[]'), ' '), 'build-state-cargo-test--') }}
+    needs: &promote-needs [prepare, ci-image]
+    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(join(fromJSON(needs.prepare.outputs.artifacts || '[]'), ' '), 'build-state-cargo-test--') }}
     runs-on: *linux
     permissions: *build-state-read-permissions
     container: *ci-image # zizmor: ignore[unpinned-images]
@@ -848,7 +821,7 @@ jobs:
   promote-test-macos:
     name: promote the build state (macos-arm64)
     needs: *promote-needs
-    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(join(fromJSON(needs.build-state.outputs.artifacts || '[]'), ' '), 'build-state-cargo-test-macos--') }}
+    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(join(fromJSON(needs.prepare.outputs.artifacts || '[]'), ' '), 'build-state-cargo-test-macos--') }}
     runs-on: macos-latest
     permissions: *macos-read-permissions
     env:
@@ -859,7 +832,7 @@ jobs:
   promote-dylint-crate:
     name: promote the compiler policy state
     needs: *promote-needs
-    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (contains(join(fromJSON(needs.build-state.outputs.artifacts || '[]'), ' '), 'build-state-cargo-dylint-crate--') || contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), 'dylint-drivers')) }}
+    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (contains(join(fromJSON(needs.prepare.outputs.artifacts || '[]'), ' '), 'build-state-cargo-dylint-crate--') || contains(fromJSON(needs.prepare.outputs.artifacts || '[]'), 'dylint-drivers')) }}
     runs-on: *linux
     permissions: *build-state-read-permissions
     container: *ci-image # zizmor: ignore[unpinned-images]
@@ -873,11 +846,11 @@ jobs:
       - *identify-build-state
       - *download-build-state
       - name: download the landing's Dylint drivers
-        if: ${{ needs.ci-image-ref.outputs.ref == '' && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), 'dylint-drivers') }}
+        if: ${{ needs.prepare.outputs.image == '' && contains(fromJSON(needs.prepare.outputs.artifacts || '[]'), 'dylint-drivers') }}
         uses: *download-artifact
         with:
           name: dylint-drivers
-          run-id: ${{ needs.build-state.outputs.run-id }}
+          run-id: ${{ needs.prepare.outputs.run-id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - *restore-dylint-drivers
       - *restore-policy-state
