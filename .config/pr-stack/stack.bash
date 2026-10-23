@@ -95,15 +95,22 @@ queued_of() {
   jq -cn '$ARGS.positional | map(tonumber)' --args "${members[@]}"
 }
 
+# The number of the server stack pull request `$1` belongs to, `null` when
+# none. GitHub keeps a stack's merged members, so a pull request whose stack
+# below it merged still belongs to it.
+stack_of() {
+  gh api graphql -f owner="${repo%/*}" -f name="${repo#*/}" -F number="$1" \
+    -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { stack { number } } } }' \
+    --jq '.data.repository.pullRequest.stack.number // "null"'
+}
+
 # Link the open chain `$1` on the server (`link.jq`): into the stack a member
 # already belongs to, by that stack's number, so the stack's merged members
 # stay below the open ones (gandr-lang/gandr#1275); otherwise as a new stack.
 stack_link() {
   local number stacks=() args
   for number in $(jq -r '.[].number' <<< "$1"); do
-    stacks+=("$(gh api graphql -f owner="${repo%/*}" -f name="${repo#*/}" -F number="$number" \
-      -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { stack { number } } } }' \
-      --jq '.data.repository.pullRequest.stack.number // "null"')")
+    stacks+=("$(stack_of "$number")")
   done
   mapfile -t args < <(jq -cn --argjson chain "$(jq -c 'map(.number)' <<< "$1")" \
     '{chain: $chain, stacks: ($ARGS.positional | map(fromjson))}' --args "${stacks[@]}" | jq -r -f "$pr_stack_dir/link.jq")
@@ -212,6 +219,34 @@ required_contexts() {
     --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | unique'
 }
 
+# The most members one queueing takes of a stack (gandr-lang/gandr#2046): the
+# smaller of the trunk's merge-queue `max_entries_to_merge` and
+# `max_entries_to_build`, a zero read as no bound; 0 when neither bounds it.
+queue_unit_cap() {
+  gh api "repos/$repo/rules/branches/$trunk" \
+    --jq '[.[] | select(.type == "merge_queue") | .parameters | .max_entries_to_merge, .max_entries_to_build | select(. > 0)] | min // 0'
+}
+
+# Wait, every 60 seconds, until pull request `$1` merges; fail, naming it,
+# when it leaves the merge queue unmerged or the landing's deadline passes.
+wait_merged() {
+  local state queued
+  while :; do
+    state=$(gh pr view "$1" -R "$repo" --json state --jq .state)
+    [[ "$state" != MERGED ]] || return 0
+    queued=$(in_queue "$1")
+    if [[ "$state" != OPEN || "$queued" != true ]]; then
+      echo "#$1 left the merge queue unmerged; read its merge-group run, then land the stack again" >&2
+      return 1
+    fi
+    if (( SECONDS >= ${deadline:-SECONDS + 1} )); then
+      echo "timed out waiting on #$1 to merge" >&2
+      return 1
+    fi
+    sleep 60
+  done
+}
+
 # Wait, every 30 seconds, until each of the trunk's required contexts on pull
 # request `$1`'s head has concluded (`required.jq`, gandr-lang/gandr#1601); fail
 # at the first reading with a required context red, naming it. The contexts are
@@ -305,41 +340,62 @@ carried_queued() {
   jq -cn '$ARGS.positional | map(tonumber)' --args "${members[@]}"
 }
 
-# Link the stack `$1` on the server and queue it as one group; a stack of one
-# is a plain landing, queued by auto-merge once its checks pass. Every open
-# pull request on one of its branches outside it is retargeted to the trunk
-# first (`retarget_landing`). An atomic stack merge refuses a pull request
-# whose required checks are still expected, so each one's required checks are
-# waited on first (`wait_required`), and a red one stops the landing, naming
-# it. A restack gives
-# each head above the bottom two runs per workflow, one cancelled by the
+# Link the stack `$1` on the server and queue it; a pull request in no server
+# stack is a plain landing, queued by auto-merge once its checks pass, while
+# one left alone in a stack whose members below it merged is queued by the
+# stack merge, which GitHub requires of a stacked pull request
+# (gandr-lang/gandr#2056). Every open pull request on one of its branches
+# outside it is retargeted to the trunk first (`retarget_landing`).
+#
+# The merge queue merges a queued stack whole and fits it into one group only
+# up to its `max_entries_to_merge`; a longer stack must be built entirely,
+# `max_entries_to_build` at a time, before any member merges
+# (gandr-lang/gandr#2046). The stack is therefore queued in units of at most
+# `queue_unit_cap` members, bottom first: each unit once the one below it
+# merged, the rest restacked onto the trunk and read from the server again.
+#
+# An atomic stack merge refuses a pull request whose required checks are still
+# expected, so each one's required checks are waited on first
+# (`wait_required`), and a red one stops the landing, naming it. A restack
+# gives each head above the bottom two runs per workflow, one cancelled by the
 # other; a cancelled one the rollup reads is re-run (`rerun_twins`), at most
 # three times for a pull request, and its checks waited on again.
 queue_stack() {
-  local stack=$1 numbers number reruns watched
+  local stack=$1 numbers unit number reruns watched cap
   mapfile -t numbers < <(jq -r '.[].number' <<< "$stack")
   retarget_landing "$(jq -c 'map(.number)' <<< "$stack")"
-  if (( ${#numbers[@]} == 1 )); then
+  if (( ${#numbers[@]} == 1 )) && [[ $(stack_of "${numbers[0]}") == null ]]; then
     gh pr merge "${numbers[0]}" -R "$repo" --merge --auto
     return
   fi
-  stack_link "$stack"
-  for number in "${numbers[@]}"; do
-    reruns=0
-    while :; do
-      watched=0
-      wait_required "$number" || watched=$?
-      if (( reruns < 3 )) && rerun_twins "$number"; then
-        reruns=$(( reruns + 1 ))
-        sleep 30
-        continue
-      fi
-      if (( watched != 0 )); then
-        echo "#$number's required checks failed; fix it, then land the stack again" >&2
-        return 1
-      fi
-      break
+  cap=$(queue_unit_cap)
+  while :; do
+    if (( ${#numbers[@]} > 1 )); then stack_link "$stack"; fi
+    unit=("${numbers[@]}")
+    if (( cap > 0 && ${#numbers[@]} > cap )); then unit=("${numbers[@]:0:cap}"); fi
+    for number in "${unit[@]}"; do
+      reruns=0
+      while :; do
+        watched=0
+        wait_required "$number" || watched=$?
+        if (( reruns < 3 )) && rerun_twins "$number"; then
+          reruns=$(( reruns + 1 ))
+          sleep 30
+          continue
+        fi
+        if (( watched != 0 )); then
+          echo "#$number's required checks failed; fix it, then land the stack again" >&2
+          return 1
+        fi
+        break
+      done
     done
+    gh stack merge "${unit[-1]}" --yes --merge
+    (( ${#unit[@]} < ${#numbers[@]} )) || return 0
+    echo "queued #${unit[0]}–#${unit[-1]}, a unit the merge queue merges whole; the rest queues once #${unit[-1]} merges" >&2
+    wait_merged "${unit[-1]}" || return 1
+    stack=$(server_stack "${numbers[-1]}")
+    restack "$stack"
+    mapfile -t numbers < <(jq -r '.[].number' <<< "$stack")
   done
-  gh stack merge "${numbers[-1]}" --yes --merge
 }

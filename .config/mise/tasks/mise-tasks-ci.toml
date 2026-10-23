@@ -543,8 +543,10 @@ fi
 # landing. A longer chain lands whole from its top: it is restacked onto
 # `origin/main` in a scratch worktree, so a branch another seat has checked out
 # moves only on the server, pushed in one atomic push, linked (`gh stack link`),
-# and queued as one group (`gh stack merge` by the top), and the task waits on
-# the top. A chain whose lower pull request is already queued on its own waits
+# and queued by `gh stack merge` in units of at most the merge queue's group
+# size and build concurrency, bottom first, each once the one below merged
+# (`queue_stack`, gandr-lang/gandr#2046), and the task waits on the top. A
+# chain whose lower pull request is already queued on its own waits
 # for it to merge and reads the chain again, and so does a chain whose top holds
 # the branch of one queued on its own outside it (`carried_queued`). Before any
 # queueing and before such a wait, every open pull request on a branch the
