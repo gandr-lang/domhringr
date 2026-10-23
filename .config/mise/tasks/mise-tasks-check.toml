@@ -457,10 +457,10 @@ fi
 
 # The stacking rule's readings (gandr-lang/gandr#1264): `chain.jq` reads a
 # pull request's stack from the open pull requests, `top.jq` the top a new one
-# stacks on, and `decide.jq` how `pr:land` lands. Each case in
-# `.config/pr-stack/cases.json` names its program, its arguments and input,
-# and the output it must give; `decide.jq`'s output is its raw line, the
-# others' compact JSON.
+# stacks on, `decide.jq` how `pr:land` lands, and `sweep.jq` which worktrees
+# `wt:sweep` removes. Each case in `.config/pr-stack/cases.json` names its
+# program, its arguments and input, and the output it must give;
+# `decide.jq`'s output is its raw line, the others' compact JSON.
 ["check:pr-stack"]
 description = "The stacking rule's readings give each recorded case its output"
 tools.jq = "1.8.1"
