@@ -430,6 +430,22 @@ pub fn runtime() -> tokio::runtime::Runtime
         .unwrap()
 }
 
+/// The output of a future that never waits, such as a held store's reader.
+///
+/// # Specification
+/// trivial.
+pub fn ready<F>(future: F) -> F::Output
+where
+    F: Future,
+{
+    let mut future = core::pin::pin!(future);
+    let mut context = core::task::Context::from_waker(core::task::Waker::noop());
+    match future.as_mut().poll(&mut context) {
+        core::task::Poll::Ready(output) => output,
+        core::task::Poll::Pending => panic!("a held store's reader never waits"),
+    }
+}
+
 /// A fixed project with aliases, an unheld task and excluded binding shapes.
 ///
 /// # Specification

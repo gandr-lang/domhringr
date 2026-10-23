@@ -743,6 +743,7 @@ dependencies = [
  "future_form",
  "gandr-core-session",
  "gandr-storage-records",
+ "gandr-storage-schema",
  "gandr-storage-values",
  "iroh",
  "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
@@ -819,7 +820,7 @@ dependencies = [
  "domhringr-record-tree",
  "domhringr-seat-slot",
  "domhringr-strategy-document",
- "gandr-storage-records",
+ "gandr-storage-schema",
  "gandr-storage-values",
  "iroh",
  "lexopt",
@@ -1188,6 +1189,15 @@ dependencies = [
  "blake3",
  "gandr-storage-chunker",
  "gandr-theory-spec-combinators",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+]
+
+[[package]]
+name = "gandr-storage-schema"
+version = "0.0.0"
+dependencies = [
+ "blake3",
+ "gandr-storage-records",
  "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 

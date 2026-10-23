@@ -1,12 +1,12 @@
 //! Protocol admission of attested attempts, independently of receipt authority.
 //!
 //! Proof membership and protocol conformance are independent. `prove::play`
-//! verifies the complete attempt range and returns ordered coordinates,
-//! authors, commit identities and original receipt bytes. [`replay`] feeds
-//! those moves to the arena monitor under the dispatch's edition: one slot and
-//! decision channel per attempt, one judge channel per verdict and one runner
-//! channel per runner. Unknown editions and invalid transitions are refused at
-//! their `(attempt, seq)` with the movement named.
+//! reads an attempt's complete preimage of moves and returns ordered
+//! coordinates, authors, commit identities and original receipt bytes.
+//! [`replay`] feeds those moves to the arena monitor under the dispatch's
+//! edition: one slot and decision channel per attempt, one judge channel per
+//! verdict and one runner channel per runner. Unknown editions and invalid
+//! transitions are refused at their `(attempt, seq)` with the movement named.
 //!
 //! Replay resolves grading and landing references only from earlier moves in
 //! that attempt and projects admitted steps through `Current::record`. It
@@ -216,6 +216,49 @@ pub fn replay(
         let _previous = related.insert(movement.commit, movement);
     }
     Ok(result)
+}
+
+/// The standing an attempt's moves reach, without protocol admission.
+///
+/// The store holds a task's standing as its kind alone; the rest is this
+/// projection of its last attempt, which equals the fold's when the store
+/// agrees with it.
+///
+/// # Specification
+/// - requires: `moves` is one attempt's play, as [`crate::prove::play`] returns
+///   it.
+/// - ensures: the standing folding [`Current::record`] over the resolved moves
+///   in order reaches.
+/// - fails: a move that doesn't resolve against the moves before it, at its
+///   coordinate.
+/// - panics: none.
+/// - executable: none — the fold is the oracle, which the function doesn't
+///   hold; the witness compares with it at every standing.
+///
+/// # Errors
+/// - [`Refusal`]: an unresolved move.
+///
+/// # Adequacy
+/// - hypothesis: L2 — at every reachable standing the recomputed standing
+///   equals the fold's.
+/// - witness: `project::tests::an_entry_agrees_with_the_fold_at_every_standing`
+#[inline]
+pub fn recompute(moves: &[(MoveKey, Move)]) -> Result<Current, Refusal>
+{
+    let mut current = Current::Undispatched;
+    let mut related = BTreeMap::new();
+    for entry in moves {
+        let movement = &entry.1;
+        let (attempt, seq) = entry.0.coordinates();
+        let step = resolve(movement, &related).map_err(|reason| Refusal {
+            attempt,
+            seq,
+            reason,
+        })?;
+        current.record(movement.commit, &step);
+        let _previous = related.insert(movement.commit, movement);
+    }
+    Ok(current)
 }
 
 /// Name the endpoint action carried by a task receipt.

@@ -10,8 +10,8 @@
 //!
 //! # Index attestations
 //!
-//! `Indexed { index }` attests an `IndexDigest`: a project manifest's 32-byte
-//! identity, distinct from an evidence digest. The owner or a causally granted
+//! `Indexed { index }` attests an `IndexDigest`: a project store's 32-byte
+//! root, distinct from an evidence digest. The owner or a causally granted
 //! member may attest; a dispatch alone grants no attestation authority.
 //! `View::indexes` holds each author's last admitted claim in canonical order,
 //! including its commit and parents; `View::attestations` retains every claim.
@@ -78,7 +78,7 @@ use crate::task::Task;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexAttestation
 {
-    /// The attested project manifest.
+    /// The attested project store's root.
     pub index: crate::IndexDigest,
     /// The receipt carrying the claim.
     pub commit: CommitId,

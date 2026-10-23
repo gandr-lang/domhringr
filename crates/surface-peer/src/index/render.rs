@@ -4,30 +4,71 @@ use alloc::collections::BTreeMap;
 use core::fmt::Write as _;
 
 use domhringr_record_index::AttemptNumber;
-use domhringr_record_index::IndexKind;
 use domhringr_record_index::MoveKey;
 use domhringr_record_index::SequenceNumber;
+use domhringr_record_index::keyed::Keyed;
 use domhringr_record_index::prove;
 use domhringr_record_index::prove::Move;
-use domhringr_record_index::prove::Query;
-use domhringr_record_index::prove::Verified;
-use domhringr_record_index::stream::Request;
+use domhringr_record_index::prove::ProveError;
 use domhringr_record_tree::CommitId;
-use domhringr_record_tree::IndexDigest;
 use domhringr_record_tree::Kind;
 use domhringr_record_tree::StepLine;
-use domhringr_record_tree::TreeId;
-use gandr_storage_records::Record;
 
+use super::Found;
 use super::IndexError;
 use super::Question;
 use super::Reader;
 
-/// Verify the dialogue answer before interpreting or printing any of its moves.
+/// Read the proved play of `at`'s attempt, every move of the bound tree.
+///
+/// # Specification
+/// - ensures: the attempt's complete play, each move naming `tree`.
+/// - fails: an attempt the task doesn't have, refused as `at` absent; a move of
+///   another tree; or a proof that doesn't verify.
+/// - panics: none.
+/// - executable: none — the reads are proofs; the project-only witness observes
+///   them.
+///
+/// # Errors
+/// - [`IndexError`]: as above.
+///
+/// # Adequacy
+/// - hypothesis: L1 — a project-only reader verifies every question.
+/// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
+pub(super) async fn play(
+    reader: &mut Reader,
+    found: &Found,
+    at: MoveKey,
+) -> Result<Vec<(MoveKey, Move)>, IndexError>
+{
+    let (attempt, seq) = at.coordinates();
+    let index = (1_u32 ..)
+        .map(AttemptNumber)
+        .zip(&found.claim.attempts)
+        .find_map(|(number, &part)| (number == attempt).then_some(part));
+    let Some(part) = index
+    else {
+        return Err(IndexError::MoveAbsent(attempt, seq));
+    };
+    let moves = prove::play(reader, Keyed::shared()?, attempt, part).await?;
+    if let Some(first) = moves.first() {
+        let actual = first.1.receipt.tree();
+        if actual != found.tree {
+            return Err(ProveError::Tree {
+                expected: found.tree,
+                actual,
+            }
+            .into());
+        }
+    }
+    Ok(moves)
+}
+
+/// Answer a move, play or later-attempt question in the replay language.
 ///
 /// # Specification
 /// - ensures: move and play use the replay language; after reports none only
-///   when absence has no successor; all receipts name the selected task.
+///   when the task has no later attempt; all receipts name the bound task.
 /// - fails: a false proof, foreign task or unresolved move reference fails.
 /// - panics: none.
 /// - executable: none — proof queries and their network resources are
@@ -41,33 +82,16 @@ use super::Reader;
 /// - hypothesis: L1 — a project-only reader verifies all four questions.
 /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
 pub(super) async fn question(
-    reader: Reader,
-    tree: TreeId,
-    digest: IndexDigest,
+    mut reader: Reader,
+    found: &Found,
     question: Question,
     mut output: String,
 ) -> Result<(Reader, String), IndexError>
 {
-    let query = match question {
-        Question::Task(ref _name) | Question::Replay(ref _name) => return Err(IndexError::Shape),
-        Question::Move(ref _name, key) => Query::Key(key.owned()),
-        Question::Play(ref _name, attempt) => {
-            let range = attempt.range()?;
-            Query::Range(range)
-        },
-        Question::After(ref _name, attempt) => {
-            let next = attempt.next()?;
-            Query::Key(MoveKey::new(next, SequenceNumber(0)).owned())
-        },
-    };
-    let request = Request { digest, query };
-    let (reader, answer) = reader.ask(&request, IndexKind::Dialogue).await?;
-    let verified = answer.verify(digest, IndexKind::Dialogue, &request.query)?;
-    writeln!(output, "proved {digest} {}", reader.author)?;
     match question {
         Question::Task(_name) | Question::Replay(_name) => Err(IndexError::Shape),
         Question::After(_name, attempt) => {
-            let later = prove::later(tree, &verified)?;
+            let later = prove::later(&mut reader, Keyed::shared()?, &found.claim, attempt).await?;
             match later {
                 prove::Later::None => writeln!(output, "after {attempt} none")?,
                 prove::Later::Dispatch(movement) => {
@@ -76,120 +100,52 @@ pub(super) async fn question(
             }
             Ok((reader, output))
         },
-        Question::Play(_name, _attempt) => {
-            let Verified::Range(records) = verified
-            else {
-                return Err(IndexError::Shape);
-            };
-            let moves = moves(tree, &records)?;
+        Question::Play(_name, attempt) => {
+            let moves = play(&mut reader, found, MoveKey::new(attempt, SequenceNumber(0))).await?;
             let related = moves
                 .iter()
-                .map(|movement| (movement.commit, movement))
+                .map(|entry| (entry.1.commit, &entry.1))
                 .collect();
-            for movement in &moves {
-                emit(&mut output, movement, &related)?;
+            for entry in &moves {
+                emit(&mut output, &entry.1, &related)?;
             }
             Ok((reader, output))
         },
         Question::Move(_name, key) => {
-            let value = match verified {
-                Verified::Present(value) => value,
-                Verified::Absent(_evidence) => {
-                    let (attempt, seq) = key.coordinates();
-                    return Err(IndexError::MoveAbsent(attempt, seq));
-                },
-                Verified::Range(_records) => return Err(IndexError::Shape),
-            };
-            let movement = prove::read_move(tree, value)?;
-            self::movement(reader, tree, digest, key, &movement, output).await
+            let moves = play(&mut reader, found, key).await?;
+            let (attempt, seq) = key.coordinates();
+            let movement = moves
+                .iter()
+                .find(|entry| entry.0 == key)
+                .ok_or(IndexError::MoveAbsent(attempt, seq))?;
+            emit_with(&mut output, &movement.1, &moves)?;
+            Ok((reader, output))
         },
     }
 }
 
-/// Render an authenticated move, proving context only for indirect fields.
+/// Render a move, resolving a grading or landing against its own play.
 ///
 /// # Specification
-/// - ensures: grading and landing context comes from the same attested attempt;
-///   direct moves need no second membership request.
-/// - fails: malformed references, proofs or transport are refused.
-/// - panics: none.
-/// - executable: none — indirect move context is authenticated through
-///   effectful proof requests; the project-only reader checks the original move
-///   line.
-///
-/// # Errors
-/// - [`IndexError`]: proof, reference or output failure.
-///
-/// # Adequacy
-/// - hypothesis: L1 — a project-only reader obtains the original move line.
-/// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
-/// - witness: `index::tests::a_transcript_resolves_to_its_verdict_by_proof`
-pub(super) async fn movement(
-    reader: Reader,
-    tree: TreeId,
-    digest: IndexDigest,
-    key: MoveKey,
+/// trivial.
+pub(super) fn emit_with(
+    output: &mut String,
     movement: &Move,
-    mut output: String,
-) -> Result<(Reader, String), IndexError>
+    play: &[(MoveKey, Move)],
+) -> Result<(), IndexError>
 {
-    if matches!(
+    let related = if matches!(
         movement.receipt.kind(),
         Kind::Graded { .. } | Kind::Landed { .. }
     ) {
-        let (attempt, _seq) = key.coordinates();
-        let (reader, context) = play(reader, tree, digest, attempt).await?;
-        let related = context
-            .iter()
-            .map(|movement| (movement.commit, movement))
-            .collect();
-        emit(&mut output, movement, &related)?;
-        Ok((reader, output))
+        play.iter()
+            .map(|entry| (entry.1.commit, &entry.1))
+            .collect()
     }
     else {
-        emit(&mut output, movement, &BTreeMap::new())?;
-        Ok((reader, output))
-    }
-}
-
-/// Read the authenticated context needed by an indirect move reference.
-///
-/// # Specification
-/// trivial.
-async fn play(
-    reader: Reader,
-    tree: TreeId,
-    digest: IndexDigest,
-    attempt: AttemptNumber,
-) -> Result<(Reader, Vec<Move>), IndexError>
-{
-    let range = attempt.range()?;
-    let request = Request {
-        digest,
-        query: Query::Range(range),
+        BTreeMap::new()
     };
-    let (reader, answer) = reader.ask(&request, IndexKind::Dialogue).await?;
-    let Verified::Range(records) = answer.verify(digest, IndexKind::Dialogue, &request.query)?
-    else {
-        return Err(IndexError::Shape);
-    };
-    let moves = moves(tree, &records)?;
-    Ok((reader, moves))
-}
-
-/// Decode range values with the same tree check used for a single-key answer.
-///
-/// # Specification
-/// trivial.
-fn moves(
-    tree: TreeId,
-    records: &[Record],
-) -> Result<Vec<Move>, IndexError>
-{
-    records
-        .iter()
-        .map(|record| prove::read_move(tree, record.value()).map_err(IndexError::from))
-        .collect()
+    emit(output, movement, &related)
 }
 
 /// Resolve only presentation fields; proof membership is not fold admission.

@@ -16,67 +16,6 @@ mod tests
     use std::sync::mpsc;
     use std::time::Instant;
 
-    /// Independently frame a membership answer, including hostile proof nodes.
-    ///
-    /// # Specification
-    /// - ensures: the image carries the manifest and raw proof bytes, not a
-    ///   root supplied outside that manifest.
-    /// - panics: unless the answer is membership or its fields fit the wire
-    ///   width.
-    /// - executable: none — the function is its own specification; the process
-    ///   witness supplies the output or proof image and checks its
-    ///   interpretation.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
-    ///   findings this helper supplies.
-    /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
-    fn member_image(
-        answer: &domhringr_record_index::prove::Answer
-    ) -> domhringr_record_index::WireImage
-    {
-        use domhringr_record_index::prove::Proof;
-        let Proof::Present(ref proof) = answer.proof
-        else {
-            panic!("membership answer");
-        };
-        let mut image = domhringr_record_index::WireImage(vec![1]);
-        frame(&mut image, answer.manifest.encode().unwrap());
-        image.0.push(1);
-        frame(&mut image, proof.value());
-        image
-            .0
-            .extend_from_slice(&u32::try_from(proof.nodes().len()).unwrap().to_le_bytes());
-        for node in proof.nodes() {
-            frame(&mut image, node.bytes());
-        }
-        image
-    }
-
-    /// Append one independently length-prefixed field.
-    ///
-    /// # Specification
-    /// - panics: when a field exceeds the wire width.
-    /// - executable: none — the function is its own specification; the process
-    ///   witness supplies the output or proof image and checks its
-    ///   interpretation.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L3 — the process fixture checks the commands, receipts or
-    ///   findings this helper supplies.
-    /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
-    fn frame(
-        image: &mut domhringr_record_index::WireImage,
-        field: impl AsRef<[u8]>,
-    )
-    {
-        let field = field.as_ref();
-        image
-            .0
-            .extend_from_slice(&u32::try_from(field.len()).unwrap().to_le_bytes());
-        image.0.extend_from_slice(field);
-    }
-
     /// Serve supplied bytes to a real reader process, then await its refusal.
     ///
     /// # Specification
@@ -117,12 +56,13 @@ mod tests
         output
     }
 
-    /// A hostile holder cannot invent a later attempt or exceed the reader's
-    /// cap.
+    /// A hostile holder cannot answer from another store or exceed the
+    /// reader's cap.
     ///
     /// # Specification
-    /// - ensures: a forged dispatch fails against the attested manifest;
-    ///   exactly one MiB reaches framing, while an extra byte fails at the read
+    /// - ensures: a well-formed proof of the reader's own question from a store
+    ///   whose standing is forged fails against the attested root; exactly one
+    ///   MiB reaches proof decoding, while an extra byte fails at the read
     ///   boundary.
     /// - panics: on any accepted forgery or incorrect boundary classification.
     /// - executable: none — process, channel or filesystem effects cannot be
@@ -135,67 +75,34 @@ mod tests
     /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
     fn hostile_answers_are_refused(fixture: &Fixture)
     {
-        use domhringr_record_index::AttemptNumber;
-        use domhringr_record_index::Index;
-        use domhringr_record_index::IndexKind;
-        use domhringr_record_index::MoveKey;
-        use domhringr_record_index::SequenceNumber;
-        use domhringr_record_index::WireImage;
-        use domhringr_record_index::project::TaskEntry;
-        use domhringr_record_index::project::TaskName;
-        use domhringr_record_index::prove::Query;
+        use domhringr_record_index::derive;
+        use domhringr_record_index::keyed;
+        use domhringr_record_index::keyed::Keyed;
+        use domhringr_record_index::keyed::Standing;
         use domhringr_record_index::store::Store;
         use domhringr_record_tree::StateDir;
-        use gandr_storage_values::TokenBody;
-        use gandr_storage_values::decode_flat;
-        use gandr_storage_values::encode_flat;
-        let state = StateDir::from(fixture.root.path().join("a"));
-        let store = Store::open(&state);
-        let project = store.load(fixture.digest.parse().unwrap()).unwrap();
-        let name: TaskName = "one".parse().unwrap();
-        let query = Query::Key(name.key());
-        let answer = domhringr_record_index::prove::answer(&project, &query).unwrap();
-        let value = project.tree.lookup(name.key().as_borrowed()).unwrap();
-        let TaskEntry::Held { tree, dialogue, .. } =
-            decode_flat::<TaskEntry>(TokenBody::from(value.as_ref())).unwrap()
-        else {
-            panic!("held task");
+        use gandr_storage_schema::Question;
+        let keyed = Keyed::shared().unwrap();
+        let mut forged = Store::open(&StateDir::from(fixture.root.path().join("a")))
+            .load(keyed, derive::root(fixture.digest.parse().unwrap()))
+            .unwrap();
+        let name = keyed::text(keyed::Text("one"));
+        let task = forged.value_preimage(keyed.task_name, &name).unwrap()[0];
+        forged
+            .set_value(keyed.task_standing, task, Standing::Undispatched.value())
+            .unwrap();
+        let _forged = Store::open(&StateDir::from(fixture.root.path().join("forged")))
+            .keep(&mut forged)
+            .unwrap();
+        // The reader's first question finds the task by its name.
+        let question = Question::ValuePreimage {
+            attribute: keyed.task_name,
+            value: name,
         };
-        let dialogue = store.load(dialogue).unwrap();
-        let bid = finish(fixture.reader().arg("id"));
-        let stranger = bid[1].parse().unwrap();
-        let receipt = domhringr_record_tree::Receipt::dispatch(
-            tree,
-            stranger,
-            domhringr_record_tree::Edition::CURRENT,
-            domhringr_record_tree::Brief::Content(BRIEF.parse().unwrap()),
-        )
-        .unwrap();
-        let receipt = encode_flat(&receipt).unwrap();
-        let value = encode_flat(&domhringr_record_index::dialogue::MoveValue {
-            author: stranger,
-            blob: alloc::borrow::Cow::Borrowed(receipt.as_ref()),
-        })
-        .unwrap();
-        let key = MoveKey::new(AttemptNumber(3), SequenceNumber(0));
-        let mut records = dialogue.tree.records().to_vec();
-        records.push(gandr_storage_records::Record::new(
-            key.as_ref(),
-            value.as_ref(),
-        ));
-        let records: Vec<_> = records
-            .iter()
-            .map(gandr_storage_records::Record::as_record_ref)
-            .collect();
-        let forged = gandr_storage_records::RecordTree::build(
-            &records,
-            gandr_storage_records::TreeParams::current(),
-        )
-        .unwrap();
-        let forged = Index::new(IndexKind::Dialogue, forged);
-        let mut forged =
-            domhringr_record_index::prove::answer(&forged, &Query::Key(key.owned())).unwrap();
-        forged.manifest = dialogue.manifest;
+        let mut forged_image = domhringr_record_index::WireImage(vec![1]);
+        forged_image
+            .0
+            .extend_from_slice(forged.prove(&question).unwrap().encode().as_ref());
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -216,25 +123,24 @@ mod tests
                 .unwrap();
             let at = format!("{}@127.0.0.1:{port}", holder.endpoint_key());
             let mut command = fixture.reader();
-            command.args(["index", "after", &fixture.project, "one", "2", "--at", &at]);
-            let refused = hostile(
-                &holder,
-                vec![member_image(&answer), member_image(&forged)],
-                command,
-            )
-            .await;
+            command.args(["index", "task", &fixture.project, "one", "--at", &at]);
+            let refused = hostile(&holder, vec![forged_image], command).await;
             let failure = String::from_utf8(refused.stderr).unwrap();
-            assert!(failure.contains("proof"), "{failure}");
+            assert!(
+                failure.contains(&format!("not {}", fixture.digest)),
+                "{failure}"
+            );
             let cap = usize::try_from(domhringr_record_index::stream::ANSWER_CAP.0).unwrap();
             for size in [cap, cap.saturating_add(1)] {
                 let mut command = fixture.reader();
                 command.args(["index", "task", &fixture.project, "one", "--at", &at]);
-                let refused = hostile(&holder, vec![WireImage(vec![0; size])], command).await;
+                let image = domhringr_record_index::WireImage(vec![1; size]);
+                let refused = hostile(&holder, vec![image], command).await;
                 let failure = String::from_utf8(refused.stderr).unwrap();
                 if size == cap {
                     assert!(
-                        failure.contains("trailing"),
-                        "the whole in-cap answer reaches framing: {failure}"
+                        failure.contains("malformed proof image"),
+                        "the whole in-cap answer reaches proof decoding: {failure}"
                     );
                 }
                 else {
@@ -448,7 +354,7 @@ mod tests
         owner: String,
         /// Owner's direct endpoint.
         contact: String,
-        /// Attested project digest.
+        /// Attested store root.
         digest: String,
         /// Dispatch identities in attempt order.
         dispatches: Vec<String>,
@@ -613,7 +519,7 @@ mod tests
                 .reader()
                 .args(["index", "play", &fixture.project, "one", "1"]),
         );
-        assert_eq!(&play[2 ..], &fixture.replay[.. 3]);
+        assert_eq!(&play[1 ..], &fixture.replay[.. 3]);
         let after = finish(
             fixture
                 .reader()
@@ -641,7 +547,7 @@ mod tests
     ///
     /// # Specification
     /// - ensures: B reports an unchecked task before syncing it, agrees after
-    ///   syncing, and measures the same project, provenance and dialogue.
+    ///   syncing, and measures the same store, table by table.
     /// - panics: on any status, check or measurement mismatch.
     #[test]
     fn a_peer_holding_the_trees_checks_the_attestation()
@@ -670,10 +576,20 @@ mod tests
                 .reader()
                 .args(["index", "measure", &fixture.project]),
         );
-        assert_eq!(measured.len(), 3);
-        assert!(measured[0].starts_with("index project "));
-        assert!(measured[1].starts_with("index provenance "));
-        assert!(measured[2].starts_with("index dialogue "));
+        assert_eq!(measured[0], format!("store {}", fixture.digest));
+        assert!(measured[1 ..].iter().all(|line| line.starts_with("table ")));
+        let tables: Vec<_> = measured[1 ..]
+            .iter()
+            .map(|line| line.split_whitespace().nth(1))
+            .collect();
+        assert_eq!(tables, [
+            Some("Attempt"),
+            Some("Move"),
+            Some("Naming"),
+            Some("Refusal"),
+            Some("Subject"),
+            Some("Task")
+        ]);
         let project = fixture.project.clone();
         let state = fixture.root.path().join("a");
         drop(fixture.server);
@@ -1098,34 +1014,25 @@ mod tests
     fn attested_plays_are_refused_at_the_move()
     {
         use alloc::borrow::Cow;
-        use alloc::collections::BTreeMap;
 
-        use domhringr_record_index::AttemptNumber;
-        use domhringr_record_index::Index;
-        use domhringr_record_index::IndexKind;
-        use domhringr_record_index::MoveKey;
-        use domhringr_record_index::SequenceNumber;
+        use domhringr_record_index::derive;
         use domhringr_record_index::dialogue::MoveValue;
-        use domhringr_record_index::project::Nested;
-        use domhringr_record_index::project::TaskEntry;
-        use domhringr_record_index::project::TaskName;
+        use domhringr_record_index::keyed;
+        use domhringr_record_index::keyed::Keyed;
+        use domhringr_record_index::keyed::Number;
+        use domhringr_record_index::keyed::Standing;
         use domhringr_record_index::prove;
-        use domhringr_record_index::prove::Query;
-        use domhringr_record_index::prove::Verified;
         use domhringr_record_index::store::Store;
         use domhringr_record_tree::CommitId;
-        use domhringr_record_tree::Current;
         use domhringr_record_tree::Identity;
         use domhringr_record_tree::Peer;
         use domhringr_record_tree::Receipt;
         use domhringr_record_tree::Revision;
         use domhringr_record_tree::StateDir;
-        use gandr_storage_records::Record;
-        use gandr_storage_records::RecordTree;
-        use gandr_storage_records::TreeParams;
+        use gandr_storage_schema::AttributeValue;
+        use gandr_storage_schema::PartKey;
+        use gandr_storage_schema::Row;
         use gandr_storage_values::ManifestDigest;
-        use gandr_storage_values::TokenBody;
-        use gandr_storage_values::decode_flat;
         use gandr_storage_values::encode_flat;
         let Fixture {
             root,
@@ -1144,30 +1051,43 @@ mod tests
         let project_tree = replay_tree(&project.parse().unwrap());
         let state = StateDir::from(a.clone());
         let store = Store::open(&state);
-        let original = store.load(digest.parse().unwrap()).unwrap();
-        let name: TaskName = "one".parse().unwrap();
-        let value = original.tree.lookup(name.key().as_borrowed()).unwrap();
-        let original_entry = decode_flat::<TaskEntry>(TokenBody::from(value.as_ref())).unwrap();
-        let TaskEntry::Held { dialogue, .. } = original_entry
-        else {
-            panic!("held task");
+        let keyed = Keyed::shared().unwrap();
+        let original = store
+            .load(keyed, derive::root(digest.parse().unwrap()))
+            .unwrap();
+        let task_part = original
+            .value_preimage(keyed.task_name, &keyed::text(keyed::Text("one")))
+            .unwrap()[0];
+        let attempt = |number: u64| -> PartKey {
+            original
+                .preimage(keyed.attempt_task, task_part)
+                .unwrap()
+                .iter()
+                .copied()
+                .find(|&part| {
+                    *original.value(keyed.attempt_number, part).unwrap()
+                        == keyed::number(Number(number))
+                })
+                .unwrap()
         };
-        let dialogue = store.load(dialogue).unwrap();
-        let key = MoveKey::new(AttemptNumber(1), SequenceNumber(0)).owned();
+        let movement = |number: u64, seq: u64| -> PartKey {
+            original
+                .preimage(keyed.move_attempt, attempt(number))
+                .unwrap()
+                .iter()
+                .copied()
+                .find(|&part| {
+                    *original.value(keyed.move_seq, part).unwrap() == keyed::number(Number(seq))
+                })
+                .unwrap()
+        };
         let first_dispatch =
-            prove::read_move(tree, dialogue.tree.lookup(key.as_borrowed()).unwrap())
+            prove::read_move(original.value(keyed.move_receipt, movement(1, 0)).unwrap())
                 .unwrap()
                 .commit;
-        let mut nested = BTreeMap::new();
-        for record in original.tree.records() {
-            if record.key().as_ref() == [0, u8::from(IndexKind::Provenance)] {
-                let Nested(digest) = decode_flat(TokenBody::from(record.value().as_ref())).unwrap();
-                nested.insert(IndexKind::Provenance, digest);
-            }
-        }
         for forgery in ["report", "landed", "current", "omitted"] {
-            let mut records = dialogue.tree.records().to_vec();
-            let (attempt, seq) = if forgery == "report" { (1, 3) } else { (2, 2) };
+            let mut claimed = original.clone();
+            let (number, seq) = if forgery == "report" { (1, 3) } else { (2, 2) };
             if matches!(forgery, "report" | "landed") {
                 let receipt = if forgery == "report" {
                     Receipt::report(
@@ -1187,61 +1107,36 @@ mod tests
                     blob: Cow::Borrowed(blob.as_ref()),
                 })
                 .unwrap();
-                records.push(Record::new(
-                    MoveKey::new(AttemptNumber(attempt), SequenceNumber(seq)).owned(),
-                    value.as_ref(),
-                ));
+                let _forged = claimed
+                    .add_part(
+                        keyed.movement,
+                        &Row::new()
+                            .arrow(keyed.move_attempt, attempt(number))
+                            .value(keyed.move_seq, keyed::number(Number(seq)))
+                            .value(keyed.move_receipt, AttributeValue::from(value.as_ref())),
+                    )
+                    .unwrap();
+            }
+            if forgery == "current" {
+                claimed
+                    .set_value(
+                        keyed.task_standing,
+                        task_part,
+                        Standing::Undispatched.value(),
+                    )
+                    .unwrap();
             }
             if forgery == "omitted" {
-                records.retain(|record| {
-                    record.key().as_ref()
-                        != MoveKey::new(AttemptNumber(1), SequenceNumber(2)).as_ref()
-                });
+                claimed.delete_part(keyed.movement, movement(1, 2)).unwrap();
             }
-            records.sort_unstable_by(|left, right| left.key().as_ref().cmp(right.key().as_ref()));
-            let refs: Vec<_> = records.iter().map(Record::as_record_ref).collect();
-            let claimed = Index::new(
-                IndexKind::Dialogue,
-                RecordTree::build(&refs, TreeParams::current()).unwrap(),
-            );
-            let claimed_digest = store.keep(&claimed).unwrap();
-            let query = Query::Range(AttemptNumber(attempt).range().unwrap());
-            let proof = prove::answer(&claimed, &query).unwrap();
-            assert!(
-                matches!(
-                    proof
-                        .verify(claimed_digest, IndexKind::Dialogue, &query)
-                        .unwrap(),
-                    Verified::Range(_)
-                ),
-                "the hostile claim has a valid range proof"
-            );
-            let mut entry = original_entry.clone();
-            let TaskEntry::Held {
-                ref mut dialogue,
-                ref mut current,
-                ..
-            } = entry
-            else {
-                panic!("held task");
-            };
-            *dialogue = claimed_digest;
-            if forgery == "current" {
-                *current = Current::Undispatched;
-            }
-            let project_index = domhringr_record_index::project::build(
-                &BTreeMap::from([(name.clone(), entry)]),
-                &nested,
-            )
-            .unwrap();
-            let project_digest = store.keep(&project_index).unwrap();
+            let claimed_root = store.keep(&mut claimed).unwrap();
             replay_runtime().block_on(async {
                 let identity = Identity::load_or_create(&state).unwrap();
                 Peer::open(&state, identity)
                     .unwrap()
                     .commit(
                         project_tree,
-                        Receipt::indexed(project_tree, project_digest).unwrap(),
+                        Receipt::indexed(project_tree, derive::digest(claimed_root)).unwrap(),
                     )
                     .await
                     .unwrap();
@@ -1271,14 +1166,14 @@ mod tests
                 let error = String::from_utf8(output.stderr).unwrap();
                 if forgery == "current" {
                     assert!(
-                        error.contains("current mismatch: entry Undispatched; replay Attempt"),
+                        error.contains("current mismatch: task undispatched; replay Attempt"),
                         "{error}"
                     );
                 }
                 else {
                     assert!(
                         error.contains(&format!(
-                            "move {attempt}.{seq}: edition {} {forgery}:",
+                            "move {number}.{seq}: edition {} {forgery}:",
                             domhringr_record_tree::Edition::CURRENT
                         )),
                         "{error}"

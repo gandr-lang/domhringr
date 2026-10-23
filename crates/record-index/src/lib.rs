@@ -1,22 +1,27 @@
-//! Derived, attested ordered indexes and their root-checkable proofs.
+//! A project's derived index as one store of a keyed schema, and the
+//! root-checkable proofs of what it holds.
 //!
-//! The receipt fold owns admission. Index manifests bind a kind, layout,
-//! boundary rule, record count and node identity independently of storage.
-//!
-//! The record-tree API and proof language come from `gandr-storage-records`.
-//! Verification uses its membership, non-membership and range proofs against
-//! the resealed root alone.
+//! The receipt fold owns admission. A project's tasks, their attempts and
+//! admitted moves, their refusals, and the evidence and revisions those
+//! moves name are parts of one store of
+//! `gandr_storage_schema::keyed::schema()` ([`keyed`]). An `Indexed`
+//! receipt attests the store's root. Every question a reader asks is a
+//! question of that schema, proved against that root ([`prove`],
+//! [`stream`]).
 //!
 //! # Decisions
 //!
 //! | Choice | Alternative | Reversal condition |
 //! | ------ | ----------- | ------------------ |
 //! | Derive above the fold | Maintain indexes during receipt admission | Admission itself needs authenticated index queries |
-//! | Kind-bound manifest images | Use a record root or a value manifest as the index name | Record-root metadata changes, requiring a new manifest layout |
+//! | One store of the keyed schema, attested by its root | A record family per index kind, each with its own manifest and the project nesting the others | A question the schema's proofs can't answer, needing a family the schema doesn't state |
+//! | The standing's kind as a tag; the rest recomputed from the last attempt | Store the whole standing beside the moves it is a projection of | The fold's standing gains a field no move kind carries |
+//! | No tree attribute: a task is found by name, its moves by attempt | Store each task's tree | A reader needs a task's tree before any of its moves exists |
+//! | A refresh edits the previous store; agreement is by contents | Rebuild every derive from empty so roots compare | Readers need a root that is a function of the project alone |
 //! | Original receipt bytes in move values | Re-encode displayed moves | The receipt language supplies a canonical, lossless transformation with preserved identity |
 //! | Replay through the arena monitor and share the fold's standing projection | Maintain another receipt automaton or trust the claimed standing | The monitor gains a resumable cursor, allowing replay without rebuilding channel prefixes |
 //! | Content-addressed node files | A separate database table | Measured file overhead exceeds the cost of a transactional store |
-//! | `quenchant-arith` at the storage sibling's pin, with defaults off | Primitive arithmetic loses the nominal boundary; local wrappers duplicate its checked and saturating families | The shared arithmetic contract changes or the dependency is no longer maintained |
+//! | `quenchant-arith` at the storage sibling's pin, with defaults off | Primitive arithmetic loses the nominal boundary; local wrappers duplicate its checked and saturating families | The shared arithmetic contract changes or the dependency goes unmaintained |
 //! | Dedicated proof protocol | Mix derived bytes into receipt sync or evidence transfer | Batching or subscription requires another protocol version |
 
 // Module documentation that predates the shape lint: 1 heading outside the
@@ -47,7 +52,7 @@ pub mod check;
 pub mod derive;
 pub mod dialogue;
 pub mod key;
-pub mod manifest;
+pub mod keyed;
 pub mod measure;
 pub mod project;
 pub mod prove;
@@ -60,38 +65,5 @@ mod wire;
 pub use key::AttemptNumber;
 pub use key::MoveKey;
 pub use key::SequenceNumber;
-pub use manifest::IndexKind;
-pub use manifest::Manifest;
-pub use manifest::ManifestError;
 pub use wire::WireError;
 pub use wire::WireImage;
-
-/// A manifest paired with the exact record tree it names.
-#[derive(Debug)]
-pub struct Index
-{
-    /// The kind-bound identity envelope.
-    pub manifest: Manifest,
-    /// The canonical tree retained for proof construction.
-    pub tree: gandr_storage_records::RecordTree,
-}
-
-impl Index
-{
-    /// Bind the tree under its index language.
-    ///
-    /// # Specification
-    /// trivial.
-    #[inline]
-    #[must_use]
-    pub fn new(
-        kind: IndexKind,
-        tree: gandr_storage_records::RecordTree,
-    ) -> Self
-    {
-        Self {
-            manifest: Manifest::new(kind, &tree),
-            tree,
-        }
-    }
-}

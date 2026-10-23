@@ -1,30 +1,28 @@
-//! Replay range-proved attempts without acquiring the task's receipt tree.
+//! Replay proved attempts without acquiring the task's receipt tree.
 
 use core::fmt::Write as _;
 
 use domhringr_record_index::AttemptNumber;
-use domhringr_record_index::IndexKind;
 use domhringr_record_index::MoveKey;
 use domhringr_record_index::SequenceNumber;
-use domhringr_record_index::project::TaskEntry;
-use domhringr_record_index::prove;
-use domhringr_record_index::prove::Query;
+use domhringr_record_index::keyed::Standing;
 use domhringr_record_index::replay;
-use domhringr_record_index::stream::Request;
 use domhringr_record_tree::Current;
 use domhringr_record_tree::StepLine;
 
+use super::Found;
 use super::IndexError;
 use super::Reader;
+use super::render;
 
-/// Replay each attested attempt and compare the complete current value.
+/// Replay each attested attempt and compare the standing's kind.
 ///
 /// # Specification
-/// - requires: `entry` was authenticated under the chosen project attestation.
-/// - ensures: every attempt's complete range passes its dispatch's monitor; the
-///   final standing equals the entry, including fields hidden by Display.
-/// - fails: unheld task, invalid proof, absent attempt, named move refusal,
-///   omitted later attempt, or a standing mismatch naming both values.
+/// - requires: `found` was read from the chosen attestation's store.
+/// - ensures: every attempt's complete play passes its dispatch's monitor; the
+///   kind of the final standing equals the task's.
+/// - fails: invalid proof, named move refusal, or a standing mismatch naming
+///   both values.
 /// - panics: none.
 /// - executable: none — authentication and comparison span asynchronous proof
 ///   requests; process witnesses observe the remote reader's full outcome.
@@ -39,65 +37,31 @@ use super::Reader;
 /// - witness: `index::tests::attested_plays_are_refused_at_the_move`
 pub(super) async fn answer(
     mut reader: Reader,
-    entry: TaskEntry,
+    found: Found,
     mut output: String,
 ) -> Result<(Reader, String), IndexError>
 {
-    let TaskEntry::Held {
-        tree,
-        current,
-        attempts,
-        dialogue,
-        ..
-    } = entry
-    else {
-        return Err(IndexError::Unheld(entry.tree()));
-    };
     let arena = domhringr_arena_session::Arena::new()
         .map_err(Box::new)
         .map_err(replay::ReplayError::from)?;
     let mut reached = Current::Undispatched;
-    for number in 1 ..= attempts.0 {
-        let attempt = AttemptNumber(number);
-        let range = attempt.range()?;
-        let request = Request {
-            digest: dialogue,
-            query: Query::Range(range),
-        };
-        let (next, answer) = reader.ask(&request, IndexKind::Dialogue).await?;
-        reader = next;
-        let moves = prove::play(&answer, dialogue, tree, attempt)?;
-        if number == 1 {
-            writeln!(output, "proved {dialogue} {}", reader.author)?;
-        }
-        let played = replay::replay(&arena, attempt, &moves)?;
+    let attempts = found.claim.attempts.len();
+    for number in (1_u32 ..).map(AttemptNumber).take(attempts) {
+        let moves =
+            render::play(&mut reader, &found, MoveKey::new(number, SequenceNumber(0))).await?;
+        let played = replay::replay(&arena, number, &moves)?;
         for entry in &played.steps {
             write!(output, "{}", StepLine {
                 commit: entry.0,
                 step: &entry.1
             })?;
         }
-        writeln!(output, "replayed {attempt} {}", played.current)?;
+        writeln!(output, "replayed {number} {}", played.current)?;
         reached = played.current;
     }
-    if let Ok(next) = attempts.next() {
-        let request = Request {
-            digest: dialogue,
-            query: Query::Key(MoveKey::new(next, SequenceNumber(0)).owned()),
-        };
-        let (next, answer) = reader.ask(&request, IndexKind::Dialogue).await?;
-        reader = next;
-        let verified = answer.verify(dialogue, IndexKind::Dialogue, &request.query)?;
-        if !matches!(prove::later(tree, &verified)?, prove::Later::None) {
-            return Err(IndexError::Shape);
-        }
-        if attempts == AttemptNumber(0) {
-            writeln!(output, "proved {dialogue} {}", reader.author)?;
-        }
-    }
-    if current != reached {
+    if found.claim.standing != Standing::of(&reached) {
         return Err(IndexError::Standing {
-            claimed: Box::new(current),
+            claimed: found.claim.standing,
             replayed: Box::new(reached),
         });
     }

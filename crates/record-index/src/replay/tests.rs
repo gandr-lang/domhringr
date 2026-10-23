@@ -14,56 +14,71 @@ use domhringr_record_tree::Edition;
 use domhringr_record_tree::Heads;
 use domhringr_record_tree::Receipt;
 use domhringr_record_tree::Revision;
-use gandr_storage_records::RecordRef;
-use gandr_storage_records::RecordTree;
-use gandr_storage_records::TreeParams;
+use gandr_storage_schema::AttributeValue;
+use gandr_storage_schema::Row;
 use gandr_storage_values::encode_flat;
 
 use super::Reason;
 use super::ReplayError;
 use crate::AttemptNumber;
-use crate::Index;
-use crate::IndexKind;
 use crate::MoveKey;
 use crate::SequenceNumber;
 use crate::dialogue::MoveValue;
+use crate::keyed;
+use crate::keyed::Keyed;
+use crate::keyed::Number;
+use crate::keyed::Standing;
 use crate::prove;
-use crate::prove::Query;
+use crate::prove::Local;
 use crate::testing;
 
-/// Build an attester's claim independently of the receipt fold.
+/// Build an attester's claim independently of the receipt fold: one task,
+/// one attempt, and the receipts as its moves.
 ///
 /// # Specification
 /// trivial.
-fn index(receipts: &[Receipt]) -> Index
+fn store(receipts: &[Receipt]) -> (gandr_storage_schema::Store, gandr_storage_schema::PartKey)
 {
-    let encoded: Vec<_> = receipts
-        .iter()
-        .enumerate()
-        .map(|(seq, receipt)| {
-            let blob = encode_flat(receipt).unwrap();
-            let value = encode_flat(&MoveValue {
-                author: testing::key(&testing::owner()),
-                blob: Cow::Borrowed(blob.as_ref()),
-            })
-            .unwrap();
-            (
-                MoveKey::new(
-                    AttemptNumber(1),
-                    SequenceNumber(u32::try_from(seq).unwrap()),
-                ),
-                value,
-            )
+    let keyed = Keyed::shared().unwrap();
+    let mut store = keyed.store().unwrap();
+    let task = store
+        .add_part(
+            keyed.task,
+            &Row::new()
+                .value(keyed.task_name, keyed::text(keyed::Text("task")))
+                .value(keyed.task_standing, Standing::Dispatched.value())
+                .value(keyed.task_heads, keyed::heads(&Heads::from_iter([]))),
+        )
+        .unwrap();
+    let attempt = store
+        .add_part(
+            keyed.attempt,
+            &Row::new()
+                .arrow(keyed.attempt_task, task)
+                .value(keyed.attempt_number, keyed::number(Number(1))),
+        )
+        .unwrap();
+    for (seq, receipt) in receipts.iter().enumerate() {
+        let blob = encode_flat(receipt).unwrap();
+        let value = encode_flat(&MoveValue {
+            author: testing::key(&testing::owner()),
+            blob: Cow::Borrowed(blob.as_ref()),
         })
-        .collect();
-    let records: Vec<_> = encoded
-        .iter()
-        .map(|entry| RecordRef::new(entry.0.as_ref(), entry.1.as_ref()))
-        .collect();
-    Index::new(
-        IndexKind::Dialogue,
-        RecordTree::build(&records, TreeParams::current()).unwrap(),
-    )
+        .unwrap();
+        let _move = store
+            .add_part(
+                keyed.movement,
+                &Row::new()
+                    .arrow(keyed.move_attempt, attempt)
+                    .value(
+                        keyed.move_seq,
+                        keyed::number(Number(u64::try_from(seq).unwrap())),
+                    )
+                    .value(keyed.move_receipt, AttributeValue::from(value.as_ref())),
+            )
+            .unwrap();
+    }
+    (store, attempt)
 }
 
 /// The original receipt identity, independent of the replay implementation.
@@ -76,21 +91,20 @@ fn commit(receipt: &Receipt) -> CommitId
     CommitId::new(*blake3::hash(encoded.as_ref()).as_bytes())
 }
 
-/// Authenticate an independently claimed attempt before replay.
+/// Read an independently claimed attempt back before replay.
 ///
 /// # Specification
 /// trivial.
 fn proved(receipts: &[Receipt]) -> Vec<(MoveKey, prove::Move)>
 {
-    let index = index(receipts);
-    let query = Query::Range(AttemptNumber(1).range().unwrap());
-    let proof = prove::answer(&index, &query).unwrap();
-    let digest = index.manifest.identity().unwrap();
-    assert!(matches!(
-        proof.verify(digest, IndexKind::Dialogue, &query).unwrap(),
-        prove::Verified::Range(_)
-    ));
-    prove::play(&proof, digest, testing::tree(), AttemptNumber(1)).unwrap()
+    let (store, attempt) = store(receipts);
+    testing::ready(prove::play(
+        &mut Local(&store),
+        Keyed::shared().unwrap(),
+        AttemptNumber(1),
+        attempt,
+    ))
+    .unwrap()
 }
 
 /// Replay the authenticated claim through the public boundary.
@@ -121,23 +135,35 @@ fn proved_attempts_replay_every_standing()
         let root = tempfile::tempdir().unwrap();
         let peer = testing::peer(root.path(), fixture.commits).await;
         let arena = Arena::new().unwrap();
+        let keyed = Keyed::shared().unwrap();
         let mut standings = Vec::new();
         // Each standing's display, one buffer refilled per head.
         let mut shown = String::new();
         for head in fixture.standings {
-            let view = peer
-                .view_at(testing::tree(), &Heads::from_iter([head]))
+            let heads = Heads::from_iter([head]);
+            let view = peer.view_at(testing::tree(), &heads).await.unwrap();
+            let folded = crate::derive::at(&peer, testing::tree(), &heads)
                 .await
                 .unwrap();
-            let dialogue = crate::dialogue::derive(view.task()).unwrap();
-            let digest = dialogue.index.manifest.identity().unwrap();
+            let mut store = keyed.store().unwrap();
+            let task = crate::project::add(
+                &mut store,
+                keyed,
+                &"task".parse().unwrap(),
+                &folded.entry,
+                &folded.dialogue,
+                crate::project::Carrier::Owner,
+                &mut crate::project::Subjects::default(),
+            )
+            .unwrap();
+            let mut local = Local(&store);
+            let claim = prove::claim(&mut local, keyed, task).await.unwrap();
             let mut reached = Current::Undispatched;
-            for number in 1 ..= dialogue.attempts.0 {
+            for (&part, number) in claim.attempts.iter().zip(1_u32 ..) {
                 let attempt = AttemptNumber(number);
-                let query = Query::Range(attempt.range().unwrap());
-                let answer = prove::answer(&dialogue.index, &query).unwrap();
-                let moves = prove::play(&answer, digest, testing::tree(), attempt).unwrap();
+                let moves = prove::play(&mut local, keyed, attempt, part).await.unwrap();
                 for entry in &moves {
+                    assert_eq!(entry.0.coordinates().0, attempt);
                     let movement = &entry.1;
                     let original = view
                         .task()
@@ -152,13 +178,8 @@ fn proved_attempts_replay_every_standing()
                 for step in &played.steps {
                     assert!(view.task().steps().contains(step));
                 }
+                assert_eq!(super::recompute(&moves).unwrap(), played.current);
                 reached = played.current;
-                assert!(matches!(
-                    prove::play(&answer, digest, testing::tree(), AttemptNumber(0)),
-                    Err(prove::ProveError::Records(
-                        gandr_storage_records::RecordTreeError::InvalidProofShape { .. }
-                    ))
-                ));
             }
             assert_eq!(&reached, view.task().current());
             shown.clear();

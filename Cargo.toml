@@ -194,13 +194,23 @@ default-features = false
 path = "vendor/gandr/crates/storage-chunker"
 default-features = false
 
-# Authenticated ordered records and root-checkable key and range proofs.
-# features: none; the reference tree and proof verifier need no optional feature.
+# The record trees a keyed store's tables are, their nodes, block store and
+# hashes.
+# features: none; node decoding and the block store need no optional feature.
+# consumers:
+# - record-index
+[workspace.dependencies.gandr-storage-records]
+path = "vendor/gandr/crates/storage-records"
+default-features = false
+
+# The keyed-index schema a project's index is one store of, its store and
+# the store's proofs and their images against one root.
+# features: none; `hotpath` profiles gandr's own bench.
 # consumers:
 # - record-index
 # - surface-peer
-[workspace.dependencies.gandr-storage-records]
-path = "vendor/gandr/crates/storage-records"
+[workspace.dependencies.gandr-storage-schema]
+path = "vendor/gandr/crates/storage-schema"
 default-features = false
 
 # The value plane: a receipt's flat bytes, the body a chunk frames, and the
@@ -604,7 +614,7 @@ pattern = "crates/quenchant-dylints"
 # revision this tree builds against. `mise run sibling:sync` materialises
 # them; CI checks each one out at its revision before the first cargo step.
 [workspace.metadata.siblings]
-gandr = "1c14fda6655ad51d8838c1825bad8f40d1645005"
+gandr = "17756fc17a8d3e251282baf966958d425e61ea2b"
 
 # The everyday optimized build. Size-optimized and nothing else, so each crate
 # compiles independently in parallel; the whole-program work lives in `dist`.

@@ -1,17 +1,22 @@
-//! Task bindings, their typed standings, and nested index identities.
+//! Task bindings, their standings, and the parts a task is in the project
+//! store.
 //!
-//! A project keys direct `tasks/<name>` tree bindings by `0x01 || name`. A
-//! held entry contains the bound tree, task heads, complete typed `Current`,
-//! attempt count, dialogue manifest identity and each refused commit with its
-//! displayed reason, in fold order. A task without a held Open is explicitly
-//! `unheld`. The `0x00 || kind` family names its nested provenance index.
+//! A project's direct `tasks/<name>` tree bindings are its tasks. A held
+//! task is a `Task` part with its name, the kind of its standing and the
+//! heads it was derived at. Its refused commits are `Refusal` parts, each
+//! with its displayed reason, in fold order. Its attempts are `Attempt`
+//! parts and its moves `Move` parts ([`crate::dialogue`]). A task without a
+//! held Open is a `Task` part standing `unheld`, with no heads, attempts or
+//! refusals.
 //!
-//! Standings are exactly the states reachable in the receipt fold —
-//! undispatched, dispatched, reported, verified, graded, decided and landed,
-//! with paused included only when the fold reaches it — while retirement
-//! before a report is a refused play, never a standing. Routing for sync may
-//! fold task books; listing and refresh reuse unchanged task entries,
-//! including refusals, without folding their trees again.
+//! Standings are exactly the states reachable in the receipt fold:
+//! undispatched, dispatched, stalled, reported, verified, graded, decided
+//! and landed. A retirement before a report is a refused play, never a
+//! standing. The whole standing isn't stored; it is recomputed from the
+//! last attempt ([`crate::prove::current`]).
+
+#[cfg(test)]
+mod tests;
 
 use alloc::collections::BTreeMap;
 use core::fmt;
@@ -23,30 +28,27 @@ use domhringr_record_tree::Authority;
 use domhringr_record_tree::CommitId;
 use domhringr_record_tree::Current;
 use domhringr_record_tree::Heads;
-use domhringr_record_tree::IndexDigest;
 use domhringr_record_tree::Path;
 use domhringr_record_tree::Target;
 use domhringr_record_tree::TreeId;
 use domhringr_record_tree::View;
-use gandr_storage_records::OwnedRecordKey;
-use gandr_storage_records::RecordRef;
-use gandr_storage_records::RecordTree;
-use gandr_storage_records::RecordTreeError;
-use gandr_storage_records::TreeParams;
-use gandr_storage_values::CanonicalValue;
-use gandr_storage_values::CanonicalWord;
-use gandr_storage_values::ConstructorTag;
-use gandr_storage_values::TokenBytes;
-use gandr_storage_values::TokenReader;
-use gandr_storage_values::TokenSink;
+use gandr_storage_schema::AttributeValue;
+use gandr_storage_schema::PartKey;
+use gandr_storage_schema::Refusal;
+use gandr_storage_schema::Row;
+use gandr_storage_schema::Store;
 use gandr_storage_values::ValueError;
 use gandr_storage_values::encode_flat;
-use quenchant_arith::arith;
-use quenchant_arith::arith::Int;
 
 use crate::AttemptNumber;
-use crate::Index;
-use crate::IndexKind;
+use crate::dialogue::Dialogue;
+use crate::keyed;
+use crate::keyed::Keyed;
+use crate::keyed::Number;
+use crate::keyed::Standing;
+use crate::keyed::Text;
+use crate::provenance;
+use crate::provenance::Naming;
 
 /// One path segment beneath a project's `tasks/` binding family.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -115,32 +117,7 @@ impl fmt::Display for TaskName
     }
 }
 
-impl TaskName
-{
-    /// The project's task-family key, ordered exactly as the task name.
-    ///
-    /// # Specification
-    /// - ensures: returns `0x01` followed by the name's unchanged UTF-8 bytes.
-    /// - panics: none.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L3 — task ordering and reserved family separation are
-    ///   pinned.
-    /// - witness: `project::tests::an_entry_agrees_with_the_fold_at_every_standing`
-    #[spec(ensures: |ret| ret.as_ref().iter().skip(1).count() == self.as_ref().len())]
-    #[inline]
-    #[must_use]
-    pub fn key(&self) -> OwnedRecordKey
-    {
-        let length = arith::saturating_add(Int::from(self.as_ref().len()), Int::from(1));
-        let mut bytes = Vec::with_capacity(usize::from(length));
-        bytes.push(1);
-        bytes.extend_from_slice(self.as_ref().as_bytes());
-        OwnedRecordKey::from(bytes.into_boxed_slice())
-    }
-}
-
-/// A refused commit and the fold's exact explanation at the indexed frontier.
+/// A refused commit and the fold's exact explanation at the derived frontier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refused
 {
@@ -148,6 +125,23 @@ pub struct Refused
     pub commit: CommitId,
     /// The display observation retained for an index-only listing.
     reason: String,
+}
+
+impl Refused
+{
+    /// A refusal as a store holds it.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    #[must_use]
+    pub const fn new(
+        commit: CommitId,
+        reason: String,
+    ) -> Self
+    {
+        Self { commit, reason }
+    }
 }
 
 impl From<&(CommitId, domhringr_record_tree::Refusal)> for Refused
@@ -182,7 +176,10 @@ impl fmt::Display for Refused
     }
 }
 
-/// A task's fold at named heads, or an explicit unheld binding.
+/// A task's fold at named heads, or an explicit unheld binding, as the
+/// deriver holds it.
+///
+/// The tree is the project's binding, not a stored field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[expect(
     clippy::large_enum_variant,
@@ -195,14 +192,12 @@ pub enum TaskEntry
     {
         /// The bound task tree.
         tree: TreeId,
-        /// The frontier used to derive this entry.
+        /// The frontier this entry is derived at.
         heads: Heads,
         /// The complete typed standing at that frontier.
         current: Current,
         /// The number of admitted dispatches.
         attempts: AttemptNumber,
-        /// The dialogue manifest at that frontier.
-        dialogue: IndexDigest,
         /// Refused commits in the fold's order, including their explanations.
         refused: Vec<Refused>,
     },
@@ -228,219 +223,19 @@ impl TaskEntry
             Self::Held { tree, .. } | Self::Unheld { tree } => tree,
         }
     }
-}
 
-impl CanonicalValue for TaskEntry
-{
-    /// Encode the held or unheld claim with sorted, unique heads.
+    /// The kind of standing `task_standing` holds for this entry.
     ///
     /// # Specification
-    /// - ensures: tag one carries tree, counted heads, current, attempts and
-    ///   dialogue, then counted refusals; tag two carries only the tree.
-    /// - fails: propagates sink refusals and unrepresentable head counts.
-    /// - panics: none.
-    /// - executable: none — the generic sink exposes no readback; entries
-    ///   decoded from the built tree are compared with independent folds.
-    ///
-    /// # Errors
-    /// - [`ValueError`]: token sink or head count refusal.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L2 — every reachable standing equals the independent fold.
-    /// - witness: `project::tests::an_entry_agrees_with_the_fold_at_every_standing`
+    /// trivial.
     #[inline]
-    fn emit_tokens<Sink>(
-        &self,
-        sink: &mut Sink,
-    ) -> Result<(), ValueError>
-    where
-        Sink: TokenSink + ?Sized,
+    #[must_use]
+    pub fn standing(&self) -> Standing
     {
         match *self {
-            Self::Held {
-                ref tree,
-                ref heads,
-                ref current,
-                ref attempts,
-                ref dialogue,
-                ref refused,
-            } => {
-                sink.open(ConstructorTag::from(1))?;
-                sink.bytes(TokenBytes::from(tree.as_ref()))?;
-                let count = u64::try_from(heads.iter().count()).map_err(|_count| {
-                    ValueError::ArithmeticOverflow {
-                        quantity: gandr_storage_values::ValueQuantity::TokenCount,
-                    }
-                })?;
-                sink.word(CanonicalWord::from(count))?;
-                for head in heads.iter() {
-                    sink.bytes(TokenBytes::from(head.as_bytes().as_slice()))?;
-                }
-                current.emit_tokens(sink)?;
-                sink.word(CanonicalWord::from(u64::from(attempts.0)))?;
-                sink.bytes(TokenBytes::from(dialogue.as_ref()))?;
-                let count = u64::try_from(refused.len()).map_err(|_count| {
-                    ValueError::ArithmeticOverflow {
-                        quantity: gandr_storage_values::ValueQuantity::TokenCount,
-                    }
-                })?;
-                sink.word(CanonicalWord::from(count))?;
-                for refusal in refused {
-                    sink.bytes(TokenBytes::from(refusal.commit.as_bytes().as_slice()))?;
-                    sink.bytes(TokenBytes::from(refusal.reason.as_bytes()))?;
-                }
-            },
-            Self::Unheld { ref tree } => {
-                sink.open(ConstructorTag::from(2))?;
-                sink.bytes(TokenBytes::from(tree.as_ref()))?;
-            },
+            Self::Held { ref current, .. } => Standing::of(current),
+            Self::Unheld { .. } => Standing::Unheld,
         }
-        sink.close()
-    }
-
-    /// Decode an entry without treating its attested fields as derived facts.
-    ///
-    /// # Specification
-    /// - ensures: reads exactly the emitted fields; the frontier is canonical.
-    /// - fails: unknown tags, duplicate or unordered heads, invalid tree keys,
-    ///   overflowing coordinates and malformed token framing are refused.
-    /// - panics: none.
-    /// - executable: none — the consuming token reader exposes no replay;
-    ///   reachable standings and unheld bindings supply the round-trip oracle.
-    ///
-    /// # Errors
-    /// - [`ValueError`]: invalid constructor, fields or framing.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L2 — each reachable standing and unheld binding
-    ///   round-trips.
-    /// - witness: `project::tests::an_entry_agrees_with_the_fold_at_every_standing`
-    #[inline]
-    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
-    {
-        let position = reader.position();
-        let found = reader.read_tag()?;
-        let refused = || ValueError::UnexpectedConstructor { found, position };
-        let bytes = reader.read_bytes()?;
-        let bytes = <[u8; 32]>::try_from(<&[u8]>::from(bytes)).map_err(|_width| refused())?;
-        let tree = TreeId::try_from(bytes).map_err(|_key| refused())?;
-        let entry = match u8::from(found) {
-            1 => {
-                let count = reader.read_word()?;
-                let count = u64::from(count);
-                let mut heads = Vec::new();
-                for _head in 0 .. count {
-                    let bytes = reader.read_bytes()?;
-                    let bytes =
-                        <[u8; 32]>::try_from(<&[u8]>::from(bytes)).map_err(|_width| refused())?;
-                    let head = CommitId::new(bytes);
-                    if heads.last().is_some_and(|last| *last >= head) {
-                        return Err(refused());
-                    }
-                    heads.push(head);
-                }
-                let current = Current::decode_tokens(reader)?;
-                let attempts = reader.read_word()?;
-                let attempts = u32::try_from(u64::from(attempts)).map_err(|_width| refused())?;
-                let dialogue = reader.read_bytes()?;
-                let dialogue =
-                    <[u8; 32]>::try_from(<&[u8]>::from(dialogue)).map_err(|_width| refused())?;
-                let count = reader.read_word()?;
-                let mut refusals = Vec::new();
-                for _refusal in 0 .. u64::from(count) {
-                    let commit = reader.read_bytes()?;
-                    let commit =
-                        <[u8; 32]>::try_from(<&[u8]>::from(commit)).map_err(|_width| refused())?;
-                    let reason = reader.read_bytes()?;
-                    let reason =
-                        core::str::from_utf8(<&[u8]>::from(reason)).map_err(|_utf8| refused())?;
-                    refusals.push(Refused {
-                        commit: CommitId::new(commit),
-                        reason: reason.to_owned(),
-                    });
-                }
-                Self::Held {
-                    tree,
-                    heads: Heads::from_iter(heads),
-                    current,
-                    attempts: AttemptNumber(attempts),
-                    dialogue: IndexDigest::from(dialogue),
-                    refused: refusals,
-                }
-            },
-            2 => Self::Unheld { tree },
-            _unknown => return Err(refused()),
-        };
-        reader.read_close()?;
-        Ok(entry)
-    }
-}
-
-/// An index identity carried by a project's reserved nested family.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct Nested(pub IndexDigest);
-
-impl CanonicalValue for Nested
-{
-    /// Emit the nested manifest identity as a value-plane flat value.
-    ///
-    /// # Specification
-    /// - ensures: tag one holds exactly the manifest's 32 bytes.
-    /// - fails: propagates sink refusal.
-    /// - panics: none.
-    /// - executable: none — the generic sink exposes no readback; the
-    ///   independently pinned nested project manifest commits to these bytes.
-    ///
-    /// # Errors
-    /// - [`ValueError`]: sink refusal.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L2 — nested identities are pinned with the project
-    ///   manifest.
-    /// - witness: `derive::tests::the_fixture_manifests_are_pinned`
-    #[inline]
-    fn emit_tokens<Sink>(
-        &self,
-        sink: &mut Sink,
-    ) -> Result<(), ValueError>
-    where
-        Sink: TokenSink + ?Sized,
-    {
-        sink.open(ConstructorTag::from(1))?;
-        sink.bytes(TokenBytes::from(self.0.as_ref()))?;
-        sink.close()
-    }
-
-    /// Read one nested manifest identity.
-    ///
-    /// # Specification
-    /// - ensures: retains exactly the nested identity's bytes.
-    /// - fails: unknown tags, wrong widths and framing are refused.
-    /// - panics: none.
-    /// - executable: none — the consuming token parser is its own
-    ///   specification; the pinned nested identity supplies the oracle.
-    ///
-    /// # Errors
-    /// - [`ValueError`]: constructor, width or token refusal.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L2 — nested identities are pinned with the project
-    ///   manifest.
-    /// - witness: `derive::tests::the_fixture_manifests_are_pinned`
-    #[inline]
-    fn decode_tokens(reader: &mut TokenReader<'_>) -> Result<Self, ValueError>
-    {
-        let position = reader.position();
-        let found = reader.read_tag()?;
-        let refused = || ValueError::UnexpectedConstructor { found, position };
-        if u8::from(found) != 1 {
-            return Err(refused());
-        }
-        let digest = reader.read_bytes()?;
-        let digest = <[u8; 32]>::try_from(<&[u8]>::from(digest)).map_err(|_width| refused())?;
-        reader.read_close()?;
-        Ok(Self(IndexDigest::from(digest)))
     }
 }
 
@@ -473,201 +268,375 @@ pub fn bindings(view: &View) -> impl Iterator<Item = (TaskName, TreeId)> + '_
         })
 }
 
-/// Build failure at a value or record boundary.
+/// Why a task's parts can't be written to or removed from the store.
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError
 {
-    /// A task entry or nested identity could not be encoded.
+    /// A move's value could not be encoded.
     #[error(transparent)]
     Value(#[from] ValueError),
-    /// The record tree refused the encoded records.
+    /// The store refused an edit.
     #[error(transparent)]
-    Records(#[from] RecordTreeError),
+    Refused(#[from] Refusal),
 }
 
-/// Build the project tree, leaving the reserved nested family empty when
-/// unused.
+/// The live subjects of a store, by their `subject_digest`.
+#[derive(Debug, Default)]
+#[repr(transparent)]
+pub(crate) struct Subjects(BTreeMap<AttributeValue, PartKey>);
+
+impl Subjects
+{
+    /// Every live subject of a store.
+    ///
+    /// # Specification
+    /// - ensures: one entry per live `Subject` part.
+    /// - fails: the store refuses a read.
+    /// - panics: none.
+    /// - executable: none — the map mirrors the table; the refresh witness
+    ///   compares a refreshed store with one derived whole.
+    ///
+    /// # Errors
+    /// - [`Refusal`]: a read is refused.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L2 — a refreshed store reuses a subject named before.
+    /// - witness: `derive::tests::a_refreshed_index_equals_one_derived_whole`
+    pub(crate) fn of(
+        store: &Store,
+        keyed: &Keyed,
+    ) -> Result<Self, Refusal>
+    {
+        let mut subjects = BTreeMap::new();
+        for subject in store.parts(keyed.subject)? {
+            let _previous =
+                subjects.insert(store.value(keyed.subject_digest, subject)?.clone(), subject);
+        }
+        Ok(Self(subjects))
+    }
+}
+
+/// Every live task of a held store, by name.
 ///
 /// # Specification
-/// - ensures: one record per task and nested kind, in byte order, under
-///   disjoint task and nested key families.
-/// - fails: value encoding or record construction refuses its input.
+/// - ensures: one entry per live task.
+/// - fails: a refused read, a name that isn't a task name, or two tasks of one
+///   name.
 /// - panics: none.
+/// - executable: none — the map mirrors the table; the check witness reads a
+///   forged store through it.
 ///
 /// # Errors
-/// - [`ProjectError`]: an encoding or record-plane failure.
+/// - [`crate::prove::ProveError`]: as above.
 ///
 /// # Adequacy
-/// - hypothesis: L2 — fixed input records pin the project manifest.
-/// - witness: `derive::tests::the_fixture_manifests_are_pinned`
-#[spec(ensures: |ret| ret.as_ref().map_or(true, |index| {
-    let count = arith::saturating_add(Int::from(entries.len()), Int::from(nested.len()));
-    index.tree.records().len() == usize::from(count)
-}))]
+/// - hypothesis: L2/L3 — a refreshed store lists the bound names; a forged
+///   extra task is found.
+/// - witness: `check::tests::a_forged_entry_is_found_by_re_derivation`
 #[inline]
-pub fn build(
-    entries: &BTreeMap<TaskName, TaskEntry>,
-    nested: &BTreeMap<IndexKind, IndexDigest>,
-) -> Result<Index, ProjectError>
+pub fn names(
+    store: &Store,
+    keyed: &Keyed,
+) -> Result<BTreeMap<TaskName, PartKey>, crate::prove::ProveError>
 {
-    let mut encoded = BTreeMap::new();
-    for (&kind, &digest) in nested {
-        let key = OwnedRecordKey::from(Box::<[u8]>::from([0, u8::from(kind)]));
-        let _previous = encoded.insert(key, encode_flat(&Nested(digest))?);
+    let mut names = BTreeMap::new();
+    for task in store
+        .parts(keyed.task)
+        .map_err(gandr_storage_schema::StoreError::Refused)?
+    {
+        let name = store
+            .value(keyed.task_name, task)
+            .map_err(gandr_storage_schema::StoreError::Refused)?;
+        let name = keyed::read_text(name)?
+            .0
+            .parse::<TaskName>()
+            .map_err(|_name| keyed::ValueFault::Text)?;
+        if let Some(_previous) = names.insert(name.clone(), task) {
+            return Err(crate::prove::ProveError::Duplicate(name));
+        }
     }
-    for (name, entry) in entries {
-        let _previous = encoded.insert(name.key(), encode_flat(entry)?);
-    }
-    let records: Vec<_> = encoded
-        .iter()
-        .map(|(key, value)| RecordRef::new(key.as_ref(), value.as_ref()))
-        .collect();
-    let tree = RecordTree::build(&records, TreeParams::current())?;
-    Ok(Index::new(IndexKind::Project, tree))
+    Ok(names)
 }
 
-#[cfg(test)]
-mod tests
+/// Whether a task carries its tree's namings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Carrier
 {
-    use alloc::collections::BTreeMap;
+    /// The first name of its tree in name order: it names its moves'
+    /// subjects.
+    Owner,
+    /// A later name of a tree whose namings the owner carries.
+    Alias,
+}
 
-    use domhringr_record_tree::Answer;
-    use domhringr_record_tree::Current;
-    use domhringr_record_tree::Heads;
-    use domhringr_record_tree::Progress;
-    use domhringr_record_tree::StateDir;
-    use domhringr_record_tree::Step;
-    use gandr_storage_values::TokenBody;
-    use gandr_storage_values::decode_flat;
-    use gandr_storage_values::encode_flat;
-
-    use super::TaskEntry;
-    use super::TaskName;
-    use crate::AttemptNumber;
-    use crate::derive;
-    use crate::derive::Deriver;
-    use crate::store::Store;
-    use crate::testing;
-
-    #[test]
-    fn an_entry_agrees_with_the_fold_at_every_standing()
-    {
-        testing::runtime().block_on(async {
-            let fixture = testing::Fixture::new().await;
-            let (project, bindings) = testing::project_fixture().await;
-            let root = tempfile::tempdir().unwrap();
-            let peer =
-                testing::peer(root.path(), fixture.commits.iter().cloned().chain(bindings)).await;
-            let store = Store::open(&StateDir::from(root.path().to_path_buf()));
-            let mut reached: Vec<u8> = Vec::new();
-            for head in &fixture.standings {
-                let heads = Heads::from_iter([*head]);
-                let view = peer.view_at(testing::tree(), &heads).await.unwrap();
-                assert!(view.refused().is_empty());
-                let expected = view.task().current();
-                let standing = match *expected {
-                    Current::Undispatched => 0,
-                    Current::Attempt(ref attempt) => match *attempt.progress() {
-                        Progress::Unchecked => match attempt.answer() {
-                            Answer::Awaited => 1,
-                            Answer::Reported { .. } => 2,
-                        },
-                        Progress::Verified { .. } => 3,
-                        Progress::Graded { .. } => 4,
-                        Progress::Decided { .. } => 5,
-                        Progress::Landed { .. } => 6,
-                    },
-                };
-                reached.push(standing);
-                let entry = derive::at(&peer, testing::tree(), &heads, &store)
-                    .await
-                    .unwrap();
-                let TaskEntry::Held {
-                    tree,
-                    heads: ref actual_heads,
-                    ref current,
-                    attempts,
-                    dialogue,
-                    ref refused,
-                } = entry
-                else {
-                    panic!("held task");
-                };
-                assert_eq!(tree, testing::tree());
-                assert_eq!(actual_heads, &heads);
-                assert_eq!(current, expected);
-                assert_eq!(refused.len(), view.refused().len());
-                assert!(
-                    refused
-                        .iter()
-                        .zip(view.refused())
-                        .all(|(held, viewed)| *held == super::Refused::from(viewed)),
-                    "the entry holds the view's refusals in order"
-                );
-                assert_eq!(
-                    attempts,
-                    AttemptNumber(
-                        u32::try_from(
-                            view.task()
-                                .steps()
-                                .iter()
-                                .filter(|entry| matches!(entry.1, Step::Dispatch { .. }))
-                                .count()
-                        )
-                        .unwrap()
-                    )
-                );
-                assert_eq!(
-                    store.load(dialogue).unwrap().tree.records().len(),
-                    view.task().steps().len()
-                );
-                let encoded = encode_flat(&entry).unwrap();
-                assert_eq!(
-                    decode_flat::<TaskEntry>(TokenBody::from(encoded.as_ref())).unwrap(),
-                    entry
-                );
-            }
-            assert_eq!(reached, [0, 1, 2, 3, 4, 5, 6]);
-            let view = peer.view(project).await.unwrap();
-            let derived = Deriver::default()
-                .project(&peer, project, &view, &store)
-                .await
-                .unwrap();
-            drop(peer);
-            let names: Vec<_> = derived.entries.keys().map(TaskName::as_ref).collect();
-            assert_eq!(names, ["alpha", "unheld", "zeta"]);
-            assert_eq!(
-                derived.entries[&"alpha".parse().unwrap()],
-                derived.entries[&"zeta".parse().unwrap()]
-            );
-            assert!(matches!(
-                derived.entries[&"unheld".parse().unwrap()],
-                TaskEntry::Unheld { .. }
-            ));
-            let mut nested = BTreeMap::new();
-            for record in derived.index.tree.records() {
-                if record.key().as_ref() == [0, u8::from(crate::IndexKind::Provenance)] {
-                    let digest =
-                        decode_flat::<super::Nested>(TokenBody::from(record.value().as_ref()))
-                            .unwrap();
-                    assert!(
-                        nested
-                            .insert(crate::IndexKind::Provenance, digest.0)
-                            .is_none()
-                    );
-                    continue;
-                }
-                assert_eq!(record.key().as_ref().first(), Some(&1));
-                let name = core::str::from_utf8(&record.key().as_ref()[1 ..])
-                    .unwrap()
-                    .parse::<TaskName>()
-                    .unwrap();
-                let decoded =
-                    decode_flat::<TaskEntry>(TokenBody::from(record.value().as_ref())).unwrap();
-                assert_eq!(decoded, derived.entries[&name]);
-            }
-            let rebuilt = super::build(&derived.entries, &nested).unwrap();
-            assert_eq!(rebuilt.manifest, derived.index.manifest);
-        });
+/// Add a task's parts: the task, its refusals, attempts and moves, and,
+/// when it carries its tree's provenance, its namings.
+///
+/// # Specification
+/// - requires: `dialogue` is the task's own, empty when `entry` is unheld, and
+///   no live task carries `name`.
+/// - ensures: on success one task named `name`, standing as `entry`, its
+///   refusals in order, attempts one to n and every move at its place; each
+///   naming move named once by an owner, none by an alias.
+/// - fails: the store refuses an edit; parts added before the refusal stay.
+/// - panics: none.
+/// - executable: none — the parts are read back through the readers, which are
+///   the witnesses' oracle.
+///
+/// # Errors
+/// - [`ProjectError`]: encoding or an edit is refused.
+///
+/// # Adequacy
+/// - hypothesis: L2 — every reachable standing reads back as the fold holds it.
+/// - witness: `project::tests::an_entry_agrees_with_the_fold_at_every_standing`
+pub(crate) fn add(
+    store: &mut Store,
+    keyed: &Keyed,
+    name: &TaskName,
+    entry: &TaskEntry,
+    dialogue: &Dialogue,
+    carrier: Carrier,
+    subjects: &mut Subjects,
+) -> Result<PartKey, ProjectError>
+{
+    let heads = match *entry {
+        TaskEntry::Held { ref heads, .. } => keyed::heads(heads),
+        TaskEntry::Unheld { .. } => keyed::heads(&Heads::from_iter([])),
+    };
+    let task = store.add_part(
+        keyed.task,
+        &Row::new()
+            .value(keyed.task_name, keyed::text(Text(name.as_ref())))
+            .value(keyed.task_standing, entry.standing().value())
+            .value(keyed.task_heads, heads),
+    )?;
+    if let TaskEntry::Held { ref refused, .. } = *entry {
+        for refusal in refused {
+            let _refusal = store.add_part(
+                keyed.refusal,
+                &Row::new()
+                    .arrow(keyed.refusal_task, task)
+                    .value(keyed.refusal_commit, keyed::commit(refusal.commit))
+                    .value(keyed.refusal_reason, keyed::text(Text(&refusal.reason))),
+            )?;
+        }
     }
+    let mut attempt = None;
+    for &(key, ref value) in &dialogue.moves {
+        let (number, seq) = key.coordinates();
+        let part = match attempt {
+            Some((held, part)) if held == number => part,
+            _ => {
+                let part = store.add_part(
+                    keyed.attempt,
+                    &Row::new()
+                        .arrow(keyed.attempt_task, task)
+                        .value(keyed.attempt_number, keyed::number(Number::from(number))),
+                )?;
+                attempt = Some((number, part));
+                part
+            },
+        };
+        let movement = store.add_part(
+            keyed.movement,
+            &Row::new()
+                .arrow(keyed.move_attempt, part)
+                .value(keyed.move_seq, keyed::number(Number::from(seq)))
+                .value(
+                    keyed.move_receipt,
+                    AttributeValue::from(encode_flat(value)?.as_ref()),
+                ),
+        )?;
+        if carrier == Carrier::Owner {
+            name_move(store, keyed, task, movement, value, subjects)?;
+        }
+    }
+    Ok(task)
+}
+
+/// Add the naming a move makes, if it names a subject.
+///
+/// # Specification
+/// - ensures: on success one naming of the move's subject in its field, the
+///   subject minted when no live one carries its digest; nothing for a move
+///   naming nothing.
+/// - fails: the store refuses an edit, or the move's receipt is malformed.
+/// - panics: none.
+/// - executable: none — namings are read back through the provenance reader,
+///   which the witness compares with the fold.
+///
+/// # Errors
+/// - [`ProjectError`]: as above.
+///
+/// # Adequacy
+/// - hypothesis: L2 — every naming of the fixture reads back as the fold's
+///   evidence and landings.
+/// - witness: `provenance::tests::provenance_agrees_with_every_tasks_evidence`
+pub(crate) fn name_move(
+    store: &mut Store,
+    keyed: &Keyed,
+    task: PartKey,
+    movement: PartKey,
+    value: &crate::dialogue::MoveValue<'_>,
+    subjects: &mut Subjects,
+) -> Result<(), ProjectError>
+{
+    let Naming::Named(subject, attribution) = provenance::naming(value.author, &value.receipt()?)
+    else {
+        return Ok(());
+    };
+    let digest = subject.value();
+    let subject = if let Some(&subject) = subjects.0.get(&digest) {
+        subject
+    }
+    else {
+        let subject = store.add_part(
+            keyed.subject,
+            &Row::new().value(keyed.subject_digest, digest.clone()),
+        )?;
+        let _previous = subjects.0.insert(digest, subject);
+        subject
+    };
+    let _naming = store.add_part(
+        keyed.naming,
+        &Row::new()
+            .arrow(keyed.naming_move, movement)
+            .arrow(keyed.naming_subject, subject)
+            .arrow(keyed.naming_task, task)
+            .value(keyed.naming_role, attribution.field.value()),
+    )?;
+    Ok(())
+}
+
+/// Remove a task and everything referring to it.
+///
+/// # Specification
+/// - requires: `task` is a live task.
+/// - ensures: on success the task, its namings, moves, attempts and refusals
+///   are dead; subjects stay, for [`prune`].
+/// - fails: the store refuses a delete.
+/// - panics: none.
+/// - executable: none — the refresh witness compares the edited store with one
+///   derived whole.
+///
+/// # Errors
+/// - [`Refusal`]: a delete or read is refused.
+///
+/// # Adequacy
+/// - hypothesis: L2 — a refreshed store reads as one derived whole after every
+///   kind of change.
+/// - witness: `derive::tests::a_refreshed_index_equals_one_derived_whole`
+pub(crate) fn remove(
+    store: &mut Store,
+    keyed: &Keyed,
+    task: PartKey,
+) -> Result<(), Refusal>
+{
+    unname(store, keyed, task)?;
+    for attempt in store.preimage(keyed.attempt_task, task)?.to_vec() {
+        for movement in store.preimage(keyed.move_attempt, attempt)?.to_vec() {
+            store.delete_part(keyed.movement, movement)?;
+        }
+        store.delete_part(keyed.attempt, attempt)?;
+    }
+    for refusal in store.preimage(keyed.refusal_task, task)?.to_vec() {
+        store.delete_part(keyed.refusal, refusal)?;
+    }
+    store.delete_part(keyed.task, task)
+}
+
+/// Remove a task's namings, leaving its moves.
+///
+/// # Specification
+/// - ensures: on success no naming refers to the task.
+/// - fails: the store refuses a delete.
+/// - panics: none.
+/// - executable: none — the alias witness reads provenance back.
+///
+/// # Errors
+/// - [`Refusal`]: a delete or read is refused.
+///
+/// # Adequacy
+/// - hypothesis: L2 — a refreshed store reads as one derived whole.
+/// - witness: `derive::tests::a_refreshed_index_equals_one_derived_whole`
+pub(crate) fn unname(
+    store: &mut Store,
+    keyed: &Keyed,
+    task: PartKey,
+) -> Result<(), Refusal>
+{
+    for naming in store.preimage(keyed.naming_task, task)?.to_vec() {
+        store.delete_part(keyed.naming, naming)?;
+    }
+    Ok(())
+}
+
+/// Name every naming move of a task that carries its tree's provenance.
+///
+/// # Specification
+/// - requires: the task has no namings.
+/// - ensures: on success each naming move of the task named once.
+/// - fails: the store refuses an edit, or a move's value is malformed.
+/// - panics: none.
+/// - executable: none — the alias witness reads provenance back.
+///
+/// # Errors
+/// - [`ProjectError`]: as above.
+///
+/// # Adequacy
+/// - hypothesis: L2 — a refreshed store reads as one derived whole.
+/// - witness: `derive::tests::a_refreshed_index_equals_one_derived_whole`
+pub(crate) fn rename(
+    store: &mut Store,
+    keyed: &Keyed,
+    task: PartKey,
+    subjects: &mut Subjects,
+) -> Result<(), ProjectError>
+{
+    let mut moves = Vec::new();
+    for attempt in store.preimage(keyed.attempt_task, task)?.to_vec() {
+        for movement in store.preimage(keyed.move_attempt, attempt)? {
+            let value = store.value(keyed.move_receipt, *movement)?;
+            let value = gandr_storage_values::decode_flat::<crate::dialogue::MoveValue<'_>>(
+                gandr_storage_values::TokenBody::from(value.as_ref()),
+            )?;
+            moves.push((*movement, crate::dialogue::MoveValue {
+                author: value.author,
+                blob: alloc::borrow::Cow::Owned(value.blob.into_owned()),
+            }));
+        }
+    }
+    for (movement, value) in moves {
+        name_move(store, keyed, task, movement, &value, subjects)?;
+    }
+    Ok(())
+}
+
+/// Delete every subject no naming refers to.
+///
+/// # Specification
+/// - ensures: on success every live subject has a naming.
+/// - fails: the store refuses a delete.
+/// - panics: none.
+/// - executable: none — the refresh witness compares the edited store with one
+///   derived whole, which mints no unnamed subject.
+///
+/// # Errors
+/// - [`Refusal`]: a delete or read is refused.
+///
+/// # Adequacy
+/// - hypothesis: L2 — a refreshed store reads as one derived whole.
+/// - witness: `derive::tests::a_refreshed_index_equals_one_derived_whole`
+pub(crate) fn prune(
+    store: &mut Store,
+    keyed: &Keyed,
+) -> Result<(), Refusal>
+{
+    let subjects: Vec<_> = store.parts(keyed.subject)?.collect();
+    for subject in subjects {
+        if store.preimage(keyed.naming_subject, subject)?.is_empty() {
+            store.delete_part(keyed.subject, subject)?;
+        }
+    }
+    Ok(())
 }

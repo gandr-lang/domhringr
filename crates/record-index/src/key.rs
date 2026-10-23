@@ -1,13 +1,12 @@
-//! Fixed-width, big-endian dialogue coordinates.
+//! Dialogue coordinates: an attempt and a move's place in it.
 
 use anodized::spec;
-use gandr_storage_records::OwnedKeyBound;
-use gandr_storage_records::OwnedKeyRange;
-use gandr_storage_records::OwnedRecordKey;
 use quenchant_arith::arith;
 use quenchant_arith::arith::Int;
 
-/// A one-based attempt number at one manifest; zero is an absent probe.
+use crate::keyed::Number;
+
+/// A one-based attempt number; zero is an absent probe.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct AttemptNumber(pub u32);
@@ -49,137 +48,50 @@ impl core::fmt::Display for SequenceNumber
     }
 }
 
-/// An eight-byte ordered coordinate, scoped to a dialogue manifest.
+/// A move's place: its attempt, then its sequence number in that attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct MoveKey([u8; 8]);
+pub struct MoveKey
+{
+    /// The attempt.
+    attempt: AttemptNumber,
+    /// The place in the attempt.
+    seq: SequenceNumber,
+}
 
-/// A coordinate cannot be represented or parsed.
+/// A coordinate cannot be represented.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum KeyError
 {
-    /// The coordinate is not exactly eight bytes.
-    #[error("a move key is eight bytes")]
-    Width,
-    /// The next attempt or sequence would exceed 32 bits.
+    /// The next attempt or sequence, or a stored number, exceeds 32 bits.
     #[error("dialogue coordinate exceeds u32")]
     Overflow,
 }
 
 impl MoveKey
 {
-    /// Encode attempt then sequence in numeric byte order.
+    /// Place a move.
     ///
     /// # Specification
-    /// - ensures: decoding the key returns exactly the two coordinates.
-    /// - panics: none.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L3 — crossings at 255 and 65535 distinguish endianness and
-    ///   the precedence of the attempt field.
-    /// - witness: `key::tests::move_keys_sort_as_attempt_then_seq`
-    #[spec(ensures: |ret| ret.coordinates() == (attempt, seq))]
+    /// trivial.
     #[inline]
     #[must_use]
-    #[expect(
-        clippy::big_endian_bytes,
-        reason = "ordered record keys require big-endian coordinates so byte order equals numeric order"
-    )]
-    pub fn new(
+    pub const fn new(
         attempt: AttemptNumber,
         seq: SequenceNumber,
     ) -> Self
     {
-        let [attempt0, attempt1, attempt2, attempt3] = attempt.0.to_be_bytes();
-        let [seq0, seq1, seq2, seq3] = seq.0.to_be_bytes();
-        Self([
-            attempt0, attempt1, attempt2, attempt3, seq0, seq1, seq2, seq3,
-        ])
+        Self { attempt, seq }
     }
 
-    /// Decode the fixed-width fields.
+    /// The attempt and the place in it.
     ///
     /// # Specification
-    /// - ensures: both fields are read in big-endian order.
-    /// - panics: none.
-    /// - executable: none — the const decoder is its own specification;
-    ///   asymmetric coordinates and numeric ordering are the oracle.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L3 — asymmetric coordinates distinguish field swapping.
-    /// - witness: `key::tests::move_keys_sort_as_attempt_then_seq`
+    /// trivial.
     #[inline]
     #[must_use]
-    #[expect(
-        clippy::big_endian_bytes,
-        reason = "decode the specified big-endian ordered key, not the value language"
-    )]
     pub const fn coordinates(self) -> (AttemptNumber, SequenceNumber)
     {
-        let [
-            attempt0,
-            attempt1,
-            attempt2,
-            attempt3,
-            seq0,
-            seq1,
-            seq2,
-            seq3,
-        ] = self.0;
-        (
-            AttemptNumber(u32::from_be_bytes([attempt0, attempt1, attempt2, attempt3])),
-            SequenceNumber(u32::from_be_bytes([seq0, seq1, seq2, seq3])),
-        )
-    }
-
-    /// Own the record key at a storage boundary.
-    ///
-    /// # Specification
-    /// trivial.
-    #[inline]
-    #[must_use]
-    pub fn owned(self) -> OwnedRecordKey
-    {
-        OwnedRecordKey::from(Box::<[u8]>::from(self.0))
-    }
-}
-
-impl AsRef<[u8]> for MoveKey
-{
-    /// Borrow the encoded coordinate.
-    ///
-    /// # Specification
-    /// trivial.
-    #[inline]
-    fn as_ref(&self) -> &[u8]
-    {
-        &self.0
-    }
-}
-
-impl TryFrom<&[u8]> for MoveKey
-{
-    type Error = KeyError;
-
-    /// Read exactly one coordinate.
-    ///
-    /// # Specification
-    /// - ensures: preserves all eight input bytes.
-    /// - fails: a different width is refused.
-    /// - panics: none.
-    ///
-    /// # Errors
-    /// - [`KeyError::Width`]: input is not eight bytes.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L3 — round trips and short/long probes distinguish width.
-    /// - witness: `key::tests::move_keys_sort_as_attempt_then_seq`
-    #[spec(ensures: |ret| ret.is_ok() == (bytes.len() == 8))]
-    #[inline]
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error>
-    {
-        let bytes = <[u8; 8]>::try_from(bytes).map_err(|_width| KeyError::Width)?;
-        Ok(Self(bytes))
+        (self.attempt, self.seq)
     }
 }
 
@@ -206,33 +118,89 @@ impl AttemptNumber
             .map_err(|_overflow| KeyError::Overflow)?;
         Ok(Self(u32::from(next)))
     }
+}
 
-    /// Select this attempt's whole play, including the largest attempt.
+impl From<AttemptNumber> for Number
+{
+    /// The attempt as its stored number.
     ///
     /// # Specification
-    /// - ensures: includes this attempt from sequence zero and excludes the
-    ///   next dispatch; the largest attempt has an unbounded upper edge.
-    /// - fails: the record plane refuses an unordered range.
+    /// trivial.
+    #[inline]
+    fn from(attempt: AttemptNumber) -> Self
+    {
+        Self(u64::from(attempt.0))
+    }
+}
+
+impl From<SequenceNumber> for Number
+{
+    /// The place as its stored number.
+    ///
+    /// # Specification
+    /// trivial.
+    #[inline]
+    fn from(seq: SequenceNumber) -> Self
+    {
+        Self(u64::from(seq.0))
+    }
+}
+
+impl TryFrom<Number> for AttemptNumber
+{
+    type Error = KeyError;
+
+    /// Read a stored number as an attempt.
+    ///
+    /// # Specification
+    /// - ensures: `AttemptNumber::try_from(Number::from(a)) == Ok(a)`.
+    /// - fails: a number past 32 bits.
     /// - panics: none.
-    /// - executable: none — the range constructor is its own specification; the
-    ///   maximum-attempt witness checks inclusion and the unbounded edge.
+    /// - executable: none — the conversion is its own specification; the
+    ///   witness reads the extremes back.
     ///
     /// # Errors
-    /// - [`gandr_storage_records::RecordTreeError`]: invalid range endpoints.
+    /// - [`KeyError::Overflow`]: past 32 bits.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — the maximum attempt catches wrapping upper bounds.
+    /// - hypothesis: L3 — the largest attempt reads back and the next number is
+    ///   refused.
     /// - witness: `key::tests::move_keys_sort_as_attempt_then_seq`
     #[inline]
-    pub fn range(self) -> Result<OwnedKeyRange, gandr_storage_records::RecordTreeError>
+    fn try_from(number: Number) -> Result<Self, Self::Error>
     {
-        let lower = OwnedKeyBound::Included(MoveKey::new(self, SequenceNumber(0)).owned());
-        let upper = match self.next() {
-            Ok(next) => OwnedKeyBound::Excluded(MoveKey::new(next, SequenceNumber(0)).owned()),
-            Err(KeyError::Overflow | KeyError::Width) => OwnedKeyBound::Unbounded,
-        };
-        let range = gandr_storage_records::KeyRange::new(lower.as_bound(), upper.as_bound())?;
-        Ok(OwnedKeyRange::from_range(range))
+        u32::try_from(number.0)
+            .map(Self)
+            .map_err(|_width| KeyError::Overflow)
+    }
+}
+
+impl TryFrom<Number> for SequenceNumber
+{
+    type Error = KeyError;
+
+    /// Read a stored number as a place.
+    ///
+    /// # Specification
+    /// - ensures: `SequenceNumber::try_from(Number::from(s)) == Ok(s)`.
+    /// - fails: a number past 32 bits.
+    /// - panics: none.
+    /// - executable: none — the conversion is its own specification; the
+    ///   witness reads the extremes back.
+    ///
+    /// # Errors
+    /// - [`KeyError::Overflow`]: past 32 bits.
+    ///
+    /// # Adequacy
+    /// - hypothesis: L3 — the largest place reads back and the next number is
+    ///   refused.
+    /// - witness: `key::tests::move_keys_sort_as_attempt_then_seq`
+    #[inline]
+    fn try_from(number: Number) -> Result<Self, Self::Error>
+    {
+        u32::try_from(number.0)
+            .map(Self)
+            .map_err(|_width| KeyError::Overflow)
     }
 }
 
@@ -253,7 +221,14 @@ mod tests
                     key.coordinates(),
                     (AttemptNumber(attempt), SequenceNumber(seq))
                 );
-                assert_eq!(MoveKey::try_from(key.as_ref()).unwrap(), key);
+                assert_eq!(
+                    AttemptNumber::try_from(Number::from(AttemptNumber(attempt))),
+                    Ok(AttemptNumber(attempt))
+                );
+                assert_eq!(
+                    SequenceNumber::try_from(Number::from(SequenceNumber(seq))),
+                    Ok(SequenceNumber(seq))
+                );
                 keys.push(key);
             }
         }
@@ -261,22 +236,10 @@ mod tests
             let [left, right] = pair.each_ref();
             left < right
         }));
-        assert_eq!(
-            MoveKey::new(AttemptNumber(256), SequenceNumber(0x0001_0000)).as_ref(),
-            [0, 0, 1, 0, 0, 1, 0, 0]
-        );
-        assert_eq!(MoveKey::try_from([0; 7].as_slice()), Err(KeyError::Width));
-        assert_eq!(MoveKey::try_from([0; 9].as_slice()), Err(KeyError::Width));
+        let past = Number(0x0001_0000_0000);
+        assert_eq!(AttemptNumber::try_from(past), Err(KeyError::Overflow));
+        assert_eq!(SequenceNumber::try_from(past), Err(KeyError::Overflow));
         assert_eq!(AttemptNumber(u32::MAX).next(), Err(KeyError::Overflow));
         assert_eq!(AttemptNumber(255).next(), Ok(AttemptNumber(256)));
-        assert_eq!(
-            AttemptNumber(u32::MAX)
-                .range()
-                .unwrap()
-                .as_range()
-                .unwrap()
-                .end(),
-            gandr_storage_records::KeyBound::Unbounded
-        );
     }
 }

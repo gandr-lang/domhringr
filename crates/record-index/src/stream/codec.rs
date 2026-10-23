@@ -1,20 +1,27 @@
 //! The index protocol's byte language, without transport or trusted roots.
+//!
+//! A request is a kind byte and the store root it is about:
+//!
+//! | Kind | Then |
+//! | ---- | ---- |
+//! | `1` question | the question's kind, `1` part, `2` arrow, `3` value, `4` preimage, `5` value preimage; its element's ordinal and its part as `u64le`, or for a value preimage a `u32le`-framed value |
+//! | `2` manifest | nothing |
+//! | `3` node | the node's 32-byte identity |
+//!
+//! An answer is `0` when the root isn't held, `2` and the `u64le` size of a
+//! reply past the cap, or `1` and the reply: a proof image, a manifest image
+//! or a node's bytes.
 
 use anodized::spec;
-use gandr_storage_records::EncodedNode;
-use gandr_storage_records::KeyBound;
-use gandr_storage_records::KeyRange;
-use gandr_storage_records::MembershipProof;
-use gandr_storage_records::NonMembershipEvidence;
-use gandr_storage_records::NonMembershipProof;
-use gandr_storage_records::OwnedKeyBound;
-use gandr_storage_records::OwnedKeyRange;
-use gandr_storage_records::ProofEnvelope;
-use gandr_storage_records::ProofKind;
-use gandr_storage_records::ProofNode;
-use gandr_storage_records::RangeProof;
-use gandr_storage_records::Record;
-use gandr_storage_records::hash_node;
+use gandr_storage_records::NodeHash;
+use gandr_storage_schema::ArrowId;
+use gandr_storage_schema::AttributeId;
+use gandr_storage_schema::AttributeValue;
+use gandr_storage_schema::Ordinal;
+use gandr_storage_schema::PartKey;
+use gandr_storage_schema::Question;
+use gandr_storage_schema::STORE_ROOT_LEN;
+use gandr_storage_schema::StoreRoot;
 use quenchant_arith::arith;
 use quenchant_arith::arith::Int;
 
@@ -22,552 +29,277 @@ use super::ANSWER_CAP;
 use super::ByteSize;
 use super::Request;
 use super::StreamError;
-use crate::IndexKind;
-use crate::Manifest;
 use crate::WireImage;
-use crate::prove::Answer;
-use crate::prove::Proof;
-use crate::prove::ProveError;
-use crate::prove::Query;
+use crate::keyed::Keyed;
 use crate::wire::Body;
 use crate::wire::Cursor;
 use crate::wire::Fixed;
-use crate::wire::Length;
 use crate::wire::WireError;
 
 /// A wire discriminator, kept distinct from lengths and counts.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 struct Tag(u8);
 
-/// Whether framing counts bytes or writes their bounded image.
-enum Destination
-{
-    /// Measure without retaining any proof bytes.
-    Count,
-    /// Emit after the measured extent passed the cap.
-    Image(WireImage),
-}
-
-/// One encoder for both size measurement and emitted framing.
-struct Encoder
-{
-    /// Checked accumulated extent.
-    size: ByteSize,
-    /// The selected output mode.
-    destination: Destination,
-}
-
-impl Encoder
-{
-    /// Account for bytes, copying them only when emitting a bounded image.
-    ///
-    /// # Specification
-    /// - ensures: the extent advances by exactly the body's length.
-    /// - fails: an unrepresentable total is refused.
-    /// - panics: none.
-    ///
-    /// # Errors
-    /// - [`WireError::Length`]: the total exceeds its wire width.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L3 — the holder reports the exact over-cap framing extent.
-    /// - witness: `stream::tests::a_proof_past_the_cap_is_answered_with_its_size`
-    #[spec(captures: before = self.size.0, ensures: |ret| match ret {
-        Ok(()) => arith::checked_sub(Int::from(self.size.0), Int::from(before)).map(u64::from).ok() == u64::try_from(body.0.len()).ok(),
-        Err(_) => self.size.0 == before,
-    })]
-    fn bytes(
-        &mut self,
-        body: Body<'_>,
-    ) -> Result<(), WireError>
-    {
-        let length = u64::try_from(body.0.len()).map_err(|_width| WireError::Length)?;
-        let size = arith::checked_add(Int::from(self.size.0), Int::from(length))
-            .map_err(|_overflow| WireError::Length)?;
-        self.size.0 = u64::from(size);
-        if let Destination::Image(ref mut image) = self.destination {
-            image.0.extend_from_slice(body.0);
-        }
-        Ok(())
-    }
-
-    /// Emit one discriminator.
-    ///
-    /// # Specification
-    /// trivial.
-    fn tag(
-        &mut self,
-        tag: Tag,
-    ) -> Result<(), WireError>
-    {
-        self.bytes(Body(&[tag.0]))
-    }
-
-    /// Emit a four-byte count or extent.
-    ///
-    /// # Specification
-    /// - ensures: the count is encoded little-endian in exactly four bytes.
-    /// - fails: counts exceeding the wire width are refused.
-    /// - panics: none.
-    ///
-    /// # Errors
-    /// - [`WireError::Length`]: a count cannot be represented.
-    ///
-    /// # Adequacy
-    /// - hypothesis: L3 — framing size includes each length word.
-    /// - witness: `stream::tests::a_proof_past_the_cap_is_answered_with_its_size`
-    #[spec(captures: before = self.size.0, ensures: |ret| ret.is_err() || arith::checked_sub(Int::from(self.size.0), Int::from(before)).map(u64::from) == Ok(4))]
-    fn count(
-        &mut self,
-        count: Length,
-    ) -> Result<(), WireError>
-    {
-        let count = u32::try_from(count.0).map_err(|_width| WireError::Length)?;
-        self.bytes(Body(&count.to_le_bytes()))
-    }
-
-    /// Emit a field's length before its exact bytes.
-    ///
-    /// # Specification
-    /// trivial.
-    fn framed(
-        &mut self,
-        body: Body<'_>,
-    ) -> Result<(), WireError>
-    {
-        self.count(Length(body.0.len()))?;
-        self.bytes(body)
-    }
-
-    /// Emit a record without carrying a trusted root.
-    ///
-    /// # Specification
-    /// trivial.
-    fn record(
-        &mut self,
-        record: &Record,
-    ) -> Result<(), WireError>
-    {
-        self.framed(Body(record.key().as_ref()))?;
-        self.framed(Body(record.value().as_ref()))
-    }
-
-    /// Emit the authenticated-node candidates in proof order.
-    ///
-    /// # Specification
-    /// trivial.
-    fn nodes(
-        &mut self,
-        nodes: &[ProofNode],
-    ) -> Result<(), WireError>
-    {
-        self.count(Length(nodes.len()))?;
-        for node in nodes {
-            self.framed(Body(node.bytes().as_ref()))?;
-        }
-        Ok(())
-    }
-
-    /// Emit a bound using its protocol discriminator.
-    ///
-    /// # Specification
-    /// trivial.
-    fn bound(
-        &mut self,
-        bound: KeyBound<'_>,
-    ) -> Result<(), WireError>
-    {
-        match bound {
-            KeyBound::Unbounded => self.tag(Tag(0)),
-            KeyBound::Included(key) => {
-                self.tag(Tag(1))?;
-                self.framed(Body(key.as_ref()))
-            },
-            KeyBound::Excluded(key) => {
-                self.tag(Tag(2))?;
-                self.framed(Body(key.as_ref()))
-            },
-        }
-    }
-}
-
-/// Frame a held answer identically for measurement and transmission.
-///
-/// # Specification
-/// - ensures: no root is carried; the image carries manifest and proof parts.
-/// - fails: a field or accumulated extent exceeds its wire width.
-/// - panics: none.
-/// - executable: none — the wire encoder is its own specification; exact
-///   over-cap framing and bounded answer decoding provide the oracle.
-///
-/// # Errors
-/// - [`StreamError`]: manifest encoding or framing failed.
-///
-/// # Adequacy
-/// - hypothesis: L3 — over-cap framing reports its size without any node bytes.
-/// - witness: `stream::tests::a_proof_past_the_cap_is_answered_with_its_size`
-fn held(
-    encoder: &mut Encoder,
-    answer: &Answer,
-) -> Result<(), StreamError>
-{
-    encoder.tag(Tag(1))?;
-    let manifest = answer.manifest.encode()?;
-    encoder.framed(Body(manifest.as_ref()))?;
-    match answer.proof {
-        Proof::Present(ref proof) => {
-            encoder.tag(Tag(1))?;
-            encoder.framed(Body(proof.value().as_ref()))?;
-            encoder.nodes(proof.nodes())?;
-        },
-        Proof::Absent(ref proof) => {
-            encoder.tag(Tag(2))?;
-            for neighbour in [proof.evidence().predecessor(), proof.evidence().successor()] {
-                match neighbour {
-                    Some(record) => {
-                        encoder.tag(Tag(1))?;
-                        encoder.record(record)?;
-                    },
-                    None => encoder.tag(Tag(0))?,
-                }
-            }
-            encoder.nodes(proof.nodes())?;
-        },
-        Proof::Range(ref proof) => {
-            encoder.tag(Tag(3))?;
-            encoder.count(Length(proof.records().len()))?;
-            for record in proof.records() {
-                encoder.record(record)?;
-            }
-            encoder.nodes(proof.nodes())?;
-        },
-    }
-    Ok(())
-}
-
-/// Measure the complete held-answer framing without allocating node copies.
-///
-/// # Specification
-/// - ensures: the extent includes status, manifest, proof and every frame word.
-/// - fails: an unrepresentable field or extent is refused.
-/// - panics: none.
-/// - executable: none — the counting encoder is its own specification;
-///   independently pinned answer sizes provide the oracle.
-///
-/// # Errors
-/// - [`StreamError`]: manifest or framing failure.
-///
-/// # Adequacy
-/// - hypothesis: L2 — pinned sizes include complete answer framing.
-/// - witness: `measure::tests::the_proof_sizes_are_pinned`
-pub(super) fn size(answer: &Answer) -> Result<ByteSize, StreamError>
-{
-    let mut encoder = Encoder {
-        size: ByteSize(0),
-        destination: Destination::Count,
-    };
-    held(&mut encoder, answer)?;
-    Ok(encoder.size)
-}
-
-/// Encode a bounded proof or its exact over-cap extent, never an oversized
-/// body.
-///
-/// # Specification
-/// - ensures: the image is at most the cap; an over-cap proof becomes tag two
-///   and its eight-byte extent with no manifest or nodes.
-/// - fails: unrepresentable framing or manifest encoding.
-/// - panics: none.
-///
-/// # Errors
-/// - [`StreamError`]: manifest or framing failure.
-///
-/// # Adequacy
-/// - hypothesis: L3 — over-cap answers are exactly nine bytes and carry the
-///   size.
-/// - witness: `stream::tests::a_proof_past_the_cap_is_answered_with_its_size`
-#[spec(ensures: |ret| ret.as_ref().map_or(true, |image| u64::try_from(image.as_ref().len()).is_ok_and(|length| length <= ANSWER_CAP.0)))]
-pub(super) fn encode(answer: &Answer) -> Result<WireImage, StreamError>
-{
-    let size = size(answer)?;
-    if size > ANSWER_CAP {
-        let mut bytes = vec![2];
-        bytes.extend_from_slice(&size.0.to_le_bytes());
-        return Ok(WireImage(bytes));
-    }
-    let capacity = usize::try_from(size.0).map_err(|_width| WireError::Length)?;
-    let mut encoder = Encoder {
-        size: ByteSize(0),
-        destination: Destination::Image(WireImage(Vec::with_capacity(capacity))),
-    };
-    held(&mut encoder, answer)?;
-    match encoder.destination {
-        Destination::Image(image) => Ok(image),
-        Destination::Count => Err(WireError::Tag.into()),
-    }
-}
-
-/// Encode a request's digest and query without an answer root.
+/// Append a `u64le` field.
 ///
 /// # Specification
 /// trivial.
-pub(super) fn request(request: &Request) -> Result<WireImage, StreamError>
+fn put_number(
+    image: &mut WireImage,
+    number: Fixed<8>,
+)
 {
-    let mut encoder = Encoder {
-        size: ByteSize(0),
-        destination: Destination::Image(WireImage::default()),
-    };
-    encoder.bytes(Body(request.digest.as_ref()))?;
-    match request.query {
-        Query::Key(ref key) => {
-            encoder.tag(Tag(1))?;
-            encoder.framed(Body(key.as_ref()))?;
-        },
-        Query::Range(ref range) => {
-            encoder.tag(Tag(2))?;
-            let range = range.as_range().map_err(ProveError::from)?;
-            encoder.bound(range.start())?;
-            encoder.bound(range.end())?;
-        },
-    }
-    match encoder.destination {
-        Destination::Image(image) => Ok(image),
-        Destination::Count => Err(WireError::Tag.into()),
-    }
+    image.0.extend_from_slice(&number.0);
 }
 
-/// Decode a range bound without allocating for an unbounded edge.
+/// An element ordinal as its `u64le` field.
 ///
 /// # Specification
-/// trivial.
-fn bound(cursor: &mut Cursor<'_>) -> Result<OwnedKeyBound, WireError>
-{
-    let Fixed([tag]) = cursor.fixed::<1>()?;
-    match tag {
-        0 => Ok(OwnedKeyBound::Unbounded),
-        1 | 2 => {
-            let body = cursor.framed()?;
-            let key = body.0.into();
-            Ok(if tag == 1 {
-                OwnedKeyBound::Included(key)
-            }
-            else {
-                OwnedKeyBound::Excluded(key)
-            })
-        },
-        _unknown => Err(WireError::Tag),
-    }
-}
-
-/// Decode exactly one request, refusing trailing bytes and inverted bounds.
-///
-/// # Specification
-/// - ensures: the returned digest, key and bounds preserve their wire bytes.
-/// - fails: malformed framing, unknown tags or inverted bounds.
+/// - ensures: the field reads back as the ordinal.
+/// - fails: an ordinal past 64 bits.
 /// - panics: none.
+/// - executable: none — the encoding is its own specification; the round-trip
+///   witness reads every question back.
 ///
 /// # Errors
-/// - [`StreamError`]: the request is malformed.
+/// - [`WireError::Length`]: past 64 bits.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — holder responses name the requested unknown digest.
-/// - witness: `stream::tests::an_unheld_digest_is_answered_unheld`
-#[spec(ensures: |ret| ret.as_ref().map_or(true, |parsed| request(parsed).is_ok_and(|encoded| encoded == *image)))]
-pub(super) fn read_request(image: &WireImage) -> Result<Request, StreamError>
+/// - hypothesis: L2 — every fixture question round-trips.
+/// - witness: `stream::tests::every_question_round_trips_through_its_request`
+fn ordinal(element: Ordinal) -> Result<Fixed<8>, WireError>
+{
+    let value = u64::try_from(element.0).map_err(|_width| WireError::Length)?;
+    Ok(Fixed(value.to_le_bytes()))
+}
+
+/// Encode a request.
+///
+/// # Specification
+/// - ensures: [`read_request`] reads it back as `request`.
+/// - fails: an ordinal or a value too wide for its field.
+/// - panics: none.
+/// - executable: none — the encoding is its own specification; the round-trip
+///   witness reads every kind back.
+///
+/// # Errors
+/// - [`WireError`]: an unrepresentable field.
+///
+/// # Adequacy
+/// - hypothesis: L2 — every question kind round-trips.
+/// - witness: `stream::tests::every_question_round_trips_through_its_request`
+pub(super) fn request(request: &Request) -> Result<WireImage, WireError>
+{
+    let mut image = WireImage(Vec::new());
+    match *request {
+        Request::Question { root, ref question } => {
+            image.0.push(1);
+            image.0.extend_from_slice(root.as_ref());
+            let (kind, element, rest) = match *question {
+                Question::Part { object, part } => (1, Ordinal(usize::from(object)), Some(part)),
+                Question::Arrow { arrow, part } => (2, Ordinal(usize::from(arrow)), Some(part)),
+                Question::Value { attribute, part } => {
+                    (3, Ordinal(usize::from(attribute)), Some(part))
+                },
+                Question::Preimage { arrow, target } => {
+                    (4, Ordinal(usize::from(arrow)), Some(target))
+                },
+                Question::ValuePreimage { attribute, .. } => {
+                    (5, Ordinal(usize::from(attribute)), None)
+                },
+            };
+            image.0.push(kind);
+            put_number(&mut image, ordinal(element)?);
+            match (rest, question) {
+                (Some(part), _) => put_number(&mut image, Fixed(u64::from(part).to_le_bytes())),
+                (None, &Question::ValuePreimage { ref value, .. }) => {
+                    let length =
+                        u32::try_from(value.as_ref().len()).map_err(|_width| WireError::Length)?;
+                    image.0.extend_from_slice(&length.to_le_bytes());
+                    image.0.extend_from_slice(value.as_ref());
+                },
+                (None, _) => return Err(WireError::Tag),
+            }
+        },
+        Request::Manifest(root) => {
+            image.0.push(2);
+            image.0.extend_from_slice(root.as_ref());
+        },
+        Request::Node { root, node } => {
+            image.0.push(3);
+            image.0.extend_from_slice(root.as_ref());
+            image.0.extend_from_slice(node.as_ref());
+        },
+    }
+    Ok(image)
+}
+
+/// Read a request, resolving each element in the keyed schema.
+///
+/// # Specification
+/// - ensures: the request [`request`] encoded.
+/// - fails: an unknown kind, an ordinal outside the schema, truncation or
+///   trailing bytes.
+/// - panics: none.
+/// - executable: none — the decoding is its own specification; the round-trip
+///   witness reads every kind back.
+///
+/// # Errors
+/// - [`WireError`]: malformed framing.
+///
+/// # Adequacy
+/// - hypothesis: L2/L3 — every question kind round-trips; an ordinal past the
+///   schema is refused.
+/// - witness: `stream::tests::every_question_round_trips_through_its_request`
+pub(super) fn read_request(
+    image: &WireImage,
+    keyed: &Keyed,
+) -> Result<Request, WireError>
 {
     let mut cursor = Cursor::new(Body(image.as_ref()));
-    let Fixed(digest) = cursor.fixed::<32>()?;
-    let Fixed([tag]) = cursor.fixed::<1>()?;
-    let query = match tag {
-        1 => {
-            let key = cursor.framed()?;
-            Query::Key(key.0.into())
+    let Fixed([kind]) = cursor.fixed::<1>()?;
+    let Fixed(root) = cursor.fixed::<STORE_ROOT_LEN>()?;
+    let root = StoreRoot::from(root);
+    let request = match Tag(kind) {
+        Tag(1) => {
+            let Fixed([question]) = cursor.fixed::<1>()?;
+            let Fixed(element) = cursor.fixed::<8>()?;
+            let element = Ordinal(
+                usize::try_from(u64::from_le_bytes(element)).map_err(|_width| WireError::Length)?,
+            );
+            let question = match question {
+                1 => Question::Part {
+                    object: nth(keyed.schema.objects(), element)?,
+                    part: part(&mut cursor)?,
+                },
+                2 => Question::Arrow {
+                    arrow: nth::<ArrowId>(keyed.schema.arrows(), element)?,
+                    part: part(&mut cursor)?,
+                },
+                3 => Question::Value {
+                    attribute: nth::<AttributeId>(keyed.schema.attributes(), element)?,
+                    part: part(&mut cursor)?,
+                },
+                4 => Question::Preimage {
+                    arrow: nth::<ArrowId>(keyed.schema.arrows(), element)?,
+                    target: part(&mut cursor)?,
+                },
+                5 => Question::ValuePreimage {
+                    attribute: nth::<AttributeId>(keyed.schema.attributes(), element)?,
+                    value: AttributeValue::from(cursor.framed()?.0),
+                },
+                _ => return Err(WireError::Tag),
+            };
+            Request::Question { root, question }
         },
-        2 => {
-            let start = bound(&mut cursor)?;
-            let end = bound(&mut cursor)?;
-            let range =
-                KeyRange::new(start.as_bound(), end.as_bound()).map_err(ProveError::from)?;
-            Query::Range(OwnedKeyRange::from_range(range))
+        Tag(2) => Request::Manifest(root),
+        Tag(3) => {
+            let Fixed(node) = cursor.fixed::<32>()?;
+            Request::Node {
+                root,
+                node: NodeHash::from(node),
+            }
         },
-        _unknown => return Err(WireError::Tag.into()),
+        Tag(_) => return Err(WireError::Tag),
     };
     cursor.finish()?;
-    Ok(Request {
-        digest: digest.into(),
-        query,
-    })
+    Ok(request)
 }
 
-/// Decode a framed record's two fields.
+/// The element at an ordinal.
 ///
 /// # Specification
 /// trivial.
-fn record(cursor: &mut Cursor<'_>) -> Result<Record, WireError>
+fn nth<T>(
+    mut elements: impl Iterator<Item = T>,
+    element: Ordinal,
+) -> Result<T, WireError>
 {
-    let key = cursor.framed()?;
-    let value = cursor.framed()?;
-    Ok(Record::new(key.0, value.0))
+    elements.nth(element.0).ok_or(WireError::Tag)
 }
 
-/// An absent key's neighbour, before proof authentication.
-enum Neighbour
-{
-    /// No record on this side of the query.
-    None,
-    /// The claimed nearest record on this side.
-    Record(Record),
-}
-
-/// Decode one claimed neighbour without conferring trust.
+/// Read a part key.
 ///
 /// # Specification
 /// trivial.
-fn neighbour(cursor: &mut Cursor<'_>) -> Result<Neighbour, WireError>
+fn part(cursor: &mut Cursor<'_>) -> Result<PartKey, WireError>
 {
-    let Fixed([tag]) = cursor.fixed::<1>()?;
-    match tag {
-        0 => Ok(Neighbour::None),
-        1 => {
-            let record = record(cursor)?;
-            Ok(Neighbour::Record(record))
-        },
-        _unknown => Err(WireError::Tag),
-    }
+    let Fixed(part) = cursor.fixed::<8>()?;
+    Ok(PartKey::from(u64::from_le_bytes(part)))
 }
 
-/// Decode bounded node images and derive their identities from their bytes.
+/// Frame a reply, or its size alone when it would pass the cap.
 ///
 /// # Specification
-/// - ensures: no identity is trusted from the wire; each node hash is computed.
-/// - fails: truncated fields or an unknown node encoding during verification.
-/// - panics: none.
-/// - executable: none — the consuming cursor exposes no replay; the decoded
-///   proof must independently authenticate against its selected root.
-///
-/// # Errors
-/// - [`WireError`]: a declared field is truncated.
-///
-/// # Adequacy
-/// - hypothesis: L3 — decoded wire nodes authenticate the requested value
-///   against the held manifest.
-/// - witness: `stream::tests::an_unheld_digest_is_answered_unheld`
-fn nodes(cursor: &mut Cursor<'_>) -> Result<Box<[ProofNode]>, WireError>
-{
-    let Fixed(count) = cursor.fixed::<4>()?;
-    // The count is untrusted. Grow only for fields actually present in the
-    // capped image, never reserve the advertised count before reading them.
-    let mut nodes = Vec::new();
-    for _node in 0 .. u32::from_le_bytes(count) {
-        let body = cursor.framed()?;
-        let hash = hash_node(EncodedNode::from(body.0));
-        nodes.push(ProofNode::new(hash, body.0));
-    }
-    Ok(nodes.into_boxed_slice())
-}
-
-/// Decode a capped answer, checking its manifest before opening any proof node.
-///
-/// # Specification
-/// - ensures: envelopes and root identities come only from the selected
-///   manifest, never from the answer; all framing is consumed.
-/// - fails: oversize, unheld, wrong manifest, question or malformed framing.
+/// - ensures: tag one and the reply when the whole image is within the cap;
+///   otherwise tag two and the size the image would have had.
+/// - fails: an unrepresentable size.
 /// - panics: none.
 ///
 /// # Errors
-/// - [`StreamError`]: answer refusal, identity or framing failure.
+/// - [`WireError::Length`]: the size exceeds 64 bits.
 ///
 /// # Adequacy
-/// - hypothesis: L3 — unheld names the digest, and one byte past the cap fails.
-/// - witness: `stream::tests::an_unheld_digest_is_answered_unheld`
-/// - witness: `stream::tests::an_answer_at_the_cap_is_read_and_one_byte_past_is_refused`
-#[spec(ensures: |ret| ret.as_ref().map_or(true, |answer| encode(answer).is_ok_and(|encoded| encoded == *image)))]
-pub(super) fn decode(
-    request: &Request,
-    kind: IndexKind,
+/// - hypothesis: L3 — a reply one byte past the cap carries its size.
+/// - witness: `stream::tests::a_proof_past_the_cap_is_answered_with_its_size`
+#[spec(ensures: |ret| ret.as_ref().map_or(true, |image|
+    u64::try_from(image.0.len()).is_ok_and(|length| length <= ANSWER_CAP.0)))]
+pub(super) fn reply(body: Body<'_>) -> Result<WireImage, WireError>
+{
+    let length = u64::try_from(body.0.len()).map_err(|_width| WireError::Length)?;
+    let size = arith::checked_add(Int::from(length), Int::from(1_u64))
+        .map_err(|_overflow| WireError::Length)?;
+    if size > Int::from(ANSWER_CAP.0) {
+        let mut image = WireImage(vec![2]);
+        image.0.extend_from_slice(&u64::from(size).to_le_bytes());
+        return Ok(image);
+    }
+    let mut image = WireImage(vec![1]);
+    image.0.extend_from_slice(body.0);
+    Ok(image)
+}
+
+/// Read a reply's body, refusing an unheld root or an over-cap size.
+///
+/// # Specification
+/// - ensures: the body tag one carries.
+/// - fails: tag zero as unheld `root`, tag two as its size, any other tag.
+/// - panics: none.
+/// - executable: none — the decoding is its own specification; the unheld and
+///   over-cap witnesses read each tag.
+///
+/// # Errors
+/// - [`StreamError`]: as above.
+///
+/// # Adequacy
+/// - hypothesis: L3 — an unheld root and an over-cap reply are refused by name.
+/// - witness: `stream::tests::an_unheld_root_is_answered_unheld`
+/// - witness: `stream::tests::a_proof_past_the_cap_is_answered_with_its_size`
+pub(super) fn read_reply(
     image: &WireImage,
-) -> Result<Answer, StreamError>
+    root: StoreRoot,
+) -> Result<Body<'_>, StreamError>
 {
-    let size = u64::try_from(image.0.len()).map_err(|_width| WireError::Length)?;
-    if size > ANSWER_CAP.0 {
-        return Err(StreamError::Oversize(ByteSize(size)));
-    }
-    let mut cursor = Cursor::new(Body(image.as_ref()));
-    let Fixed([tag]) = cursor.fixed::<1>()?;
-    match tag {
-        0 => {
-            cursor.finish()?;
-            return Err(StreamError::Unheld(request.digest));
-        },
-        2 => {
+    match image.as_ref().split_first() {
+        Some((&1, body)) => Ok(Body(body)),
+        Some((&0, &[])) => Err(StreamError::Unheld(root)),
+        Some((&2, size)) => {
+            let mut cursor = Cursor::new(Body(size));
             let Fixed(size) = cursor.fixed::<8>()?;
             cursor.finish()?;
-            return Err(StreamError::Oversize(ByteSize(u64::from_le_bytes(size))));
+            Err(StreamError::Oversize(ByteSize(u64::from_le_bytes(size))))
         },
-        1 => {},
-        _unknown => return Err(WireError::Tag.into()),
+        Some(_) => Err(WireError::Tag.into()),
+        None => Err(WireError::Truncated.into()),
     }
-    let image = cursor.framed()?;
-    let manifest = Manifest::decode(&WireImage(image.0.to_vec()), kind)?;
-    let digest = manifest.identity()?;
-    if digest != request.digest {
-        return Err(ProveError::Identity(request.digest).into());
-    }
-    let root = manifest.root().map_err(ProveError::from)?;
-    let node = manifest.node();
-    let Fixed([tag]) = cursor.fixed::<1>()?;
-    let proof = match (tag, &request.query) {
-        (1, &Query::Key(ref key)) => {
-            let value = cursor.framed()?;
-            let nodes = nodes(&mut cursor)?;
-            Proof::Present(MembershipProof::new(
-                ProofEnvelope::new(root, ProofKind::Membership),
-                node,
-                key.as_borrowed(),
-                value.0,
-                nodes,
-            ))
-        },
-        (2, &Query::Key(ref key)) => {
-            let predecessor = neighbour(&mut cursor)?;
-            let successor = neighbour(&mut cursor)?;
-            let nodes = nodes(&mut cursor)?;
-            let predecessor = match predecessor {
-                Neighbour::None => None,
-                Neighbour::Record(record) => Some(record),
-            };
-            let successor = match successor {
-                Neighbour::None => None,
-                Neighbour::Record(record) => Some(record),
-            };
-            let evidence = NonMembershipEvidence::new(predecessor, successor);
-            Proof::Absent(NonMembershipProof::new(
-                ProofEnvelope::new(root, ProofKind::NonMembership),
-                node,
-                key.as_borrowed(),
-                evidence,
-                nodes,
-            ))
-        },
-        (3, &Query::Range(ref range)) => {
-            let Fixed(count) = cursor.fixed::<4>()?;
-            let mut records = Vec::new();
-            for _record in 0 .. u32::from_le_bytes(count) {
-                let record = record(&mut cursor)?;
-                records.push(record);
-            }
-            let nodes = nodes(&mut cursor)?;
-            Proof::Range(RangeProof::new(
-                ProofEnvelope::new(root, ProofKind::Range),
-                node,
-                range.clone(),
-                records,
-                nodes,
-            ))
-        },
-        _different => return Err(ProveError::Question.into()),
-    };
-    cursor.finish()?;
-    Ok(Answer { manifest, proof })
+}
+
+/// The holder's answer for an unheld root.
+///
+/// # Specification
+/// trivial.
+pub(super) fn unheld() -> WireImage
+{
+    WireImage(vec![0])
 }

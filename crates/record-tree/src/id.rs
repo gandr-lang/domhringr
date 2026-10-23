@@ -454,14 +454,14 @@ impl fmt::Display for ContentHash
     }
 }
 
-/// The BLAKE3 identity of a keyed-plane manifest, opaque to the fold.
+/// The root of a project's keyed-plane store, opaque to the fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct IndexDigest([u8; 32]);
 
 impl From<[u8; 32]> for IndexDigest
 {
-    /// Wrap a manifest identity.
+    /// Wrap a store root.
     ///
     /// # Specification
     /// trivial.
