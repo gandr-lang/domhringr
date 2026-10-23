@@ -37,7 +37,8 @@ if ! docker image inspect "$image" > /dev/null 2>&1; then
     secret=(--secret id=github_token,env=GITHUB_TOKEN)
   fi
   echo "linux-tests: building $image" >&2
-  docker build ${secret[@]+"${secret[@]}"} -f .github/docker/ci.Dockerfile -t "$image" "$context"
+  channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+  docker build ${secret[@]+"${secret[@]}"} --build-arg "RUST_CHANNEL=$channel" -f .github/docker/ci.Dockerfile -t "$image" "$context"
 fi
 
 host_target=${CARGO_TARGET_DIR:-$root/target}

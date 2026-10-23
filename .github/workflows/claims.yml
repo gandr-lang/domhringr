@@ -33,7 +33,7 @@ jobs:
   claims:
     name: take stale claims off
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.merged }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 5
     permissions:
       contents: read
