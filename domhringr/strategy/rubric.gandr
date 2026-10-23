@@ -5,11 +5,9 @@
 // and `code` and `docs` are the documents `rubrics/code.toml` and
 // `rubrics/docs.toml`, their questions in their names' order.
 //
-// A probability is an integer count of millionths: 1000000 is one and 200000
-// is 0.2. The fragment reads no fractional number (gandr #1830), and every
-// bound and ruling the rubric set and its fixture table write is a whole
-// number of millionths. A list is the data type below: a list literal is
-// matched by no pattern yet (gandr #1051).
+// A probability is an `f64` from zero to one, as `Probability` holds it, and
+// a band's bounds are two of them. A list is the data type below: a list
+// literal is matched by no pattern yet (gandr #1051).
 
 /// Lists of elements of a type `a`.
 @[ checks ]
@@ -20,7 +18,7 @@ data List(a : Type) : Type {
 
 /// Where a rubric's grades stand: the probability on a criterion holding at
 /// or below which it is unmet, and at or above which it is met.
-type Band = #{low : Integer, high : Integer} ;
+type Band = #{low : f64, high : f64} ;
 
 /// A question: its name, the instructions the judge reads, and its two
 /// criteria, offered as `A` when it holds and `B` when it fails.
@@ -64,9 +62,9 @@ def questionsOf(rubric : Rubric) -> -F List(Question) {
 def banded(band : Band) -> -F Bool {
   case band {
     #{.low = low, .high = high} => {
-      run floor <- 0 <= low;
-      run below <- low < high;
-      run ceiling <- high <= 1000000;
+      run floor <- float64.le(0f64, low);
+      run below <- float64.lt(low, high);
+      run ceiling <- float64.le(high, 1f64);
       case floor {
         true => case below {
           true => ceiling,
@@ -121,7 +119,7 @@ def rec nth(a : Type, xs : List(a), i : Integer, fallback : a) -> -F a {
 /// `high = 0.8`.
 @[ checks ]
 def setBand : Band ;
-def setBand = #{low = 200000, high = 800000} ;
+def setBand = #{low = 0.2f64, high = 0.8f64} ;
 
 /// `rubrics/code.toml`: the code a change adds carries its specifications,
 /// keeps every diagnostic, says why a value is absent, converts numbers
@@ -290,14 +288,14 @@ def setBanded = thunk { become banded(setBand) } ;
 /// A band whose low bound is above its high one is not.
 @[ runs("+{.1 = unit}") ]
 def invertedBanded : () => Bool ;
-def invertedBanded = thunk { become banded(#{low = 750000, high = 250000}) } ;
+def invertedBanded = thunk { become banded(#{low = 0.75f64, high = 0.25f64}) } ;
 
 /// Nor is one whose bounds are equal.
 @[ runs("+{.1 = unit}") ]
 def equalBanded : () => Bool ;
-def equalBanded = thunk { become banded(#{low = 500000, high = 500000}) } ;
+def equalBanded = thunk { become banded(#{low = 0.5f64, high = 0.5f64}) } ;
 
 /// Nor is one whose high bound is past one.
 @[ runs("+{.1 = unit}") ]
 def overBanded : () => Bool ;
-def overBanded = thunk { become banded(#{low = 250000, high = 1500000}) } ;
+def overBanded = thunk { become banded(#{low = 0.25f64, high = 1.5f64}) } ;

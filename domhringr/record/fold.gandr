@@ -2249,7 +2249,7 @@ def briefOne = (BriefAt("domhringr://100/briefs/one") : Brief);
 @[ checks ]
 def rulings = (
   Cons(
-    OnQuestion(901, Read(Cons(250000, Cons(750000, Nil)), 0)),
+    OnQuestion(901, Read(Cons(0.25f64, Cons(0.75f64, Nil)), 0f64)),
     Cons(OnQuestion(902, Unread(NoLetter)), Nil)
   ) : List(Ruled)
 );
@@ -2894,7 +2894,7 @@ def judgeRefused = thunk {
 
 /// Judges rule while the report is still owed, even after a refused
 /// retirement.
-@[ runs("Some(Cons(StepAt(2, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(3, VerdictStep(2, 50, 903, 705, Cons(OnQuestion(901, Read(Cons(250000, Cons(750000, Nil)), 0)), Cons(OnQuestion(902, Unread(NoLetter)), Nil)))), Cons(StepAt(7, VerdictStep(2, 70, 903, 705, Cons(OnQuestion(901, Read(Cons(250000, Cons(750000, Nil)), 0)), Cons(OnQuestion(902, Unread(NoLetter)), Nil)))), Nil))))") ]
+@[ runs("Some(Cons(StepAt(2, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(3, VerdictStep(2, 50, 903, 705, Cons(OnQuestion(901, Read(Cons(0.25f64, Cons(0.75f64, Nil)), 0f64)), Cons(OnQuestion(902, Unread(NoLetter)), Nil)))), Cons(StepAt(7, VerdictStep(2, 70, 903, 705, Cons(OnQuestion(901, Read(Cons(0.25f64, Cons(0.75f64, Nil)), 0f64)), Cons(OnQuestion(902, Unread(NoLetter)), Nil)))), Nil))))") ]
 def judgeSteps : () => Maybe(List(Stepped)) ;
 def judgeSteps = thunk {
   run commits <- judgeCommits();
@@ -3014,7 +3014,7 @@ def gradingRefused = thunk {
 
 /// The judge's grading is a step naming its verdict's dispatch, rubric and
 /// questions.
-@[ runs("Some(Cons(StepAt(2, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(3, VerdictStep(2, 50, 903, 705, Cons(OnQuestion(901, Read(Cons(250000, Cons(750000, Nil)), 0)), Cons(OnQuestion(902, Unread(NoLetter)), Nil)))), Cons(StepAt(4, GradedStep(2, 3, 903, Cons(MarkedAs(901, Met), Cons(MarkedAs(902, Refused), Nil)), Refused)), Cons(StepAt(11, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Nil)))))") ]
+@[ runs("Some(Cons(StepAt(2, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(3, VerdictStep(2, 50, 903, 705, Cons(OnQuestion(901, Read(Cons(0.25f64, Cons(0.75f64, Nil)), 0f64)), Cons(OnQuestion(902, Unread(NoLetter)), Nil)))), Cons(StepAt(4, GradedStep(2, 3, 903, Cons(MarkedAs(901, Met), Cons(MarkedAs(902, Refused), Nil)), Refused)), Cons(StepAt(11, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Nil)))))") ]
 def gradingSteps : () => Maybe(List(Stepped)) ;
 def gradingSteps = thunk {
   run commits <- gradingCommits();

@@ -1125,10 +1125,27 @@ dependencies = [
 name = "gandr-core-session"
 version = "0.0.0"
 dependencies = [
+ "gandr-core-term",
  "gandr-kernel-core",
  "gandr-kernel-term",
  "gandr-theory-deep-inference",
  "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+ "quenchant-shape",
+]
+
+[[package]]
+name = "gandr-core-term"
+version = "0.0.0"
+dependencies = [
+ "gandr-kernel-strata",
+ "gandr-kernel-term",
+ "gandr-theory-levitation",
+ "gandr-theory-sites",
+ "libm",
+ "num-bigint 0.5.1",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+ "quenchant-arith 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+ "quenchant-shape",
 ]
 
 [[package]]
@@ -1221,6 +1238,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gandr-theory-circuit-algebras"
+version = "0.0.0"
+dependencies = [
+ "gandr-theory-cell-complexes",
+ "gandr-theory-spec-combinators",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+ "quenchant-shape",
+]
+
+[[package]]
 name = "gandr-theory-coherent-resolutions"
 version = "0.0.0"
 dependencies = [
@@ -1238,6 +1265,23 @@ dependencies = [
  "gandr-theory-cell-complexes",
  "gandr-theory-coherent-resolutions",
  "hashbrown",
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+ "quenchant-shape",
+]
+
+[[package]]
+name = "gandr-theory-levitation"
+version = "0.0.0"
+dependencies = [
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
+ "quenchant-shape",
+]
+
+[[package]]
+name = "gandr-theory-sites"
+version = "0.0.0"
+dependencies = [
+ "gandr-theory-circuit-algebras",
  "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
  "quenchant-shape",
 ]
@@ -1975,6 +2019,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2395,6 +2445,16 @@ name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -3182,7 +3242,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.2.17",
  "nonempty",
- "num-bigint",
+ "num-bigint 0.4.8",
  "serde",
  "siphasher",
  "thiserror 2.0.21",

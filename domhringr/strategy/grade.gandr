@@ -27,7 +27,7 @@ data Unread : Type {
 /// none.
 @[ checks ]
 data Ruling : Type {
-  Read : (probabilities : List(Integer), outside : Integer) --> Ruling;
+  Read : (probabilities : List(f64), outside : f64) --> Ruling;
   Unread : (reason : Unread) --> Ruling;
 }
 
@@ -51,11 +51,11 @@ def grade(band : Band, ruling : Ruling) -> -F Grade {
       Nil => Refused,
       Cons(holds, rest) => case band {
         #{.low = low, .high = high} => {
-          run met <- holds >= high;
+          run met <- float64.ge(holds, high);
           case met {
             true => Met,
             false => {
-              run unmet <- holds <= low;
+              run unmet <- float64.le(holds, low);
               case unmet {
                 true => Unmet,
                 false => Undecided
@@ -84,24 +84,24 @@ def rec grades(band : Band, rulings : List(Ruling)) -> -F List(Grade) {
 /// The table's ruling for a criterion holding: `read A A=0.9 B=0.1
 /// outside=0`.
 @[ checks ]
-def holding = (Read(Cons(900000, Cons(100000, Nil)), 0) : Ruling);
+def holding = (Read(Cons(0.9f64, Cons(0.1f64, Nil)), 0f64) : Ruling);
 
 /// The table's ruling for a criterion failing: `read B A=0.1 B=0.9
 /// outside=0`.
 @[ checks ]
-def failing = (Read(Cons(100000, Cons(900000, Nil)), 0) : Ruling);
+def failing = (Read(Cons(0.1f64, Cons(0.9f64, Nil)), 0f64) : Ruling);
 
 /// A readout of `holds` on `A` and the rest on `B`, nothing outside.
 @[ checks ]
-def readout(holds : Integer) -> -F Ruling {
-  run fails <- 1000000 - holds;
-  Read(Cons(holds, Cons(fails, Nil)), 0)
+def readout(holds : f64) -> -F Ruling {
+  run fails <- float64.sub(1f64, holds);
+  Read(Cons(holds, Cons(fails, Nil)), 0f64)
 }
 
 /// The band of the witness, `low = 0.25` and `high = 0.75`.
 @[ checks ]
 def quarters : Band ;
-def quarters = #{low = 250000, high = 750000} ;
+def quarters = #{low = 0.25f64, high = 0.75f64} ;
 
 /// The table's rulings over the `met` member of a pair of six questions:
 /// every criterion holds.
@@ -133,32 +133,32 @@ def docsUnmet = Cons(
 /// Certain: met.
 @[ runs("Met") ]
 def certain : () => Grade ;
-def certain = thunk { run ruling <- readout(1000000); become grade(quarters, ruling) } ;
+def certain = thunk { run ruling <- readout(1f64); become grade(quarters, ruling) } ;
 
 /// At the high bound: met.
 @[ runs("Met") ]
 def atHigh : () => Grade ;
-def atHigh = thunk { run ruling <- readout(750000); become grade(quarters, ruling) } ;
+def atHigh = thunk { run ruling <- readout(0.75f64); become grade(quarters, ruling) } ;
 
 /// Just below the high bound: undecided.
 @[ runs("Undecided") ]
 def belowHigh : () => Grade ;
-def belowHigh = thunk { run ruling <- readout(700000); become grade(quarters, ruling) } ;
+def belowHigh = thunk { run ruling <- readout(0.7f64); become grade(quarters, ruling) } ;
 
 /// Just above the low bound: undecided.
 @[ runs("Undecided") ]
 def aboveLow : () => Grade ;
-def aboveLow = thunk { run ruling <- readout(300000); become grade(quarters, ruling) } ;
+def aboveLow = thunk { run ruling <- readout(0.3f64); become grade(quarters, ruling) } ;
 
 /// At the low bound: unmet.
 @[ runs("Unmet") ]
 def atLow : () => Grade ;
-def atLow = thunk { run ruling <- readout(250000); become grade(quarters, ruling) } ;
+def atLow = thunk { run ruling <- readout(0.25f64); become grade(quarters, ruling) } ;
 
 /// Certainly not: unmet.
 @[ runs("Unmet") ]
 def certainlyNot : () => Grade ;
-def certainlyNot = thunk { run ruling <- readout(0); become grade(quarters, ruling) } ;
+def certainlyNot = thunk { run ruling <- readout(0f64); become grade(quarters, ruling) } ;
 
 /// An unread ruling is refused, never graded.
 @[ runs("Refused") ]
