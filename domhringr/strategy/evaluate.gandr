@@ -1,0 +1,247 @@
+// A rubric evaluated: the judge's rulings on a rubric's questions, one per
+// question in the names' order, become a verdict on the current dispatch,
+// and the rulings graded against the rubric's band and composed become the
+// verdict's grading. It follows `grade` of `domhringr-surface-peer`
+// (`crates/surface-peer/src/strategy.rs`). Its exemplars are the three
+// gradings of the witness
+// `a_playbook_runs_its_checks_and_replay_shows_the_receipts`, over that
+// test's rubric `landing`. The fold admits each verdict and grading, and
+// marks each question with the grade the evaluation gave it.
+//
+// The rubric's hash, its questions' hashes and the transcript's digest are
+// integers the exemplars state: the fragment computes no hash.
+
+// Lists, the rubric, its band and its questions.
+import "./rubric.gandr" ;
+
+// Rulings and grades.
+import "./grade.gandr" ;
+
+// A rubric's grades composed.
+import "./compose.gandr" ;
+
+// The receipt kinds.
+import "../record/receipt.gandr" ;
+
+// The checks and their refusals.
+import "../record/authority.gandr" ;
+
+// The channels' moves and the monitor that replays them.
+import "../arena/protocol.gandr" ;
+
+// The fold, its steps and its commit helpers.
+import "../record/fold.gandr" ;
+
+/// An evaluation: the verdict's kind, the grade of each of its rulings in
+/// order, and their composition.
+@[ checks ]
+data Evaluation : Type {
+  Evaluated : (verdict : Kind, grades : List(Grade), composed : Grade) --> Evaluation;
+}
+
+/// Each question's hash with its ruling, in order; a question past the last
+/// ruling, or a ruling past the last question, is not answered.
+@[ checks ]
+def rec answered(questions : List(Integer), rulings : List(Ruling)) -> -F List(Ruled) {
+  case questions {
+    Nil => (Nil : List(Ruled)),
+    Cons(question, rest) => case rulings {
+      Nil => (Nil : List(Ruled)),
+      Cons(ruling, more) => {
+        run later <- answered[<](rest, more);
+        (Cons(OnQuestion(question, ruling), later) : List(Ruled))
+      }
+    }
+  }
+}
+
+/// `rubric`, hashed as `hash` with its questions hashed as `questions`,
+/// evaluated on `dispatch` by `judge` over the transcript `transcript`, from
+/// `rulings`, one per question in the names' order.
+@[ checks ]
+def evaluate(
+  rubric : Rubric,
+  hash : Integer,
+  questions : List(Integer),
+  dispatch : Integer,
+  judge : Integer,
+  transcript : Integer,
+  rulings : List(Ruling)
+) -> -F Evaluation {
+  run band <- bandOf(rubric);
+  run graded <- grades(band, rulings);
+  run composed <- compose(graded);
+  run answers <- answered(questions, rulings);
+  Evaluated(Verdict(dispatch, judge, hash, transcript, answers), graded, composed)
+}
+
+/// The grading of the verdict committed as `verdict`.
+@[ checks ]
+def gradingOf(evaluation : Evaluation, verdict : Integer) -> -F Kind {
+  case evaluation {
+    Evaluated(ruled, graded, composed) => Graded(verdict, graded, composed)
+  }
+}
+
+/// The test's rubric `landing`: its band 0.25 to 0.75, and its three
+/// questions `landed`, `passed` and `tested`.
+@[ checks ]
+def landingRubric : Rubric ;
+def landingRubric = Written(
+  "landing",
+  Cons("note.txt", Nil),
+  #{low = 250000, high = 750000},
+  Cons(
+    Asked(
+      "landed",
+      "Does the note say the change landed?",
+      "The note says the change landed.",
+      "The note says the change did not land."
+    ),
+    Cons(
+      Asked(
+        "passed",
+        "Does the note say every check passed?",
+        "The note says every check passed.",
+        "The note says a check failed."
+      ),
+      Cons(
+        Asked(
+          "tested",
+          "Does the note say the change was tested?",
+          "The note says the change was tested.",
+          "The note says the change was not tested."
+        ),
+        Nil
+      )
+    )
+  )
+) ;
+
+/// The questions' hashes, `landed`, `passed` and `tested` in order.
+@[ checks ]
+def landingQuestions : List(Integer) ;
+def landingQuestions = Cons(911, Cons(912, Cons(913, Nil))) ;
+
+/// The table's ruling `read A A=0.9 B=0.1 outside=0`.
+@[ checks ]
+def met = (Read(Cons(900000, Cons(100000, Nil)), 0) : Ruling);
+
+/// The table's ruling `read A A=0.6 B=0.4 outside=0`.
+@[ checks ]
+def undecided = (Read(Cons(600000, Cons(400000, Nil)), 0) : Ruling);
+
+/// The table's ruling `read B A=0.1 B=0.9 outside=0`.
+@[ checks ]
+def unmet = (Read(Cons(100000, Cons(900000, Nil)), 0) : Ruling);
+
+/// The first grading: an empty table, every question unread as malformed.
+@[ checks ]
+def unlisted : List(Ruling) ;
+def unlisted = Cons(Unread(Malformed), Cons(Unread(Malformed), Cons(Unread(Malformed), Nil))) ;
+
+/// The second grading: `landed` met, `passed` undecided, `tested` unlisted.
+@[ checks ]
+def partial : List(Ruling) ;
+def partial = Cons(met, Cons(undecided, Cons(Unread(Malformed), Nil))) ;
+
+/// The third grading: `tested` read as unmet.
+@[ checks ]
+def complete : List(Ruling) ;
+def complete = Cons(met, Cons(undecided, Cons(unmet, Nil))) ;
+
+/// The test's rubric evaluated by the owner `10` on the dispatch `2`, over
+/// the transcript `705`.
+@[ checks ]
+def ownerRules(rulings : List(Ruling)) -> -F Evaluation {
+  become evaluate(landingRubric, 903, landingQuestions, 2, 10, 705, rulings)
+}
+
+/// The commits of a task the owner dispatches to `20` and grades three times,
+/// each verdict followed by its grading.
+@[ checks ]
+def gradedCommits() -> -F List(Commit) {
+  run opened <- rooted(1, 10, Open(Signed(100, 10)));
+  run dispatched <- child(2, 10, 1, Dispatch(1, 20, briefOne));
+  run first <- ownerRules(unlisted);
+  run second <- ownerRules(partial);
+  run third <- ownerRules(complete);
+  case first {
+    Evaluated(firstVerdict, firstGrades, firstComposed) => case second {
+      Evaluated(secondVerdict, secondGrades, secondComposed) => case third {
+        Evaluated(thirdVerdict, thirdGrades, thirdComposed) => {
+          run ruledFirst <- child(3, 10, 2, firstVerdict);
+          run gradedFirst <- child(4, 10, 3, Graded(3, firstGrades, firstComposed));
+          run ruledSecond <- child(5, 10, 4, secondVerdict);
+          run gradedSecond <- child(6, 10, 5, Graded(5, secondGrades, secondComposed));
+          run ruledThird <- child(7, 10, 6, thirdVerdict);
+          run gradedThird <- child(8, 10, 7, Graded(7, thirdGrades, thirdComposed));
+          (Cons(
+            opened,
+            Cons(
+              dispatched,
+              Cons(
+                ruledFirst,
+                Cons(
+                  gradedFirst,
+                  Cons(ruledSecond, Cons(gradedSecond, Cons(ruledThird, Cons(gradedThird, Nil))))
+                )
+              )
+            )
+          ) : List(Commit))
+        }
+      }
+    }
+  }
+}
+
+/// Every question unread grades refused, and the rubric with them.
+@[ runs("Evaluated(Verdict(2, 10, 903, 705, Cons(OnQuestion(911, Unread(Malformed)), Cons(OnQuestion(912, Unread(Malformed)), Cons(OnQuestion(913, Unread(Malformed)), Nil)))), Cons(Refused, Cons(Refused, Cons(Refused, Nil))), Refused)") ]
+def unlistedEvaluation : () => Evaluation ;
+def unlistedEvaluation = thunk { become ownerRules(unlisted) } ;
+
+/// `landed` met and `passed` undecided beside `tested` unread: refused.
+@[ runs("Evaluated(Verdict(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(900000, Cons(100000, Nil)), 0)), Cons(OnQuestion(912, Read(Cons(600000, Cons(400000, Nil)), 0)), Cons(OnQuestion(913, Unread(Malformed)), Nil)))), Cons(Met, Cons(Undecided, Cons(Refused, Nil))), Refused)") ]
+def partialEvaluation : () => Evaluation ;
+def partialEvaluation = thunk { become ownerRules(partial) } ;
+
+/// `tested` read as unmet: unmet, whatever the others say.
+@[ runs("Evaluated(Verdict(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(900000, Cons(100000, Nil)), 0)), Cons(OnQuestion(912, Read(Cons(600000, Cons(400000, Nil)), 0)), Cons(OnQuestion(913, Read(Cons(100000, Cons(900000, Nil)), 0)), Nil)))), Cons(Met, Cons(Undecided, Cons(Unmet, Nil))), Unmet)") ]
+def completeEvaluation : () => Evaluation ;
+def completeEvaluation = thunk { become ownerRules(complete) } ;
+
+/// The grading of a verdict carries the evaluation's grades and composition.
+@[ runs("Graded(7, Cons(Met, Cons(Undecided, Cons(Unmet, Nil))), Unmet)") ]
+def completeGrading : () => Kind ;
+def completeGrading = thunk {
+  run evaluation <- ownerRules(complete);
+  become gradingOf(evaluation, 7)
+} ;
+
+/// The fold refuses none of the three verdicts and gradings.
+@[ runs("Some(Nil)") ]
+def gradedRefused : () => Maybe(List(RefusedCommit)) ;
+def gradedRefused = thunk {
+  run commits <- gradedCommits();
+  run folded <- fold(100, commits);
+  become refusedOf(folded)
+} ;
+
+/// The last grading stands: the attempt graded unmet.
+@[ runs("Some(Attempt(2, 1, BriefAt(\"domhringr://100/briefs/one\"), Held(20), Awaited, GradedBy(8, Unmet)))") ]
+def gradedCurrent : () => Maybe(Current) ;
+def gradedCurrent = thunk {
+  run commits <- gradedCommits();
+  run folded <- fold(100, commits);
+  become currentOf(folded)
+} ;
+
+/// Each grading's step marks every question with its grade, as the replay
+/// prints them.
+@[ runs("Some(Cons(StepAt(2, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(3, VerdictStep(2, 10, 903, 705, Cons(OnQuestion(911, Unread(Malformed)), Cons(OnQuestion(912, Unread(Malformed)), Cons(OnQuestion(913, Unread(Malformed)), Nil))))), Cons(StepAt(4, GradedStep(2, 3, 903, Cons(MarkedAs(911, Refused), Cons(MarkedAs(912, Refused), Cons(MarkedAs(913, Refused), Nil))), Refused)), Cons(StepAt(5, VerdictStep(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(900000, Cons(100000, Nil)), 0)), Cons(OnQuestion(912, Read(Cons(600000, Cons(400000, Nil)), 0)), Cons(OnQuestion(913, Unread(Malformed)), Nil))))), Cons(StepAt(6, GradedStep(2, 5, 903, Cons(MarkedAs(911, Met), Cons(MarkedAs(912, Undecided), Cons(MarkedAs(913, Refused), Nil))), Refused)), Cons(StepAt(7, VerdictStep(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(900000, Cons(100000, Nil)), 0)), Cons(OnQuestion(912, Read(Cons(600000, Cons(400000, Nil)), 0)), Cons(OnQuestion(913, Read(Cons(100000, Cons(900000, Nil)), 0)), Nil))))), Cons(StepAt(8, GradedStep(2, 7, 903, Cons(MarkedAs(911, Met), Cons(MarkedAs(912, Undecided), Cons(MarkedAs(913, Unmet), Nil))), Unmet)), Nil))))))))") ]
+def gradedSteps : () => Maybe(List(Stepped)) ;
+def gradedSteps = thunk {
+  run commits <- gradedCommits();
+  run folded <- fold(100, commits);
+  become stepsOf(folded)
+} ;

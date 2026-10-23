@@ -108,7 +108,7 @@ DOMHRINGR_JUDGE_ENDPOINT=http://127.0.0.1:8000/v1 DOMHRINGR_JUDGE_MODEL=<model> 
   -E 'test(a_configured_judge_grades_a_fixture_pair_of_the_set)'
 ```
 
-**The verdict is also written in gandr.** [`domhringr/strategy/`](../domhringr/strategy/) states the rubric, the grading against its band and the composition as gandr sources, with the `code` and `docs` documents as values; each source's `runs` exemplars give the grades and verdicts this table gives over those two pairs. The gandr driver, built from the sibling at its pin, checks and runs them:
+**The verdict is also written in gandr.** [`domhringr/strategy/`](../domhringr/strategy/) holds the rubric, the grading against its band and the composition as gandr sources, with the `code` and `docs` documents as values. Each source's `runs` exemplars give the grades and verdicts this table gives over those two pairs. [`evaluate.gandr`](../domhringr/strategy/evaluate.gandr) turns a judge's rulings into the verdict and its grading, and the fold admits both. The gandr driver, built from the sibling at its pin, checks and runs them:
 
 ```sh
 mise run check:gandr
