@@ -55,7 +55,7 @@ mise exec -- cargo nextest run -p domhringr-record-index
 | The proof protocol | [`src/stream.rs`](src/stream.rs) |
 | Measurements and their pinned crossings | [`src/measure.rs`](src/measure.rs) |
 
-Attested replay is also written in gandr, in [`domhringr/arena/replay.gandr`](../../domhringr/arena/replay.gandr), whose exemplars give the refusals and standings this crate's replay tests give.
+Attested replay and the dialogue are also written in gandr. [`domhringr/arena/replay.gandr`](../../domhringr/arena/replay.gandr)'s exemplars give the refusals and standings this crate's replay tests give, and [`domhringr/record/dialogue.gandr`](../../domhringr/record/dialogue.gandr)'s give the coordinates `dialogue::derive` gives to the fold's steps.
 
 ## License
 
