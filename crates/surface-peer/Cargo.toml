@@ -24,7 +24,7 @@ domhringr-record-index = { workspace = true }
 domhringr-record-tree = { workspace = true }
 domhringr-seat-slot = { workspace = true }
 domhringr-strategy-document = { workspace = true }
-gandr-storage-records = { workspace = true }
+gandr-storage-schema = { workspace = true }
 gandr-storage-values = { workspace = true }
 iroh = { workspace = true }
 lexopt = { workspace = true }

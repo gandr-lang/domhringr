@@ -2,62 +2,67 @@
 //!
 //! # Keyed indexes
 //!
-//! The index plane, `domhringr-record-index`, derives task dialogues, project
-//! entries and evidence/revision provenance without changing receipt admission.
-//! A project includes direct `tasks/<name>` bindings; each held entry names its
-//! task frontier, full standing, refusals, attempt count and dialogue manifest.
+//! The index plane, `domhringr-record-index`, derives a project's tasks, their
+//! attempts and admitted moves, their refusals, and the evidence and
+//! revisions those moves name into one keyed store, without changing receipt
+//! admission. A project includes direct `tasks/<name>` bindings; each held
+//! task holds its frontier, the kind of its standing, its refusals and its
+//! play. An `Indexed` receipt attests the store's root.
 //!
 //! Run these commands after `domhringr-peer --state <dir>`:
 //!
 //! | Command | Result |
 //! | ------- | ------ |
-//! | `index derive <project>` | `indexed <commit-id> <digest>`, or `unchanged <digest>` for the same own claim |
-//! | `index task <project> <name>` | `task <anchor> <standing>`, or an explicit unheld entry |
+//! | `index derive <project>` | `indexed <commit-id> <root>`, or `unchanged <root>` for the same own claim |
+//! | `index task <project> <name>` | `task <anchor> <standing>`, or an explicit unheld task |
 //! | `index move <project> <name> <attempt>.<seq>` | One authenticated move in the replay language |
 //! | `index play <project> <name> <attempt>` | Every move in that attempt, in canonical order |
-//! | `index replay <project> <name>` | Every attempt replayed under its dispatch's protocol; full standing checked against the entry |
+//! | `index replay <project> <name>` | Every attempt replayed under its dispatch's protocol; the standing checked against the task's |
 //! | `index after <project> <name> <attempt>` | `after <n> none` or `after <n> <dispatch-id>` |
 //! | `index check <project> [--by <peer-id>]` | `agrees`, or findings with exit status 3 |
-//! | `index measure <project>` | One line per distinct project, provenance or dialogue index |
-//! | `provenance <project> <digest\|revision>` | Every naming move, proved through provenance, its task entry and dialogue |
+//! | `index measure <project>` | The store's root, then one line per table |
+//! | `provenance <project> <digest\|revision>` | Every move naming the subject, proved with its task and attempt |
 //!
 //! The proving verbs accept `--by <peer-id>` and `--at <endpoint>`. They select
-//! the owner's latest attestation unless `--by` names another author, use local
-//! nodes first, and otherwise reach that attester through the project's book or
-//! `--at`. They print `proved <digest> <peer-id>` for each authenticated index
-//! before the answer. Project, provenance and dialogue questions share one
-//! connection; no task tree is synced. A grading or landing also proves its
-//! referenced verdict or decision within the attempt before rendering those
-//! receipt fields.
+//! the owner's latest attestation unless `--by` names another author, read
+//! the attested store when it is held locally, and otherwise reach that
+//! attester through the project's book or `--at`. They print `proved <root>
+//! <peer-id>` before the answer. Every question shares one connection; no
+//! task tree is synced. A task's anchor comes from the project's binding at
+//! the attestation's parents. A task's standing is recomputed from its last
+//! attempt and checked against the kind the store holds. A grading or
+//! landing also proves its attempt's play before rendering the verdict or
+//! decision fields it refers to.
 //!
 //! `index play` proves membership without checking protocol conformance. `index
 //! replay` checks every proved attempt through the arena monitor without
 //! syncing task receipts. It prints the moves and `replayed <attempt>
 //! <standing>` for each attempt, then `current <standing>`. A protocol refusal
-//! exits 1 and names the movement and its `<attempt>.<seq>`; a full typed
-//! standing mismatch names both the entry and replay values. An omitted move
-//! can still conform, so agreement with the receipt fold remains `index
-//! check`'s responsibility.
+//! exits 1 and names the movement and its `<attempt>.<seq>`; a standing
+//! whose kind differs from the task's names both. An omitted move can still
+//! conform, so agreement with the receipt fold remains `index check`'s
+//! responsibility.
 //!
 //! `provenance` accepts 40 hexadecimal digits for a SHA-1 revision, or 64 for
 //! both an evidence digest and a SHA-256 revision. The 64-digit form searches
 //! both families, retaining both kinds of match. Each answer prints `provenance
 //! <commit-anchor> <attempt>.<seq> <field> <holder>` followed by the
-//! authenticated move in replay form; a complete empty range proves that the
-//! chosen index has no matching record.
+//! authenticated move in replay form; a proved empty preimage shows that the
+//! store names no such subject.
 //!
 //! A proof authenticates the attester's claim, not its agreement with the fold.
 //! `index check` re-derives at the attestation's project parents and each
-//! entry's task heads: `disagrees <task> <field>` identifies a false field, and
+//! task's heads: `disagrees <task> <field>` identifies a false field, and
 //! `unchecked <task>` identifies an unavailable task frontier. Later receipts
-//! do not make a true historical claim disagree. Check and measure can fetch
-//! missing index nodes through authenticated full-range answers; they do not
-//! sync receipts.
+//! do not make a true historical claim disagree. Check and measure fetch an
+//! unheld store's manifest and nodes from the attester, each authenticated
+//! by its hash; they do not sync receipts.
 //!
-//! `index measure` prints `index <kind> <digest> records <n> children <n> root
-//! <bytes> leaf <bytes> proof <bytes> levels closed|open` on one line. Proof
-//! bytes include complete membership and absence framing; `levels open` means
-//! an internal root is at least as large as its largest leaf.
+//! `index measure` prints `store <root>`, then `table <name> records <n>
+//! children <n> root <bytes> leaf <bytes> proof <bytes> levels closed|open`
+//! per table. Proof bytes are the largest framed answer to a question about
+//! the table; `levels open` means an internal root is at least as large as
+//! its largest leaf.
 //!
 //! Run derive before serve: both hold the receipt store exclusively. `serve`
 //! binds `domhringr/index/0` beside sync, wakes and evidence, printing `proved
@@ -73,28 +78,30 @@ use std::ffi::OsStr;
 
 use anodized::spec;
 use domhringr_record_index::AttemptNumber;
-use domhringr_record_index::Index;
-use domhringr_record_index::IndexKind;
 use domhringr_record_index::MoveKey;
 use domhringr_record_index::SequenceNumber;
 use domhringr_record_index::check;
+use domhringr_record_index::derive;
 use domhringr_record_index::derive::Deriver;
+use domhringr_record_index::keyed::Keyed;
+use domhringr_record_index::keyed::Standing;
 use domhringr_record_index::measure;
-use domhringr_record_index::project::TaskEntry;
+use domhringr_record_index::project;
 use domhringr_record_index::project::TaskName;
 use domhringr_record_index::prove;
-use domhringr_record_index::prove::Answer;
-use domhringr_record_index::prove::Query;
-use domhringr_record_index::prove::Verified;
+use domhringr_record_index::prove::Ask;
+use domhringr_record_index::prove::Local;
+use domhringr_record_index::prove::ProveError;
 use domhringr_record_index::store::Store;
 use domhringr_record_index::store::StoreError;
 use domhringr_record_index::stream;
-use domhringr_record_index::stream::Request;
+use domhringr_record_index::stream::Remote;
+use domhringr_record_index::stream::StreamError;
 use domhringr_record_tree::Aim;
 use domhringr_record_tree::Anchor;
 use domhringr_record_tree::At;
 use domhringr_record_tree::BindPort;
-use domhringr_record_tree::IndexDigest;
+use domhringr_record_tree::IndexAttestation;
 use domhringr_record_tree::Node;
 use domhringr_record_tree::Peer;
 use domhringr_record_tree::PeerKey;
@@ -102,13 +109,9 @@ use domhringr_record_tree::Receipt;
 use domhringr_record_tree::Route;
 use domhringr_record_tree::StateDir;
 use domhringr_record_tree::TreeId;
-use gandr_storage_records::KeyRange;
-use gandr_storage_records::OwnedKeyRange;
-use gandr_storage_records::Record;
-use gandr_storage_records::RecordTree;
-use gandr_storage_records::TreeParams;
-use gandr_storage_values::TokenBody;
-use gandr_storage_values::decode_flat;
+use gandr_storage_schema::Answer;
+use gandr_storage_schema::Question as StoreQuestion;
+use gandr_storage_schema::StoreRoot;
 pub use provenance::parse_provenance;
 
 use crate::Completion;
@@ -346,24 +349,24 @@ pub enum IndexError
     /// A proved task name is absent from the project.
     #[error("absent task {0}")]
     Absent(TaskName),
-    /// The attested entry explicitly has no held task.
+    /// The attested task explicitly has no held task.
     #[error("unheld task {0}")]
     Unheld(TreeId),
     /// A proved coordinate is absent.
     #[error("absent move {0}.{1}")]
     MoveAbsent(AttemptNumber, SequenceNumber),
     /// Proof contents do not match the requested semantic shape.
-    #[error("index answer does not describe the requested move or entry")]
+    #[error("index answer does not describe the requested move or task")]
     Shape,
     /// An attested play fails its dispatch's protocol.
     #[error(transparent)]
     Replay(#[from] domhringr_record_index::replay::ReplayError),
-    /// The complete replay and entry disagree, including non-display fields.
-    #[error("current mismatch: entry {claimed:?}; replay {replayed:?}")]
+    /// The replayed standing's kind differs from the task's.
+    #[error("current mismatch: task {claimed}; replay {replayed:?}")]
     Standing
     {
-        /// The entry's authenticated claim.
-        claimed: Box<domhringr_record_tree::Current>,
+        /// The kind the store holds for the task.
+        claimed: Standing,
         /// The standing independently reached by replay.
         replayed: Box<domhringr_record_tree::Current>,
     },
@@ -397,24 +400,15 @@ pub enum IndexError
     /// Local immutable index files could not be read or written.
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// Manifest framing or identity failed.
+    /// The keyed schema didn't resolve.
     #[error(transparent)]
-    Manifest(#[from] domhringr_record_index::ManifestError),
-    /// Index wire framing cannot be represented.
+    Schema(#[from] gandr_storage_schema::SchemaError),
+    /// A proof didn't verify, or the store refused a question.
     #[error(transparent)]
-    Wire(#[from] domhringr_record_index::WireError),
-    /// Proof construction or verification failed.
-    #[error(transparent)]
-    Proof(#[from] prove::ProveError),
+    Proof(#[from] ProveError),
     /// Transport, framing or the answer cap failed.
     #[error(transparent)]
-    Stream(#[from] stream::StreamError),
-    /// A canonical value could not be read.
-    #[error(transparent)]
-    Value(#[from] gandr_storage_values::ValueError),
-    /// The record tree or its range was refused.
-    #[error(transparent)]
-    Records(#[from] gandr_storage_records::RecordTreeError),
+    Stream(#[from] StreamError),
     /// The coordinate cannot be advanced.
     #[error(transparent)]
     Key(#[from] domhringr_record_index::key::KeyError),
@@ -424,26 +418,23 @@ pub enum IndexError
     /// Exact answer extents could not be measured.
     #[error(transparent)]
     Measure(#[from] measure::MeasureError),
-    /// A provenance key or naming record is malformed.
-    #[error(transparent)]
-    Provenance(#[from] domhringr_record_index::provenance::ProvenanceError),
     /// Text output could not be formatted.
     #[error(transparent)]
     Format(#[from] core::fmt::Error),
 }
 
-/// Network resources exist only after a local manifest miss.
+/// Network resources exist only when the attested store isn't held.
 enum Link
 {
     /// A local-only reader retains the unopened routing choice.
     Local
     {
-        /// Receipt store retained before the first remote query.
+        /// Receipt store retained before the first remote question.
         peer: Peer,
         /// The attester route selected by the command.
         at: At,
     },
-    /// Dependent proof questions share this one QUIC connection.
+    /// Every question shares this one QUIC connection.
     Remote
     {
         /// Bound peer retaining the same receipt store.
@@ -453,16 +444,29 @@ enum Link
     },
 }
 
-/// One command's receipt authority, node files and optional live proof link.
+/// Whether this peer holds the attested store.
+enum Attested
+{
+    /// The store isn't held here: answers are proofs from the attester.
+    Unheld,
+    /// The store, held locally or fetched from the attester.
+    Held(Box<gandr_storage_schema::Store>),
+}
+
+/// One command's receipt authority, store files and optional live proof link.
 struct Reader
 {
     /// The project whose book supplies the attester's endpoint.
     project: TreeId,
     /// The selected attester, never changed by a holder's answer.
     author: PeerKey,
-    /// Immutable manifests and authenticated nodes.
+    /// The attested root every answer is about.
+    root: StoreRoot,
+    /// Committed manifests and authenticated nodes.
     store: Store,
-    /// The local peer or its lazily opened proof link.
+    /// The attested store, when held.
+    attested: Attested,
+    /// The local peer or its opened proof link.
     link: Link,
 }
 
@@ -480,97 +484,76 @@ impl Reader
         }
     }
 
-    /// Read local proof material first, dialing once only when its manifest
-    /// lacks.
+    /// Read the attested store locally when held, dialing the attester once
+    /// only when it isn't.
     ///
     /// # Specification
-    /// - ensures: answers remain untrusted until the caller verifies; a remote
-    ///   connection is reused and no receipt tree is synced.
-    /// - fails: local corruption, missing route, transport and framing fail.
+    /// - ensures: on success the reader answers every question from the held
+    ///   store or over one connection; no receipt tree is synced.
+    /// - fails: local corruption, missing route or transport failure.
     /// - panics: none.
     /// - executable: none — connection reuse and receipt-store isolation are
     ///   external effects; the project-only process witness observes them.
     ///
     /// # Errors
-    /// - [`IndexError`]: store, route or stream refusal.
+    /// - [`IndexError`]: store, route or dial refusal.
     ///
     /// # Adequacy
     /// - hypothesis: L1 — a project-only reader proves without acquiring tasks.
     /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
-    async fn ask(
-        mut self,
-        request: &Request,
-        kind: IndexKind,
-    ) -> Result<(Self, Answer), IndexError>
+    async fn open(mut self) -> Result<Self, IndexError>
     {
-        match self.store.load(request.digest) {
-            Ok(index) => {
-                let answer = prove::answer(&index, &request.query)?;
-                return Ok((self, answer));
+        let loaded = self.store.load(Keyed::shared()?, self.root);
+        match loaded {
+            Ok(held) => {
+                self.attested = Attested::Held(Box::new(held));
+                return Ok(self);
             },
-            Err(StoreError::Unheld(_digest)) => {},
+            Err(StoreError::Unheld(_root)) => {},
             Err(failure) => return Err(failure.into()),
         }
-        let (node, connection) = match self.link {
-            Link::Local { peer, at } => {
-                let route = peer.route(self.project, Aim::Peer(self.author), at).await?;
-                let remote = match route {
-                    Route::Itself => return Err(StoreError::Unheld(request.digest).into()),
-                    Route::Book { remote, .. } | Route::Given { remote } => remote,
-                };
-                let node = peer.bind(BindPort::Ephemeral, &[]).await?;
-                let connection = node.open(remote.endpoint(), stream::PROTOCOL).await?;
-                (node, connection)
-            },
-            Link::Remote { node, connection } => (node, connection),
-        };
-        let answer = stream::ask(&connection, request, kind).await?;
-        self.link = Link::Remote { node, connection };
-        Ok((self, answer))
+        if let Link::Local { peer, at } = self.link {
+            let route = peer.route(self.project, Aim::Peer(self.author), at).await?;
+            let remote = match route {
+                Route::Itself => return Err(StoreError::Unheld(self.root).into()),
+                Route::Book { remote, .. } | Route::Given { remote } => remote,
+            };
+            let node = peer.bind(BindPort::Ephemeral, &[]).await?;
+            let connection = node.open(remote.endpoint(), stream::PROTOCOL).await?;
+            self.link = Link::Remote { node, connection };
+        }
+        Ok(self)
     }
 
-    /// Hydrate a complete authenticated index, never inferring it from a claim.
+    /// Hold the whole attested store, fetching it when it isn't held.
     ///
     /// # Specification
-    /// - ensures: the returned tree rebuilds exactly the selected manifest.
-    /// - fails: incomplete ranges, foreign roots and over-cap answers fail.
+    /// - requires: the reader is open.
+    /// - ensures: the returned store's root is the attested one.
+    /// - fails: a manifest or node that doesn't authenticate, transport, or a
+    ///   store that doesn't reopen.
     /// - panics: none.
     ///
     /// # Errors
-    /// - [`IndexError`]: storage, proof, framing or identity refusal.
+    /// - [`IndexError`]: storage, stream or identity refusal.
     ///
     /// # Adequacy
     /// - hypothesis: L2 — the tree-holding reader checks the served
     ///   attestation.
     /// - witness: `index::tests::a_peer_holding_the_trees_checks_the_attestation`
-    #[spec(ensures: |ref output| output.as_ref().map_or(true, |loaded| loaded.1.manifest.identity().is_ok_and(|identity| identity == digest)))]
-    async fn load(
-        self,
-        digest: IndexDigest,
-        kind: IndexKind,
-    ) -> Result<(Self, Index), IndexError>
+    #[spec(ensures: |ref output| output.as_ref().map_or(true, |held| held.root() == self.root))]
+    async fn load(&mut self) -> Result<gandr_storage_schema::Store, IndexError>
     {
-        match self.store.load(digest) {
-            Ok(index) if index.manifest.kind() == kind => return Ok((self, index)),
-            Ok(_foreign) => return Err(IndexError::Shape),
-            Err(StoreError::Unheld(_digest)) => {},
-            Err(failure) => return Err(failure.into()),
+        if let Attested::Held(ref held) = self.attested {
+            return Ok((**held).clone());
         }
-        let query = Query::Range(OwnedKeyRange::from_range(KeyRange::all()));
-        let request = Request { digest, query };
-        let (reader, answer) = self.ask(&request, kind).await?;
-        let Verified::Range(records) = answer.verify(digest, kind, &request.query)?
+        let Link::Remote { ref connection, .. } = self.link
         else {
-            return Err(IndexError::Shape);
+            return Err(StoreError::Unheld(self.root).into());
         };
-        let records: Vec<_> = records.iter().map(Record::as_record_ref).collect();
-        let tree = RecordTree::build(&records, TreeParams::current())?;
-        let index = Index::new(kind, tree);
-        if index.manifest != answer.manifest {
-            return Err(IndexError::Shape);
-        }
-        let _digest = reader.store.keep(&index)?;
-        Ok((reader, index))
+        let held = stream::fetch(connection, &self.store, self.root).await?;
+        self.attested = Attested::Held(Box::new(held.clone()));
+        Ok(held)
     }
 
     /// Close the command's proof connection before releasing the receipt store.
@@ -584,6 +567,99 @@ impl Reader
             node.close().await;
         }
     }
+}
+
+impl Ask for Reader
+{
+    /// Answer from the held store, or by a proof verified against the
+    /// attested root.
+    ///
+    /// # Specification
+    /// - requires: the reader is open.
+    /// - ensures: as [`Local`] or [`Remote`].
+    /// - fails: as they do.
+    /// - panics: none.
+    /// - executable: none — the answer is checked by the reader it is forwarded
+    ///   to; the project-only witness observes both.
+    ///
+    /// # Errors
+    /// - [`ProveError`]: as [`Local`] or [`Remote`].
+    ///
+    /// # Adequacy
+    /// - hypothesis: L1 — a project-only reader proves without acquiring tasks.
+    /// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
+    async fn ask(
+        &mut self,
+        question: &StoreQuestion,
+    ) -> Result<Answer, ProveError>
+    {
+        if let Attested::Held(ref held) = self.attested {
+            return Local(held).ask(question).await;
+        }
+        match self.link {
+            Link::Remote { ref connection, .. } => {
+                Remote {
+                    connection,
+                    root: self.root,
+                }
+                .ask(question)
+                .await
+            },
+            Link::Local { .. } => Err(StreamError::Unheld(self.root).into()),
+        }
+    }
+}
+
+/// A bound task, found in the attested store.
+struct Found
+{
+    /// The tree the project binds the name to.
+    tree: TreeId,
+    /// What the store claims about the task.
+    claim: prove::Claim,
+}
+
+/// Find a task by name and read its claim.
+///
+/// # Specification
+/// - ensures: the tree is the project's binding at the attestation's parents;
+///   the claim is the store's.
+/// - fails: a name unbound at those parents or without a task, or a claim that
+///   doesn't read.
+/// - panics: none.
+/// - executable: none — the reads are proofs; the project-only witness observes
+///   them.
+///
+/// # Errors
+/// - [`IndexError`]: as above.
+///
+/// # Adequacy
+/// - hypothesis: L1 — a project-only reader finds every task.
+/// - witness: `index::tests::a_peer_holding_only_the_project_verifies_every_question`
+async fn find(
+    reader: &mut Reader,
+    attestation: &IndexAttestation,
+    name: &TaskName,
+) -> Result<Found, IndexError>
+{
+    let view = reader
+        .peer()
+        .view_at(reader.project, &attestation.parents)
+        .await?;
+    let tree = project::bindings(&view)
+        .find_map(|(bound, tree)| (&bound == name).then_some(tree))
+        .ok_or_else(|| IndexError::Absent(name.clone()))?;
+    let keyed = Keyed::shared()?;
+    let task = prove::task(reader, keyed, name).await.map_err(|failure| {
+        if let ProveError::Absent(absent) = failure {
+            IndexError::Absent(absent)
+        }
+        else {
+            IndexError::Proof(failure)
+        }
+    })?;
+    let claim = prove::claim(reader, keyed, task).await?;
+    Ok(Found { tree, claim })
 }
 
 /// Run one keyed command and print only authenticated or independently derived
@@ -624,10 +700,6 @@ pub async fn run(
 ///
 /// # Specification
 /// trivial.
-#[expect(
-    clippy::large_futures,
-    reason = "the one-shot CLI keeps its bounded nonrecursive request future inline instead of allocating at each layer"
-)]
 async fn execute(
     peer: Peer,
     store: Store,
@@ -644,19 +716,20 @@ async fn execute(
         }
         let mut deriver = Deriver::owned(&peer, project, &view, &store)?;
         let derived = deriver.project(&peer, project, &view, &store).await?;
-        let digest = derived.index.manifest.identity()?;
+        let root = derived.root();
+        let digest = derive::digest(root);
         if view
             .indexes()
             .get(&author)
             .is_some_and(|attestation| attestation.index == digest)
         {
-            return Ok((Completion::Success, format!("unchanged {digest}\n")));
+            return Ok((Completion::Success, format!("unchanged {root}\n")));
         }
         // No node is bound and the process holds redb exclusively: these heads
         // remain the commit's parents throughout task derivation.
         let receipt = Receipt::indexed(project, digest)?;
         let commit = peer.commit(project, receipt).await?;
-        return Ok((Completion::Success, format!("indexed {commit} {digest}\n")));
+        return Ok((Completion::Success, format!("indexed {commit} {root}\n")));
     }
     let (by, at) = match action {
         Action::Prove { by, ref at, .. } | Action::Provenance { by, ref at, .. } => {
@@ -676,23 +749,28 @@ async fn execute(
     let reader = Reader {
         project,
         author,
+        root: derive::root(attestation.index),
         store,
+        attested: Attested::Unheld,
         link: Link::Local { peer, at },
-    };
+    }
+    .open()
+    .await?;
     match action {
         Action::Provenance { subjects, .. } => {
-            let (reader, output) = provenance::answer(reader, attestation, subjects).await?;
+            let (reader, output) = provenance::answer(reader, subjects).await?;
             reader.close().await;
             Ok((Completion::Success, output))
         },
         Action::Prove { question, .. } => {
-            let (reader, output) = answer(reader, attestation.index, question).await?;
+            let (reader, output) = answer(reader, attestation, question).await?;
             reader.close().await;
             Ok((Completion::Success, output))
         },
         Action::Check(_by) => {
-            let (reader, index) = reader.load(attestation.index, IndexKind::Project).await?;
-            let report = check::check(reader.peer(), project, attestation, &index).await?;
+            let mut reader = reader;
+            let held = reader.load().await?;
+            let report = check::check(reader.peer(), project, attestation, &held).await?;
             let completion = if report.0.is_empty() {
                 Completion::Success
             }
@@ -703,7 +781,9 @@ async fn execute(
             Ok((completion, report.to_string()))
         },
         Action::Measure => {
-            let (reader, output) = measurements(reader, attestation.index).await?;
+            let mut reader = reader;
+            let held = reader.load().await?;
+            let output = measurements(&held)?;
             reader.close().await;
             Ok((Completion::Success, output))
         },
@@ -714,114 +794,60 @@ async fn execute(
     }
 }
 
-/// Authenticate the task entry before reading any coordinate of its dialogue.
+/// Find the task before reading any coordinate of its play.
 ///
 /// # Specification
 /// trivial.
-#[expect(
-    clippy::large_futures,
-    reason = "the one-shot CLI keeps its bounded nonrecursive request future inline instead of allocating at each layer"
-)]
 async fn answer(
-    reader: Reader,
-    digest: IndexDigest,
+    mut reader: Reader,
+    attestation: &IndexAttestation,
     question: Question,
 ) -> Result<(Reader, String), IndexError>
 {
-    let request = Request {
-        digest,
-        query: Query::Key(question.name().key()),
-    };
-    let (reader, answer) = reader.ask(&request, IndexKind::Project).await?;
-    let verified = answer.verify(digest, IndexKind::Project, &request.query)?;
-    let entry = match verified {
-        Verified::Present(value) => decode_flat::<TaskEntry>(TokenBody::from(value.as_ref()))?,
-        Verified::Absent(_evidence) => return Err(IndexError::Absent(question.name().clone())),
-        Verified::Range(_records) => return Err(IndexError::Shape),
-    };
-    let mut output = format!("proved {digest} {}\n", reader.author);
-    if matches!(&question, Question::Replay(_name)) {
-        return replay::answer(reader, entry, output).await;
-    }
-    if matches!(&question, Question::Task(_name)) {
-        match entry {
-            TaskEntry::Held { tree, current, .. } => {
-                writeln!(output, "task {} {current}", Anchor::key(tree))?;
-            },
-            TaskEntry::Unheld { tree } => writeln!(output, "task {} unheld", Anchor::key(tree))?,
+    let found = find(&mut reader, attestation, question.name()).await?;
+    let mut output = format!("proved {} {}\n", reader.root, reader.author);
+    if found.claim.standing == Standing::Unheld {
+        if matches!(&question, Question::Task(_name)) {
+            writeln!(output, "task {} unheld", Anchor::key(found.tree))?;
+            return Ok((reader, output));
         }
-        return Ok((reader, output));
+        return Err(IndexError::Unheld(found.tree));
     }
-    let TaskEntry::Held { tree, dialogue, .. } = entry
-    else {
-        return Err(IndexError::Unheld(entry.tree()));
-    };
-    render::question(reader, tree, dialogue, question, output).await
+    match question {
+        Question::Replay(_name) => replay::answer(reader, found, output).await,
+        Question::Task(_name) => {
+            let current = prove::current(&mut reader, Keyed::shared()?, &found.claim).await?;
+            writeln!(output, "task {} {current}", Anchor::key(found.tree))?;
+            Ok((reader, output))
+        },
+        question @ (Question::Move(..) | Question::Play(..) | Question::After(..)) => {
+            render::question(reader, &found, question, output).await
+        },
+    }
 }
 
-/// Measure each distinct index named by a project, preserving alias-free
-/// output.
+/// Measure each table of the attested store.
 ///
 /// # Specification
 /// trivial.
-async fn measurements(
-    reader: Reader,
-    digest: IndexDigest,
-) -> Result<(Reader, String), IndexError>
+fn measurements(held: &gandr_storage_schema::Store) -> Result<String, IndexError>
 {
-    let (mut reader, index) = reader.load(digest, IndexKind::Project).await?;
-    let mut output = String::new();
-    measurement(&mut output, digest, &index)?;
-    let mut dialogues = alloc::collections::BTreeSet::new();
-    for record in index.tree.records() {
-        if record.key().as_ref() == [0, u8::from(IndexKind::Provenance)] {
-            let domhringr_record_index::project::Nested(digest) =
-                decode_flat(TokenBody::from(record.value().as_ref()))?;
-            let (next, provenance) = reader.load(digest, IndexKind::Provenance).await?;
-            reader = next;
-            measurement(&mut output, digest, &provenance)?;
-            continue;
-        }
-        if record.key().as_ref().first() != Some(&1) {
-            continue;
-        }
-        let entry = decode_flat::<TaskEntry>(TokenBody::from(record.value().as_ref()))?;
-        if let TaskEntry::Held { dialogue, .. } = entry {
-            let _inserted = dialogues.insert(dialogue);
-        }
+    let mut output = format!("store {}\n", held.root());
+    for measured in measure::measure(held)? {
+        let levels = match measured.levels {
+            measure::Levels::Closed => "closed",
+            measure::Levels::Open => "open",
+        };
+        writeln!(
+            output,
+            "table {} records {} children {} root {} leaf {} proof {} levels {levels}",
+            measured.table.as_ref(),
+            measured.records,
+            measured.children.0,
+            measured.root,
+            measured.leaf,
+            measured.proof
+        )?;
     }
-    for digest in dialogues {
-        let (next, index) = reader.load(digest, IndexKind::Dialogue).await?;
-        reader = next;
-        measurement(&mut output, digest, &index)?;
-    }
-    Ok((reader, output))
-}
-
-/// Write one index's exact extents and root-to-leaf crossing signal.
-///
-/// # Specification
-/// trivial.
-fn measurement(
-    output: &mut String,
-    digest: IndexDigest,
-    index: &Index,
-) -> Result<(), IndexError>
-{
-    let measured = measure::measure(index)?;
-    let kind = match index.manifest.kind() {
-        IndexKind::Dialogue => "dialogue",
-        IndexKind::Project => "project",
-        IndexKind::Provenance => "provenance",
-    };
-    let levels = match measured.levels {
-        measure::Levels::Closed => "closed",
-        measure::Levels::Open => "open",
-    };
-    writeln!(
-        output,
-        "index {kind} {digest} records {} children {} root {} leaf {} proof {} levels {levels}",
-        measured.records, measured.children.0, measured.root, measured.leaf, measured.proof
-    )?;
-    Ok(())
+    Ok(output)
 }

@@ -1,12 +1,14 @@
 //! Canonical fold positions and original receipt bytes form a dialogue.
 //!
-//! A dialogue keys admitted moves by `(attempt, seq)`: two big-endian `u32`
-//! fields, with attempts starting at one and each dispatch at sequence zero.
-//! Numbering follows the fold's canonical order, not arrival order. A move
-//! value retains its original receipt bytes and verified author; its commit
-//! identity is recomputed from those bytes. Refused receipts and non-move
-//! receipts have no dialogue entry. Coordinates belong to one manifest: a late
-//! concurrent move can shift later coordinates in its attempt.
+//! A dialogue places admitted moves at `(attempt, seq)`, with attempts
+//! starting at one and each dispatch at sequence zero. Numbering follows the
+//! fold's canonical order, not arrival order. A move value retains its
+//! original receipt bytes and verified author; its commit identity is
+//! recomputed from those bytes. Refused receipts and non-move receipts have
+//! no place. Coordinates belong to one derivation: a late concurrent move can
+//! shift later coordinates in its attempt. In the project store an attempt
+//! is an `Attempt` part with its number, and a move a `Move` part with its
+//! sequence number and its value as `move_receipt`.
 
 use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
@@ -18,10 +20,6 @@ use domhringr_record_tree::PeerKey;
 use domhringr_record_tree::Receipt;
 use domhringr_record_tree::Step;
 use domhringr_record_tree::Task;
-use gandr_storage_records::RecordRef;
-use gandr_storage_records::RecordTree;
-use gandr_storage_records::RecordTreeError;
-use gandr_storage_records::TreeParams;
 use gandr_storage_values::CanonicalValue;
 use gandr_storage_values::ConstructorTag;
 use gandr_storage_values::TokenBody;
@@ -30,13 +28,10 @@ use gandr_storage_values::TokenReader;
 use gandr_storage_values::TokenSink;
 use gandr_storage_values::ValueError;
 use gandr_storage_values::decode_flat;
-use gandr_storage_values::encode_flat;
 use quenchant_arith::arith;
 use quenchant_arith::arith::Int;
 
 use crate::AttemptNumber;
-use crate::Index;
-use crate::IndexKind;
 use crate::MoveKey;
 use crate::SequenceNumber;
 use crate::key::KeyError;
@@ -177,12 +172,13 @@ impl CanonicalValue for MoveValue<'_>
     }
 }
 
-/// One derived dialogue and its number of admitted dispatches.
-#[derive(Debug)]
+/// One derived dialogue and its number of admitted dispatches; empty for a
+/// task the deriver doesn't hold.
+#[derive(Debug, Default)]
 pub struct Dialogue
 {
-    /// The committed record tree.
-    pub index: Index,
+    /// Every admitted move at its coordinate, in coordinate order.
+    pub moves: Vec<(MoveKey, MoveValue<'static>)>,
     /// The last one-based attempt, or zero for an undispatched task.
     pub attempts: AttemptNumber,
 }
@@ -197,15 +193,12 @@ pub enum DialogueError
     /// The admitted steps and original sources do not correspond.
     #[error("admitted move sources do not match the fold")]
     Sources,
-    /// A step named no previously admitted dispatch.
+    /// A step names no dispatch admitted before it.
     #[error("no admitted dispatch {0}")]
     Dispatch(CommitId),
     /// The value codec refused the move image.
     #[error(transparent)]
     Value(#[from] ValueError),
-    /// The record plane refused the records.
-    #[error(transparent)]
-    Records(#[from] RecordTreeError),
 }
 
 /// Derive positions from canonical admission order, grouped by dispatch.
@@ -213,7 +206,7 @@ pub enum DialogueError
 /// # Specification
 /// - ensures: each admitted step has one distinct coordinate; dispatches count
 ///   from one and each dispatch occupies sequence zero.
-/// - fails: missing source, dispatch, overflowing coordinate or record refusal.
+/// - fails: missing source, dispatch or overflowing coordinate.
 /// - panics: none.
 ///
 /// # Errors
@@ -226,7 +219,8 @@ pub enum DialogueError
 /// - witness: `dialogue::tests::the_dialogue_agrees_with_the_fold_on_every_kind`
 /// - witness: `dialogue::tests::concurrent_moves_of_two_authors_take_distinct_keys`
 #[spec(ensures: |ret| ret.as_ref().map_or(true, |dialogue|
-    dialogue.index.tree.records().len() == task.steps().len()
+    dialogue.moves.len() == task.steps().len()
+    && dialogue.moves.windows(2).all(|pair| matches!(pair, [left, right] if left.0 < right.0))
     && usize::try_from(dialogue.attempts.0).is_ok_and(|count|
         count == task.steps().iter().filter(|entry| matches!(entry.1, Step::Dispatch { .. })).count())))]
 #[inline]
@@ -237,7 +231,7 @@ pub fn derive(task: &Task) -> Result<Dialogue, DialogueError>
     }
     let mut attempts = AttemptNumber(0);
     let mut positions = BTreeMap::new();
-    let mut encoded = Vec::with_capacity(task.steps().len());
+    let mut moves = Vec::with_capacity(task.steps().len());
     for (&(commit, ref step), source) in task.steps().iter().zip(task.sources()) {
         if commit != source.commit {
             return Err(DialogueError::Sources);
@@ -269,19 +263,14 @@ pub fn derive(task: &Task) -> Result<Dialogue, DialogueError>
                 *position
             },
         };
-        let value = encode_flat(&MoveValue::from(source))?;
-        encoded.push((MoveKey::new(attempt, seq), value));
+        let value = MoveValue {
+            author: source.author,
+            blob: Cow::Owned(source.blob.as_slice().to_vec()),
+        };
+        moves.push((MoveKey::new(attempt, seq), value));
     }
-    encoded.sort_unstable_by_key(|&(key, _)| key);
-    let records: Vec<_> = encoded
-        .iter()
-        .map(|entry| RecordRef::new(entry.0.as_ref(), entry.1.as_ref()))
-        .collect();
-    let tree = RecordTree::build(&records, TreeParams::current())?;
-    Ok(Dialogue {
-        index: Index::new(IndexKind::Dialogue, tree),
-        attempts,
-    })
+    moves.sort_unstable_by_key(|&(key, _)| key);
+    Ok(Dialogue { moves, attempts })
 }
 
 #[cfg(test)]
@@ -310,7 +299,6 @@ mod tests
     use super::MoveValue;
     use super::derive;
     use crate::AttemptNumber;
-    use crate::MoveKey;
     use crate::SequenceNumber;
     use crate::testing::Fence;
     use crate::testing::Fixture;
@@ -414,20 +402,9 @@ mod tests
             let positions = |view: &domhringr_record_tree::View| {
                 derive(view.task())
                     .unwrap()
-                    .index
-                    .tree
-                    .records()
+                    .moves
                     .iter()
-                    .map(|record| {
-                        let value: MoveValue<'_> =
-                            decode_flat(TokenBody::from(record.value().as_ref())).unwrap();
-                        (
-                            value.commit(),
-                            MoveKey::try_from(record.key().as_ref())
-                                .unwrap()
-                                .coordinates(),
-                        )
-                    })
+                    .map(|&(key, ref value)| (value.commit(), key.coordinates()))
                     .collect::<BTreeMap<_, _>>()
             };
             assert_eq!(
@@ -578,10 +555,7 @@ mod tests
             ));
             let dialogue = derive(view.task()).unwrap();
             assert_eq!(dialogue.attempts, AttemptNumber(2));
-            assert_eq!(
-                dialogue.index.tree.records().len(),
-                reference.task().steps().len()
-            );
+            assert_eq!(dialogue.moves.len(), reference.task().steps().len());
             let originals: BTreeMap<_, _> = reference
                 .task()
                 .sources()
@@ -594,9 +568,7 @@ mod tests
                 .iter()
                 .map(|entry| (entry.0, &entry.1))
                 .collect();
-            for record in dialogue.index.tree.records() {
-                let value: MoveValue<'_> =
-                    decode_flat(TokenBody::from(record.value().as_ref())).unwrap();
+            for &(_key, ref value) in &dialogue.moves {
                 let source = originals[&value.commit()];
                 assert_eq!(value.author, source.author);
                 assert_eq!(value.blob.as_ref(), source.blob.as_slice());

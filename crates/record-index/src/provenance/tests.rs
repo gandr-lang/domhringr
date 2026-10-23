@@ -8,31 +8,29 @@ use domhringr_record_tree::Revision;
 use domhringr_record_tree::Step;
 use domhringr_record_tree::TreeId;
 use gandr_storage_values::ManifestDigest;
-use gandr_storage_values::TokenBody;
-use gandr_storage_values::decode_flat;
 
 use super::Attribution;
 use super::Field;
-use super::Records;
-use super::Reference;
 use super::Subject;
-use crate::IndexKind;
-use crate::dialogue;
-use crate::dialogue::MoveValue;
+use crate::derive;
+use crate::keyed::Keyed;
+use crate::project;
+use crate::project::Subjects;
+use crate::project::TaskName;
 use crate::prove;
-use crate::prove::Query;
-use crate::prove::Verified;
+use crate::prove::Local;
 use crate::testing;
 
 #[test]
 fn provenance_agrees_with_every_tasks_evidence()
 {
     testing::runtime().block_on(async {
+        let keyed = Keyed::shared().unwrap();
+        let mut store = keyed.store().unwrap();
+        let mut subjects = Subjects::default();
         let mut expected = BTreeMap::new();
         let mut evidence = Vec::new();
-        let mut dialogues = BTreeMap::new();
-        let mut records = Records::default();
-        for (secret, digest, revision) in [
+        for (index, (secret, digest, revision)) in [
             (
                 iroh::SecretKey::from_bytes(&[3; 32]),
                 testing::evidence(),
@@ -43,7 +41,10 @@ fn provenance_agrees_with_every_tasks_evidence()
                 ManifestDigest::from([0xff; 32]),
                 Revision::Sha256([10; 32]),
             ),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let tree = TreeId::try_from(*secret.public().as_bytes()).unwrap();
             let mut fixture = testing::Fixture::with(&secret, digest, revision).await;
             let refused = fixture
@@ -62,6 +63,9 @@ fn provenance_agrees_with_every_tasks_evidence()
             let root = tempfile::tempdir().unwrap();
             let peer = testing::peer(root.path(), fixture.commits).await;
             let view = peer.view(tree).await.unwrap();
+            let folded = derive::at(&peer, tree, &peer.heads(tree).await.unwrap())
+                .await
+                .unwrap();
             drop(peer);
             assert!(view.refused().iter().any(|entry| entry.0 == refused));
             evidence.extend(
@@ -104,49 +108,47 @@ fn provenance_agrees_with_every_tasks_evidence()
                 };
                 assert!(expected.insert((tree, commit), naming).is_none());
             }
-            let dialogue = dialogue::derive(view.task()).unwrap().index;
-            records.extend(tree, &dialogue).unwrap();
-            // Binding the same task under another name must not duplicate moves.
-            records.extend(tree, &dialogue).unwrap();
-            let _previous = dialogues.insert(tree, dialogue);
+            // A second name for the same task must not duplicate its namings.
+            for (alias, carrier) in [
+                (format!("task-{index}"), project::Carrier::Owner),
+                (format!("alias-{index}"), project::Carrier::Alias),
+            ] {
+                let _task = project::add(
+                    &mut store,
+                    keyed,
+                    &alias.parse::<TaskName>().unwrap(),
+                    &folded.entry,
+                    &folded.dialogue,
+                    carrier,
+                    &mut subjects,
+                )
+                .unwrap();
+            }
         }
-        let index = records.build().unwrap();
+        let mut local = Local(&store);
         let mut actual = BTreeMap::new();
         let mut found_evidence = Vec::new();
-        // Each key with a byte past its end, one buffer refilled per record.
-        let mut trailing: Vec<u8> = Vec::new();
-        for record in index.tree.records() {
-            let reference = Reference::try_from(record.key().as_ref()).unwrap();
-            let attribution =
-                decode_flat::<Attribution>(TokenBody::from(record.value().as_ref())).unwrap();
-            let dialogue = &dialogues[&reference.tree];
-            let query = Query::Key(reference.position.owned());
-            let proof = prove::answer(dialogue, &query).unwrap();
-            let Verified::Present(value) = proof
-                .verify(
-                    dialogue.manifest.identity().unwrap(),
-                    IndexKind::Dialogue,
-                    &query,
-                )
-                .unwrap()
-            else {
-                panic!("provenance must name an admitted move");
-            };
-            let original = decode_flat::<MoveValue<'_>>(TokenBody::from(value.as_ref())).unwrap();
-            let commit = original.commit();
-            assert!(
-                actual
-                    .insert((reference.tree, commit), (reference.subject, attribution))
-                    .is_none()
-            );
-            if let Subject::Evidence(digest) = reference.subject {
-                found_evidence.push((reference.tree, attribution.holder, digest));
+        let mut asked = alloc::collections::BTreeSet::new();
+        for subject in expected.values().map(|naming| naming.0) {
+            if !asked.insert(subject.value()) {
+                continue;
             }
-            trailing.clear();
-            trailing.extend_from_slice(record.key().as_ref());
-            trailing.push(0);
-            assert!(Reference::try_from(trailing.as_slice()).is_err());
-            assert!(Reference::try_from(&record.key().as_ref()[.. 32]).is_err());
+            for named in prove::named(&mut local, keyed, subject).await.unwrap() {
+                let tree = named.movement.receipt.tree();
+                assert!(named.task.as_ref().starts_with("task-"));
+                let attribution = Attribution {
+                    field: named.field,
+                    holder: named.holder,
+                };
+                assert!(
+                    actual
+                        .insert((tree, named.movement.commit), (subject, attribution))
+                        .is_none()
+                );
+                if let Subject::Evidence(digest) = subject {
+                    found_evidence.push((tree, named.holder, digest));
+                }
+            }
         }
         assert_eq!(actual, expected);
         evidence.sort_by(|left, right| {
@@ -171,6 +173,7 @@ fn provenance_agrees_with_every_tasks_evidence()
 fn a_digest_named_twice_has_two_records()
 {
     testing::runtime().block_on(async {
+        let keyed = Keyed::shared().unwrap();
         for digest in [testing::evidence(), ManifestDigest::from([0xff; 32])] {
             let fixture = testing::Fixture::with(
                 &iroh::SecretKey::from_bytes(&[3; 32]),
@@ -180,61 +183,63 @@ fn a_digest_named_twice_has_two_records()
             .await;
             let root = tempfile::tempdir().unwrap();
             let peer = testing::peer(root.path(), fixture.commits).await;
-            let view = peer
-                .view_at(testing::tree(), &Heads::from_iter([fixture.standings[2]]))
+            let folded = derive::at(
+                &peer,
+                testing::tree(),
+                &Heads::from_iter([fixture.standings[2]]),
+            )
+            .await
+            .unwrap();
+            drop(peer);
+            let mut store = keyed.store().unwrap();
+            let _task = project::add(
+                &mut store,
+                keyed,
+                &"task".parse().unwrap(),
+                &folded.entry,
+                &folded.dialogue,
+                project::Carrier::Owner,
+                &mut Subjects::default(),
+            )
+            .unwrap();
+            let mut local = Local(&store);
+            let named = prove::named(&mut local, keyed, Subject::Evidence(digest))
                 .await
                 .unwrap();
-            drop(peer);
-            let dialogue = dialogue::derive(view.task()).unwrap().index;
-            let mut records = Records::default();
-            records.extend(testing::tree(), &dialogue).unwrap();
-            let index = records.build().unwrap();
-            let query = Query::Range(Subject::Evidence(digest).range().unwrap());
-            let proof = prove::answer(&index, &query).unwrap();
-            let Verified::Range(named) = proof
-                .verify(
-                    index.manifest.identity().unwrap(),
-                    IndexKind::Provenance,
-                    &query,
-                )
-                .unwrap()
-            else {
-                panic!("prefix proof");
-            };
-            assert_eq!(named.len(), 2);
             let attempts: Vec<_> = named
                 .iter()
-                .map(|record| {
-                    let reference = Reference::try_from(record.key().as_ref()).unwrap();
-                    assert_eq!(reference.subject, Subject::Evidence(digest));
-                    assert_eq!(reference.tree, testing::tree());
-                    assert_eq!(
-                        decode_flat::<Attribution>(TokenBody::from(record.value().as_ref()))
-                            .unwrap(),
-                        Attribution {
-                            field: Field::Content,
-                            holder: testing::key(&testing::seat())
-                        }
-                    );
-                    reference.position.coordinates().0
+                .map(|named| {
+                    assert_eq!(named.movement.receipt.tree(), testing::tree());
+                    assert_eq!(named.field, Field::Content);
+                    assert_eq!(named.holder, testing::key(&testing::seat()));
+                    named.key.coordinates().0
                 })
                 .collect();
             assert_eq!(attempts, [crate::AttemptNumber(1), crate::AttemptNumber(2)]);
-            let query = Query::Range(
-                Subject::Evidence(ManifestDigest::from([0; 32]))
-                    .range()
-                    .unwrap(),
+            // One subject holds both namings.
+            assert_eq!(u64::from(store.live_count(keyed.subject).unwrap()), 1);
+            // A revision of the digest's bytes is another subject.
+            let mut bytes = [0; 32];
+            bytes.copy_from_slice(digest.as_ref());
+            assert!(
+                prove::named(
+                    &mut local,
+                    keyed,
+                    Subject::Revision(Revision::Sha256(bytes))
+                )
+                .await
+                .unwrap()
+                .is_empty()
             );
-            let proof = prove::answer(&index, &query).unwrap();
-            assert_eq!(
-                proof
-                    .verify(
-                        index.manifest.identity().unwrap(),
-                        IndexKind::Provenance,
-                        &query
-                    )
-                    .unwrap(),
-                Verified::Range(Box::new([]))
+            assert!(
+                prove::named(
+                    &mut local,
+                    keyed,
+                    Subject::Evidence(ManifestDigest::from([0; 32]))
+                )
+                .await
+                .unwrap()
+                .is_empty()
             );
         }
     });

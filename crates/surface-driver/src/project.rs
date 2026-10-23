@@ -900,9 +900,9 @@ fn listing(
 ///
 /// # Specification
 /// - requires: no endpoint is accepting concurrent syncs for `peer`.
-/// - ensures: all nodes precede one own `Indexed` when its manifest differs; an
-///   identical manifest commits nothing. Parents are the project heads read.
-/// - fails: fold, derivation, manifest or receipt persistence failure.
+/// - ensures: all nodes precede one own `Indexed` when its root differs; an
+///   identical root commits nothing. Parents are the project heads read.
+/// - fails: fold, derivation or receipt persistence failure.
 /// - panics: none.
 /// - executable: none — durable index publication and receipt commits require
 ///   the process witness to observe the resulting store and attestations.
@@ -923,7 +923,7 @@ pub async fn attest(
     let store = IndexStore::open(state);
     let mut deriver = Deriver::owned(peer, project, &view, &store)?;
     let derived = deriver.project(peer, project, &view, &store).await?;
-    let digest = derived.index.manifest.identity()?;
+    let digest = domhringr_record_index::derive::digest(derived.root());
     let author = peer.identity().peer_key();
     if view
         .indexes()

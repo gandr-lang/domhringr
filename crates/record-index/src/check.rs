@@ -1,17 +1,20 @@
-//! Compare an attested project with independent folds at its named frontiers.
+//! Compare an attested project store with independent folds at its named
+//! frontiers.
 //!
-//! An owner's or granted member's `Indexed` receipt attests a project
-//! manifest. Its parents name the project frontier used by derivation; each
-//! task entry names its own frontier. A proof establishes membership, absence
-//! or a complete range under that claim, not the claim's agreement with the
-//! fold. Historical checking rebuilds each held task at its entry's heads and
-//! the project at the attestation's parents. Later receipts do not invalidate
-//! a true historical claim.
+//! An owner's or granted member's `Indexed` receipt attests a store root.
+//! Its parents name the project frontier used by derivation; each task
+//! names its own frontier in its heads. A proof establishes what the store
+//! holds, not that it agrees with the fold. Checking rebuilds each held task
+//! at its own heads and the bindings at the attestation's parents, and
+//! compares contents, not roots: a refreshed store's root depends on its
+//! history ([`crate::derive`]). Later receipts don't make a true historical
+//! claim disagree.
 
 #[cfg(test)]
 mod tests;
 
 use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use core::fmt;
 
 use domhringr_record_tree::IndexAttestation;
@@ -19,38 +22,45 @@ use domhringr_record_tree::Peer;
 use domhringr_record_tree::TreeId;
 use domhringr_record_tree::ViewAtError;
 use domhringr_record_tree::ViewError;
-use gandr_storage_records::RecordTreeError;
-use gandr_storage_values::TokenBody;
+use gandr_storage_schema::AttributeValue;
+use gandr_storage_schema::SchemaError;
 use gandr_storage_values::ValueError;
-use gandr_storage_values::decode_flat;
+use gandr_storage_values::encode_flat;
 
-use crate::Index;
-use crate::IndexKind;
-use crate::WireError;
+use crate::MoveKey;
+use crate::derive;
 use crate::dialogue;
+use crate::dialogue::Dialogue;
 use crate::dialogue::DialogueError;
+use crate::keyed::Keyed;
+use crate::keyed::Standing;
 use crate::project;
-use crate::project::ProjectError;
 use crate::project::Refused;
-use crate::project::TaskEntry;
 use crate::project::TaskName;
+use crate::prove;
+use crate::prove::Local;
+use crate::prove::Move;
+use crate::prove::ProveError;
 use crate::provenance;
-use crate::provenance::ProvenanceError;
+use crate::provenance::Field as Role;
+use crate::provenance::Naming;
 
 /// The independently checked field which disagrees with a claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field
 {
-    /// A task entry is missing, extra, or names a different bound tree.
+    /// A task is missing or extra.
     Binding,
-    /// The typed standing differs from the fold at its heads.
+    /// The standing differs from the fold at its heads.
     Current,
     /// The number of admitted dispatches differs.
     Attempts,
-    /// The admitted original moves derive another dialogue identity.
+    /// The admitted original moves differ.
     Dialogue,
     /// Refused commits or their explanations differ from the fold.
     Refusals,
+    /// The task's namings of evidence and revisions differ.
+    Provenance,
 }
 
 impl fmt::Display for Field
@@ -71,6 +81,7 @@ impl fmt::Display for Field
             Self::Attempts => "attempts",
             Self::Dialogue => "dialogue",
             Self::Refusals => "refusals",
+            Self::Provenance => "provenance",
         })
     }
 }
@@ -89,8 +100,7 @@ pub enum Finding
     },
     /// The task's claimed frontier is not held locally, or the claim is unheld.
     Unchecked(TaskName),
-    /// Project framing or its reserved family differs from the supported
-    /// layout.
+    /// The store holds a subject no naming refers to.
     Project,
 }
 
@@ -109,7 +119,7 @@ impl fmt::Display for Finding
         match *self {
             Self::Disagrees { ref task, field } => write!(f, "disagrees {task} {field}"),
             Self::Unchecked(ref task) => write!(f, "unchecked {task}"),
-            Self::Project => f.write_str("disagrees project manifest"),
+            Self::Project => f.write_str("disagrees project subjects"),
         }
     }
 }
@@ -141,44 +151,95 @@ impl fmt::Display for Report
     }
 }
 
-/// The checker lacks a required project input or cannot interpret its records.
+/// The checker lacks a required project input or cannot read the store.
 #[derive(Debug, thiserror::Error)]
 pub enum CheckError
 {
-    /// The supplied tree does not carry the attested project identity.
-    #[error("supplied index is not the attested project")]
+    /// The supplied store is not the attested root.
+    #[error("supplied store is not the attested root")]
     Identity,
     /// A required historical project view cannot be read.
     #[error(transparent)]
     View(#[from] ViewAtError),
-    /// A task entry's canonical value is malformed.
+    /// A move's canonical value can't be encoded.
     #[error(transparent)]
     Value(#[from] ValueError),
     /// Rebuilding admitted moves failed.
     #[error(transparent)]
     Dialogue(#[from] DialogueError),
-    /// Rebuilding project records failed.
+    /// The claimed store can't be read.
     #[error(transparent)]
-    Project(#[from] ProjectError),
-    /// Manifest encoding failed.
+    Read(#[from] ProveError),
+    /// The keyed schema didn't resolve.
     #[error(transparent)]
-    Wire(#[from] WireError),
-    /// A dialogue cannot supply its provenance records.
-    #[error(transparent)]
-    Provenance(#[from] ProvenanceError),
-    /// Rebuilding provenance records failed.
-    #[error(transparent)]
-    Records(#[from] RecordTreeError),
+    Schema(#[from] SchemaError),
 }
 
-/// Check the claim at its project parents and each entry's own task heads.
+/// The moves a dialogue holds, as a reader decodes them.
 ///
 /// # Specification
-/// - ensures: later receipts cannot stale a true claim; each held task's
-///   standing, refusals, attempt count, dialogue and provenance are
-///   independently re-derived; a missing local frontier is unchecked, never
-///   agreement.
-/// - fails: wrong project identity, missing project past or malformed values.
+/// - ensures: one play per attempt, each move as [`prove::read_move`] reads its
+///   stored value.
+/// - fails: a move value that doesn't encode or decode.
+/// - panics: none.
+/// - executable: none — the decoder is the oracle; the forged-entry witness
+///   compares claimed and derived plays.
+///
+/// # Errors
+/// - [`CheckError`]: as above.
+///
+/// # Adequacy
+/// - hypothesis: L2 — an authentic store's plays equal the fold's.
+/// - witness: `check::tests::a_forged_entry_is_found_by_re_derivation`
+fn plays(dialogue: &Dialogue) -> Result<Vec<Vec<(MoveKey, Move)>>, CheckError>
+{
+    let mut plays: Vec<Vec<(MoveKey, Move)>> = Vec::new();
+    for &(key, ref value) in &dialogue.moves {
+        let movement = prove::read_move(&AttributeValue::from(encode_flat(value)?.as_ref()))?;
+        match plays.last_mut() {
+            Some(play)
+                if play
+                    .first()
+                    .is_some_and(|first| first.0.coordinates().0 == key.coordinates().0) =>
+            {
+                play.push((key, movement));
+            },
+            _ => plays.push(vec![(key, movement)]),
+        }
+    }
+    Ok(plays)
+}
+
+/// The namings a dialogue's moves make, as the store sorts them.
+///
+/// # Specification
+/// trivial.
+fn namings(plays: &[Vec<(MoveKey, Move)>]) -> Vec<(AttributeValue, MoveKey, Role)>
+{
+    let mut namings: Vec<_> = plays
+        .iter()
+        .flatten()
+        .filter_map(|&(key, ref movement)| {
+            match provenance::naming(movement.author, &movement.receipt) {
+                Naming::Named(subject, attribution) => {
+                    Some((subject.value(), key, attribution.field))
+                },
+                Naming::None => None,
+            }
+        })
+        .collect();
+    namings.sort_unstable();
+    namings
+}
+
+/// Check the claim at its project parents and each task's own heads.
+///
+/// # Specification
+/// - ensures: later receipts can't stale a true claim; each held task's
+///   standing, refusals, attempts, moves and namings are independently
+///   re-derived; a missing local frontier is unchecked, never agreement.
+/// - fails: a store of another root, a missing project past or a store that
+///   doesn't read.
 /// - panics: none.
 /// - executable: none — historical folds require storage I/O; the checker is
 ///   its own specification, with forged and older authentic claims as
@@ -196,56 +257,40 @@ pub async fn check(
     peer: &Peer,
     project: TreeId,
     attestation: &IndexAttestation,
-    index: &Index,
+    claimed: &gandr_storage_schema::Store,
 ) -> Result<Report, CheckError>
 {
-    let digest = index.manifest.identity()?;
-    if index.manifest.kind() != IndexKind::Project || digest != attestation.index {
+    if claimed.root() != derive::root(attestation.index) {
         return Err(CheckError::Identity);
     }
+    let keyed = Keyed::shared()?;
     let view = peer.view_at(project, &attestation.parents).await?;
     let mut bindings: BTreeMap<_, _> = project::bindings(&view).collect();
+    let names = project::names(claimed, keyed)?;
+    let mut local = Local(claimed);
+    let contents = prove::contents(&mut local, keyed, names.into_keys()).await?;
     let mut report = Report::default();
-    let mut rebuilt = BTreeMap::new();
-    let mut provenance = provenance::Records::default();
-    for record in index.tree.records() {
-        let key = record.key();
-        if key.as_ref() == [0, u8::from(IndexKind::Provenance)] {
-            continue;
-        }
-        let Some((&1, name)) = key.as_ref().split_first()
+    let mut owners = BTreeSet::new();
+    let mut subjects = BTreeSet::new();
+    let owned: BTreeMap<TaskName, bool> = bindings
+        .iter()
+        .map(|(name, &tree)| (name.clone(), owners.insert(tree)))
+        .collect();
+    for (name, claim) in contents.0 {
+        subjects.extend(claim.namings.iter().map(|naming| naming.0.clone()));
+        let Some(tree) = bindings.remove(&name)
         else {
-            report.0.push(Finding::Project);
-            continue;
-        };
-        let Some(name) = core::str::from_utf8(name)
-            .ok()
-            .and_then(|name| name.parse::<TaskName>().ok())
-        else {
-            report.0.push(Finding::Project);
-            continue;
-        };
-        let claimed = decode_flat::<TaskEntry>(TokenBody::from(record.value().as_ref()))?;
-        if bindings.remove(&name) != Some(claimed.tree()) {
             report.0.push(Finding::Disagrees {
                 task: name,
                 field: Field::Binding,
             });
             continue;
-        }
-        let TaskEntry::Held {
-            ref tree,
-            ref heads,
-            ref current,
-            ref attempts,
-            ref dialogue,
-            ref refused,
-        } = claimed
-        else {
+        };
+        if claim.standing == Standing::Unheld {
             report.0.push(Finding::Unchecked(name));
             continue;
-        };
-        let view = match peer.view_at(*tree, heads).await {
+        }
+        let view = match peer.view_at(tree, &claim.heads).await {
             Ok(view) => view,
             Err(ViewAtError::Missing(_) | ViewAtError::View(ViewError::Unopened(_))) => {
                 report.0.push(Finding::Unchecked(name));
@@ -253,15 +298,30 @@ pub async fn check(
             },
             Err(failure) => return Err(failure.into()),
         };
-        let derived = dialogue::derive(view.task())?;
-        let identity = derived.index.manifest.identity()?;
-        let refusals: Vec<_> = view.refused().iter().map(Refused::from).collect();
-        provenance.extend(*tree, &derived.index)?;
+        let dialogue = dialogue::derive(view.task())?;
+        let derived = plays(&dialogue)?;
+        let expected = if owned.get(&name).copied().unwrap_or_default() {
+            namings(&derived)
+        }
+        else {
+            Vec::new()
+        };
+        let refusals_differ = claim.refused.len() != view.refused().len()
+            || claim
+                .refused
+                .iter()
+                .zip(view.refused())
+                .any(|(held, viewed)| *held != Refused::from(viewed));
+        let attempts = usize::try_from(dialogue.attempts.0).ok();
         let fields = [
-            (Field::Current, current != view.task().current()),
-            (Field::Attempts, *attempts != derived.attempts),
-            (Field::Dialogue, *dialogue != identity),
-            (Field::Refusals, *refused != refusals),
+            (
+                Field::Current,
+                claim.standing != Standing::of(view.task().current()),
+            ),
+            (Field::Attempts, Some(claim.plays.len()) != attempts),
+            (Field::Dialogue, claim.plays != derived),
+            (Field::Refusals, refusals_differ),
+            (Field::Provenance, claim.namings != expected),
         ];
         for (field, differs) in fields {
             if differs {
@@ -271,15 +331,6 @@ pub async fn check(
                 });
             }
         }
-        let entry = TaskEntry::Held {
-            tree: *tree,
-            heads: heads.clone(),
-            current: view.task().current().clone(),
-            attempts: derived.attempts,
-            dialogue: identity,
-            refused: refusals,
-        };
-        let _previous = rebuilt.insert(name, entry);
     }
     for (task, _tree) in bindings {
         report.0.push(Finding::Disagrees {
@@ -287,14 +338,11 @@ pub async fn check(
             field: Field::Binding,
         });
     }
-    if report.0.is_empty() {
-        let provenance = provenance.build()?;
-        let digest = provenance.manifest.identity()?;
-        let nested = BTreeMap::from([(IndexKind::Provenance, digest)]);
-        let rebuilt = project::build(&rebuilt, &nested)?;
-        if rebuilt.manifest != index.manifest {
-            report.0.push(Finding::Project);
-        }
+    let held = claimed
+        .live_count(keyed.subject)
+        .map_err(|refusal| ProveError::Store(gandr_storage_schema::StoreError::Refused(refusal)))?;
+    if usize::try_from(u64::from(held)).ok() != Some(subjects.len()) {
+        report.0.push(Finding::Project);
     }
     Ok(report)
 }

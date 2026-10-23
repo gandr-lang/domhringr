@@ -1,4 +1,4 @@
-//! Checked byte framing shared by manifests and proof streams.
+//! Checked byte framing of the proof stream.
 
 use anodized::spec;
 use quenchant_arith::arith;
@@ -82,9 +82,8 @@ impl<'image> Cursor<'image>
     /// - [`WireError::Truncated`]: fewer than N bytes remain.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — foreign and truncated manifests distinguish bounded
-    ///   reads.
-    /// - witness: `manifest::tests::a_foreign_kind_layout_or_commitment_is_refused_before_any_node`
+    /// - hypothesis: L3 — a truncated request is refused at the field it cuts.
+    /// - witness: `stream::tests::every_question_round_trips_through_its_request`
     #[spec(captures: before = self.0.len(), ensures: |ret| match ret {
         Ok(_) => arith::checked_add(Int::from(self.0.len()), Int::from(N)).map(usize::from) == Ok(before),
         Err(_) => self.0.len() == before,
@@ -110,9 +109,9 @@ impl<'image> Cursor<'image>
     /// - [`WireError::Truncated`]: fewer than the named bytes remain.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — truncated commitment bodies cannot become valid
-    ///   manifests.
-    /// - witness: `manifest::tests::a_foreign_kind_layout_or_commitment_is_refused_before_any_node`
+    /// - hypothesis: L3 — a truncated value preimage is refused, not read
+    ///   short.
+    /// - witness: `stream::tests::every_question_round_trips_through_its_request`
     #[spec(captures: before = self.0.len(), ensures: |ret| match ret {
         Ok(body) => body.0.len() == length.0 && arith::checked_add(Int::from(self.0.len()), Int::from(length.0)).map(usize::from) == Ok(before),
         Err(_) => self.0.len() == before,
@@ -168,8 +167,8 @@ impl<'image> Cursor<'image>
     /// - [`WireError::Trailing`]: unread bytes remain.
     ///
     /// # Adequacy
-    /// - hypothesis: L3 — appending one byte invalidates a manifest.
-    /// - witness: `manifest::tests::a_foreign_kind_layout_or_commitment_is_refused_before_any_node`
+    /// - hypothesis: L3 — appending one byte invalidates a request.
+    /// - witness: `stream::tests::every_question_round_trips_through_its_request`
     pub(crate) fn finish(self) -> Result<(), WireError>
     {
         if self.0.is_empty() {

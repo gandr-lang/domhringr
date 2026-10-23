@@ -1,6 +1,6 @@
 # domhringr-record-index
 
-Derived dialogue, project and provenance indexes, authenticated by manifests, replayed through named session protocols and checked against the receipt fold.
+A project's derived index as one store of gandr's keyed schema, attested by its root, proved question by question, replayed through named session protocols and checked against the receipt fold.
 
 - [Synopsis](#synopsis)
 - [Provided features](#provided-features)
@@ -11,21 +11,21 @@ Derived dialogue, project and provenance indexes, authenticated by manifests, re
 
 ## Synopsis
 
-**What.** The keyed plane over the receipt fold: a task's admitted moves as a dialogue keyed by `(attempt, seq)`, a project's task bindings with their standings and refusals, and the evidence and landed revisions each move names, each derived into an ordered record tree of `gandr-storage-records`, named by a kind-bound manifest, attested by an `Indexed` receipt and proved to a reader that holds only the manifest.
+**What.** The keyed plane over the receipt fold: a project's tasks, their attempts and admitted moves, their refusals, and the evidence and landed revisions each move names, derived into one store of `gandr_storage_schema::keyed::schema()`, attested by an `Indexed` receipt naming the store's root, and proved to a reader that holds only that root.
 
-**Why.** A reader asking where a task stands, which move named a piece of evidence or which revision landed should not fold every task tree it reaches. An attested index answers with a proof checked against one manifest digest, and the historical check rebuilds what the attestation claims from the receipts it names, so an index is never authority over the fold.
+**Why.** A reader asking where a task stands, which move named a piece of evidence or which revision landed should not fold every task tree it reaches. An attested store answers each question with a proof checked against one root, and the historical check rebuilds what the attestation claims from the receipts it names, so an index is never authority over the fold.
 
-**How.** Derivation runs above the fold and reuses a task's entry only at an identical frontier. Node files are content-addressed and published before their manifest. Proofs travel one question per stream under `domhringr/index/0`, within a 1 MiB answer cap, and verify against the resealed root alone. Attested replay feeds an attempt's proved moves to the arena monitor under the dispatch's edition.
+**How.** Derivation runs above the fold, edits the previous store and reuses a task's parts only at an identical frontier. A task holds its standing's kind; the rest of the standing is recomputed from its last attempt's play. Node files are content-addressed and published before their manifest. Questions travel one per stream under `domhringr/index/0`, within a 1 MiB answer cap, and their proofs verify against the attested root alone. Attested replay feeds an attempt's proved moves to the arena monitor under the dispatch's edition.
 
 ## Provided features
 
-- `dialogue::derive`, `project::build` and the `provenance` records: the three index kinds, each an `Index` of a `Manifest` and its record tree.
-- `derive::at` and `derive::held`: per-task derivation at a frontier, reused only when the heads are unchanged.
-- `prove::answer`, `prove::play`, `prove::later` and `prove::Answer::verify`: membership, absence and complete-range proofs and their root-only verification.
+- `keyed::Keyed`: the schema's objects, arrows and attributes, and the codecs of their values.
+- `derive::Deriver`, `derive::at` and `derive::held`: a project's store, refreshed task by task, reused only when the heads are unchanged.
+- `prove::Ask` with `prove::task`, `prove::claim`, `prove::play`, `prove::later`, `prove::current`, `prove::named` and `prove::contents`: readers over any asker, local or remote.
 - `replay::replay`: an attested attempt admitted through the arena's session protocols, refused at the `(attempt, seq)` that breaks them.
 - `check::check`: an attestation compared with independent folds at its named frontiers.
-- `store::Store` and `stream::ask` / `stream::answer`: node and manifest files under the peer's state, and the proof protocol between peers.
-- `measure::measure`: record count, root and leaf extents, and the largest single-key answer.
+- `store::Store` and `stream::Remote` / `stream::fetch` / `stream::answer`: node and manifest files under the peer's state, and the proof protocol between peers.
+- `measure::measure`: each table's record count, root and leaf extents, and its largest framed answer.
 
 ## Expected features
 
@@ -34,7 +34,7 @@ Derived dialogue, project and provenance indexes, authenticated by manifests, re
 
 ## Examples
 
-The [peer commands](../surface-peer/README.md) derive and attest a project, prove its entries and dialogue coordinates, resolve provenance and check historical claims. Run the crate's tests:
+The [peer commands](../surface-peer/README.md) derive and attest a project, prove its tasks and move coordinates, resolve provenance and check historical claims. Run the crate's tests:
 
 ```sh
 mise exec -- cargo nextest run -p domhringr-record-index
@@ -45,10 +45,11 @@ mise exec -- cargo nextest run -p domhringr-record-index
 | Topic | Module |
 | ----- | ------ |
 | Decisions, with alternatives and reversals | [`src/lib.rs`](src/lib.rs) |
-| Dialogue coordinates and move values | [`src/dialogue.rs`](src/dialogue.rs), [`src/key.rs`](src/key.rs) |
-| Project entries and standings | [`src/project.rs`](src/project.rs) |
-| Provenance keys | [`src/provenance.rs`](src/provenance.rs) |
-| Manifests, layouts and trust | [`src/manifest.rs`](src/manifest.rs), [`src/check.rs`](src/check.rs) |
+| The schema's ids and value codecs | [`src/keyed.rs`](src/keyed.rs) |
+| Move coordinates and move values | [`src/dialogue.rs`](src/dialogue.rs), [`src/key.rs`](src/key.rs) |
+| Tasks, aliases and refreshes | [`src/project.rs`](src/project.rs), [`src/derive.rs`](src/derive.rs) |
+| Subjects and their fields | [`src/provenance.rs`](src/provenance.rs) |
+| Readers and trust | [`src/prove.rs`](src/prove.rs), [`src/check.rs`](src/check.rs) |
 | Attested replay | [`src/replay.rs`](src/replay.rs) |
 | Storage, cursors and the serving cache | [`src/store.rs`](src/store.rs) |
 | The proof protocol | [`src/stream.rs`](src/stream.rs) |

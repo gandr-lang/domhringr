@@ -743,9 +743,6 @@ enum RunError
     /// The operator's index could not be refreshed.
     #[error(transparent)]
     Index(#[from] domhringr_record_index::derive::DeriveError),
-    /// The refreshed index's manifest could not be named.
-    #[error(transparent)]
-    Manifest(#[from] domhringr_record_index::WireError),
     /// The seat cannot be reached, or the task synced from it.
     #[error(transparent)]
     Reach(#[from] Unreached),

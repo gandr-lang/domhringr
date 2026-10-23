@@ -1391,10 +1391,13 @@ rm -rf "$work"
                 .map(|entry| entry.1.commit)
                 .collect();
             let claim = &view.indexes()[&author];
+            let keyed = domhringr_record_index::keyed::Keyed::shared().unwrap();
             let store = domhringr_record_index::store::Store::open(&state);
-            let index = store.load(claim.index).unwrap();
+            let attested = store
+                .load(keyed, domhringr_record_index::derive::root(claim.index))
+                .unwrap();
             assert!(
-                domhringr_record_index::check::check(&peer, world.project, claim, &index)
+                domhringr_record_index::check::check(&peer, world.project, claim, &attested)
                     .await
                     .unwrap()
                     .0
@@ -1405,9 +1408,18 @@ rm -rf "$work"
                 .await
                 .unwrap();
             drop(peer);
+            let names: Vec<_> = whole.entries.keys().cloned().collect();
+            let mut contents = Vec::new();
+            for held in [&attested, &whole.store] {
+                let mut local = domhringr_record_index::prove::Local(held);
+                contents.push(
+                    domhringr_record_index::prove::contents(&mut local, keyed, names.clone())
+                        .await
+                        .unwrap(),
+                );
+            }
             assert_eq!(
-                whole.index.manifest.identity().unwrap(),
-                claim.index,
+                contents[0], contents[1],
                 "attestation describes the command's resulting store"
             );
             claims

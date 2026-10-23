@@ -712,7 +712,7 @@ pub enum Kind
     /// The author attests a project index derived at this receipt's parents.
     Indexed
     {
-        /// The project index's manifest identity.
+        /// The project store's root.
         index: IndexDigest,
     },
     /// The tree's root; its author is the tree's owner, whom the proof names.
