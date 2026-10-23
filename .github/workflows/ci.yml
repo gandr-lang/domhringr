@@ -57,7 +57,10 @@ jobs:
   template:
     if: false
     needs: &rust-needs [changes, ci-image-ref]
-    runs-on: &linux ubuntu-latest
+    # arm64, as gandr's lanes (gandr-lang/gandr#702: its suite 27% and a warm
+    # rebuild 9% faster than ubuntu-latest's x86-64). coverage.yml's measuring
+    # run is the one x86-64 Linux job, so the image is published for both.
+    runs-on: &linux ubuntu-24.04-arm
     # Private-GHCR consumers need package reads on the job; the workflow floor
     # stays `contents: read` for every job that pulls no image.
     permissions: &image-read-permissions
@@ -226,14 +229,22 @@ jobs:
           compression-level: 0
       # Only this workflow's queue runs are trusted artifact producers:
       # GitHub sets the event, and only an owner-queued PR reaches the queue.
-      # A test lane downloads only when the cache matched nothing: a prefix
-      # match is main's newest state of the generation, usually the same
-      # landing the latest queue run built, and Cargo rebuilds what differs.
+      # A test lane downloads the latest successful queue run's build when no
+      # cache entry matched, or when that build is newer than main's newest
+      # state (`queue-newer`, gandr-lang/gandr#2005). A merge group stacked on
+      # entries main does not hold yet then starts from a build that holds
+      # them, where main's state would rebuild every entry ahead of it; the
+      # restored state is dropped first, so the download replaces it.
       # Promotion matches only its exact key. Another toolchain generation's
       # state is never downloaded.
+      - &drop-older-state
+        name: drop main's state for the newer queue build
+        if: ${{ github.event_name != 'push' && steps.test-state-restore.outputs.cache-hit != 'true' && steps.test-state-restore.outputs.cache-matched-key != '' && needs.build-state.outputs.queue-newer == 'true' && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), format('build-state-{0}--{1}', env.CI_BUILD_STATE, env.CI_BUILD_GENERATION)) }}
+        shell: bash
+        run: rm -f "build-state-$CI_BUILD_STATE.tar.zst"
       - &download-build-state
         name: download reusable queue build state
-        if: ${{ (github.event_name == 'push' && steps.test-state-restore.outputs.cache-hit != 'true' || github.event_name != 'push' && steps.test-state-restore.outputs.cache-matched-key == '') && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), format('build-state-{0}--{1}', env.CI_BUILD_STATE, env.CI_BUILD_GENERATION)) }}
+        if: ${{ (github.event_name == 'push' && steps.test-state-restore.outputs.cache-hit != 'true' || github.event_name != 'push' && steps.test-state-restore.outputs.cache-hit != 'true' && (steps.test-state-restore.outputs.cache-matched-key == '' || needs.build-state.outputs.queue-newer == 'true')) && contains(fromJSON(needs.build-state.outputs.artifacts || '[]'), format('build-state-{0}--{1}', env.CI_BUILD_STATE, env.CI_BUILD_GENERATION)) }}
         uses: &download-artifact actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: build-state-${{ env.CI_BUILD_STATE }}--${{ env.CI_BUILD_GENERATION }}
@@ -389,6 +400,7 @@ jobs:
       - *identify-build-state
       - *setup-rust
       - *restore-test-state
+      - *drop-older-state
       - *download-build-state
       - *unpack-build-state
       - name: build every workspace target with specifications enforced
@@ -744,7 +756,8 @@ jobs:
   # verdict. A new queue ref can read these artifacts even when it cannot read
   # its predecessor's branch-local cache. Cargo still checks all fingerprints.
   # Main promotion requires the exact landing SHA; a test lane reuses the
-  # latest queue build only when no cached state of its generation matched.
+  # latest successful queue build when no cached state of its generation
+  # matched or when that build completed after main's newest state was saved.
   # Hosted artifact discovery is skipped under act, never a compilation gate.
   # A failed lookup means no reuse, never a failed job: the test lanes need
   # this one, and a required lane skipped behind a failure reports success.
@@ -758,6 +771,7 @@ jobs:
       actions: read
     outputs:
       run-id: &queue-run ${{ steps.run.outputs.run-id || steps.previous.outputs.run-id }}
+      queue-newer: ${{ steps.fresher.outputs.queue-newer }}
       artifacts: ${{ steps.artifacts.outputs.artifacts }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -774,13 +788,28 @@ jobs:
           --jq '"run-id=" + ((.workflow_runs[0].id // "") | tostring)'
           >> "$GITHUB_OUTPUT"
       - id: previous
-        name: find the latest completed queue run
+        name: find the latest successful queue run
         if: ${{ env.ACT != 'true' && github.event_name != 'push' }}
         continue-on-error: true
         run: >-
           gh api --method GET "repos/$GH_REPO/actions/workflows/ci.yml/runs"
-          -f event=merge_group -f status=completed -f per_page=1
-          --jq '"run-id=" + ((.workflow_runs[0].id // "") | tostring)'
+          -f event=merge_group -f status=success -f per_page=1
+          --jq '.workflow_runs[0] // {} | "run-id=\(.id // "")\ncompleted=\(.updated_at // "")"'
+          >> "$GITHUB_OUTPUT"
+      # Main's state is a promoted queue build, saved after its run completed,
+      # or a push's own build. A queue build that completed after main's
+      # newest test state was saved holds every landing that state holds and
+      # the entries queued ahead of this group besides.
+      - id: fresher
+        name: compare it with main's newest test state
+        if: ${{ steps.previous.outputs.completed != '' }}
+        continue-on-error: true
+        env:
+          CI_QUEUE_COMPLETED: ${{ steps.previous.outputs.completed }}
+        run: >-
+          gh api --method GET "repos/$GH_REPO/actions/caches"
+          -f ref=refs/heads/main -f key=domhringr-v2-test-state- -f sort=created_at -f direction=desc -f per_page=1
+          --jq '(.actions_caches[0].created_at // "") as $main | "queue-newer=\($main == "" or env.CI_QUEUE_COMPLETED > $main)"'
           >> "$GITHUB_OUTPUT"
       - id: artifacts
         name: list its build-state artifacts

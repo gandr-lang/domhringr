@@ -65,7 +65,14 @@ env.CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER = "dylint-link"
 # task plain, including when Cargo's encoded flags take precedence.
 env.RUSTFLAGS = "{{ env.RUSTFLAGS | default(value='') | regex_replace(pattern='(^|\\\\s)--cfg(?:=|\\\\s+)anodized_(panic|print)\\\\b', rep='') | trim }}"
 env.CARGO_ENCODED_RUSTFLAGS = "{% if env.CARGO_ENCODED_RUSTFLAGS is defined %}{% set flags = env.CARGO_ENCODED_RUSTFLAGS %}{% else %}{% set flags = env.RUSTFLAGS | default(value='') | trim | regex_replace(pattern='\\\\s+', rep='\u001f') %}{% endif %}{% set flags = flags | regex_replace(pattern='(^|\u001f)--cfg(?:=|\u001f)anodized_(panic|print)\\\\b', rep='') | trim_start(pat='\u001f') %}{{ flags }}{% if flags %}\u001f{% endif %}--cfg=quenchant_compiler_policy"
-run = "cargo dylint --lib quenchant_dylints --no-deps -- --workspace --all-targets"
+# Building the policy library or its driver links rustc's own crates, which
+# rustc-dev and llvm-tools supply. The CI image leaves both out (its
+# Dockerfile says why), so the task adds them; where they are installed the
+# add is a no-op.
+run = '''
+rustup component add rustc-dev llvm-tools
+cargo dylint --lib quenchant_dylints --no-deps -- --workspace --all-targets
+'''
 
 # External workflow consumers use one full revision in Dylint metadata for
 # both the compiler plugin and this executable. Cargo's installation record
@@ -439,6 +446,9 @@ root="{{ config_root }}"
 if [[ "$(uname -s)" == Darwin && -z ${CI:-} ]]; then
   exec .config/mise/linux-tests check:coverage
 fi
+# llvm-tools supplies llvm-cov; the CI image leaves it out, so the task adds
+# it (a no-op where it is installed).
+rustup component add llvm-tools
 target=${CARGO_TARGET_DIR:-$root/target}
 export NEXTEST_PROFILE=ci-enforcing
 CARGO_TARGET_DIR=$target cargo build --package domhringr-surface-peer --bin domhringr-peer --no-default-features --locked

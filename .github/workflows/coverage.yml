@@ -41,7 +41,7 @@ jobs:
   # Definitions only: aliases run in each consuming job's context.
   template:
     if: false
-    runs-on: &linux ubuntu-latest
+    runs-on: &linux ubuntu-24.04-arm
     permissions: &image-read-permissions
       contents: read
       packages: read
@@ -204,7 +204,8 @@ jobs:
     name: measure and upload coverage
     needs: [ci-image-ref, freshness]
     if: ${{ !cancelled() && !failure() && (github.event_name == 'workflow_dispatch' || needs.freshness.outputs.stale == 'true') }}
-    runs-on: *linux
+    # The measuring run stays on x86-64, as gandr's does.
+    runs-on: ubuntu-latest
     permissions: *image-read-permissions
     container: ${{ needs.ci-image-ref.outputs.ref }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 45

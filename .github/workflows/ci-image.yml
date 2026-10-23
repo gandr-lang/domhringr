@@ -39,7 +39,9 @@ concurrency:
 jobs:
   template:
     if: false
-    runs-on: &linux ubuntu-latest
+    # Every CI job that runs the image runs on arm64 except coverage.yml's
+    # measuring run.
+    runs-on: &linux ubuntu-24.04-arm
     permissions: &image-permissions
       contents: read
       packages: write
@@ -71,14 +73,19 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
-            runner: *linux
+            runner: ubuntu-latest
           - arch: arm64
             platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: *linux
     steps:
       - *git-checkout
       - *registry-login
       - *setup-buildx
+      # The image names the pin's channel in `RUSTUP_TOOLCHAIN` (the Dockerfile
+      # says why); the Dockerfile refuses a channel other than the pin's.
+      - id: channel
+        name: read the pinned channel
+        run: printf 'channel=%s\n' "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
       - id: build
         name: build and push by digest
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -86,6 +93,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           context: .
           file: .github/docker/ci.Dockerfile
+          build-args: |
+            RUST_CHANNEL=${{ steps.channel.outputs.channel }}
           # BuildKit mounts this only while mise verifies release attestations.
           secrets: |
             github_token=${{ secrets.GITHUB_TOKEN }}
