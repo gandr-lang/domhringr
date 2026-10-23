@@ -1,16 +1,21 @@
 // A readout: what a judge read out of a model for one question — one
 // probability per option, in letter order from `A`, the mass outside the
 // option letters, and the answer letter, the option holding the most alone.
-// It follows `Readout::new` of `domhringr-record-tree`
+// `readoutOf` follows `Readout::new` of `domhringr-record-tree`
 // (`crates/record-tree/src/ruling.rs`), its exemplars the cases of the
-// witness `a_readout_names_the_option_holding_the_most`, and a refusal
-// becomes the ruling's reason as `judge-oracle`'s readout maps it
-// (`crates/judge-oracle/src/readout.rs`): a tie is `Tied`, any other an
-// `Endpoint` that answered no distribution.
+// witness `a_readout_names_the_option_holding_the_most`. `read` follows
+// `read` of `domhringr-judge-oracle` (`crates/judge-oracle/src/readout.rs`),
+// its exemplars the cases of the witnesses
+// `the_options_share_the_mass_on_their_letters` and
+// `a_distribution_that_answers_nothing_is_refused`. A refusal becomes the
+// ruling's reason as that crate's `Refusal::reason` maps it: a tie is
+// `Tied`, a vector the readout refuses otherwise an `Endpoint` that answered
+// no distribution.
 //
-// A probability is an integer count of millionths, as the rubric's are. The
-// Rust readout admits a sum within 1e-9 of one; no two sums of millionths
-// differ by less than 1e-6, so here the sum is exactly one million.
+// The host reads a reported token's text as a letter: trimmed of whitespace,
+// it is one uppercase letter or none. No admitted form compares two strings
+// yet (gandr #1832), so `read` takes each token as its letter's place from
+// `A`, or as no letter.
 
 // Lists, and the element at an index.
 import "./rubric.gandr" ;
@@ -22,7 +27,7 @@ import "./grade.gandr" ;
 /// and the mass outside the option letters.
 @[ checks ]
 data Readout : Type {
-  ReadAs : (letter : String, probabilities : List(Integer), outside : Integer) --> Readout;
+  ReadAs : (letter : String, probabilities : List(f64), outside : f64) --> Readout;
 }
 
 /// Why a vector is no readout.
@@ -117,12 +122,16 @@ def letters = Cons(
   )
 ) ;
 
-/// The sum of a list of integers.
+/// The sum of `xs` added to `sum`, element by element from the first, as
+/// Rust's `sum` adds them.
 @[ checks ]
-def rec total(xs : List(Integer)) -> -F Integer {
+def rec total(xs : List(f64), sum : f64) -> -F f64 {
   case xs {
-    Nil => 0,
-    Cons(x, rest) => { run later <- total[<](rest); x + later }
+    Nil => sum,
+    Cons(x, rest) => {
+      run more <- float64.add(sum, x);
+      become total[<](rest, more)
+    }
   }
 }
 
@@ -132,9 +141,9 @@ def rec total(xs : List(Integer)) -> -F Integer {
 /// it; one above it stands alone.
 @[ checks ]
 def rec most(
-  xs : List(Integer),
+  xs : List(f64),
   index : Integer,
-  best : Integer,
+  best : f64,
   place : Integer,
   tied : Bool
 ) -> -F Most {
@@ -145,11 +154,11 @@ def rec most(
     },
     Cons(x, rest) => {
       run next <- index + 1;
-      run below <- x < best;
+      run below <- float64.lt(x, best);
       case below {
         true => become most[<](rest, next, best, place, tied),
         false => {
-          run equal <- x == best;
+          run equal <- float64.eq(x, best);
           case equal {
             true => become most[<](rest, next, best, place, true),
             false => become most[<](rest, next, x, index, false)
@@ -162,11 +171,11 @@ def rec most(
 
 /// The readout of `probabilities`, one per option in letter order, with
 /// `outside` the mass outside the option letters: refused for fewer than two
-/// options, then for more than twenty-six, then for a sum other than one,
-/// then for two options sharing the greatest.
+/// options, then for more than twenty-six, then for a sum more than `1e-9`
+/// from one, then for two options sharing the greatest.
 @[ checks ]
-def readoutOf(probabilities : List(Integer), outside : Integer) -> -F Reading {
-  run count <- size(Integer, probabilities);
+def readoutOf(probabilities : List(f64), outside : f64) -> -F Reading {
+  run count <- size(f64, probabilities);
   run few <- count < 2;
   case few {
     true => Refuses(Few),
@@ -175,11 +184,15 @@ def readoutOf(probabilities : List(Integer), outside : Integer) -> -F Reading {
       case many {
         true => Refuses(Many),
         false => {
-          run sum <- total(probabilities);
-          run whole <- sum == 1000000;
-          case whole {
-            false => Refuses(Unsummed),
-            true => case probabilities {
+          run sum <- total(probabilities, 0f64);
+          run over <- float64.sub(sum, 1f64);
+          run under <- float64.sub(1f64, sum);
+          run above <- float64.gt(over, 1e-9f64);
+          run below <- float64.gt(under, 1e-9f64);
+          run off <- above || below;
+          case off {
+            true => Refuses(Unsummed),
+            false => case probabilities {
               Nil => Refuses(Few),
               Cons(first, rest) => {
                 run greatest <- most(rest, 1, first, 0, false);
@@ -230,26 +243,190 @@ def letterOf(reading : Reading) -> -F String {
 
 /// One zero per element of `xs`.
 @[ checks ]
-def rec zeroed(xs : List(String)) -> -F List(Integer) {
+def rec zeroed(xs : List(String)) -> -F List(f64) {
   case xs {
-    Nil => (Nil : List(Integer)),
+    Nil => (Nil : List(f64)),
     Cons(x, rest) => {
       run later <- zeroed[<](rest);
-      (Cons(0, later) : List(Integer))
+      (Cons(0f64, later) : List(f64))
     }
   }
 }
 
 /// One probability per element of `xs`, the last holding all.
 @[ checks ]
-def rec lastHolds(xs : List(String)) -> -F List(Integer) {
+def rec lastHolds(xs : List(String)) -> -F List(f64) {
   case xs {
-    Nil => (Nil : List(Integer)),
+    Nil => (Nil : List(f64)),
     Cons(x, rest) => case rest {
-      Nil => (Cons(1000000, Nil) : List(Integer)),
+      Nil => (Cons(1f64, Nil) : List(f64)),
       Cons(y, more) => {
         run later <- lastHolds[<](rest);
-        (Cons(0, later) : List(Integer))
+        (Cons(0f64, later) : List(f64))
+      }
+    }
+  }
+}
+
+/// A token reported at the answer's position, with its natural
+/// log-probability: an uppercase letter, by its place counted from `A` at
+/// zero, or no letter.
+@[ checks ]
+data Reported : Type {
+  Lettered : (place : Integer, logprob : f64) --> Reported;
+  Unlettered : (logprob : f64) --> Reported;
+}
+
+/// The most mass a judge admits outside the option letters: any, or at
+/// most this much.
+@[ checks ]
+data Ceiling : Type {
+  Unbounded : Ceiling;
+  At : (most : f64) --> Ceiling;
+}
+
+/// What a report holds: each option's mass, in letter order, and the mass
+/// on every option letter; or a reported log-probability that is NaN or
+/// above zero, and so no log-probability.
+@[ checks ]
+data Masses : Type {
+  Held : (masses : List(f64), inside : f64) --> Masses;
+  Unlogged : Masses;
+}
+
+/// `xs` with `mass` added to its element at `place`, counted from zero.
+@[ checks ]
+def rec addAt(xs : List(f64), place : Integer, mass : f64) -> -F List(f64) {
+  case xs {
+    Nil => (Nil : List(f64)),
+    Cons(x, rest) => {
+      run here <- place == 0;
+      case here {
+        true => {
+          run added <- float64.add(x, mass);
+          (Cons(added, rest) : List(f64))
+        },
+        false => {
+          run later <- addAt[<](rest, place - 1, mass);
+          (Cons(x, later) : List(f64))
+        }
+      }
+    }
+  }
+}
+
+/// The masses `reported` adds, in the order reported, to `masses`, one per
+/// option, and to `inside`, the mass already on the option letters. A
+/// letter whose place is past the last of `count` options adds nothing; a
+/// log-probability that is NaN or above zero, wherever it stands, leaves no
+/// masses.
+@[ checks ]
+def rec gather(
+  reported : List(Reported),
+  count : Integer,
+  masses : List(f64),
+  inside : f64
+) -> -F Masses {
+  case reported {
+    Nil => Held(masses, inside),
+    Cons(token, rest) => case token {
+      Unlettered(logprob) => {
+        run logged <- float64.le(logprob, 0f64);
+        case logged {
+          false => Unlogged,
+          true => become gather[<](rest, count, masses, inside)
+        }
+      },
+      Lettered(place, logprob) => {
+        run logged <- float64.le(logprob, 0f64);
+        case logged {
+          false => Unlogged,
+          true => {
+            run option <- place < count;
+            case option {
+              false => become gather[<](rest, count, masses, inside),
+              true => {
+                run mass <- float64.exp(logprob);
+                run added <- addAt(masses, place, mass);
+                run within <- float64.add(inside, mass);
+                become gather[<](rest, count, added, within)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Each mass of `masses` divided by `inside`, in order.
+@[ checks ]
+def rec normalised(masses : List(f64), inside : f64) -> -F List(f64) {
+  case masses {
+    Nil => (Nil : List(f64)),
+    Cons(held, rest) => {
+      run share <- float64.div(held, inside);
+      run later <- normalised[<](rest, inside);
+      (Cons(share, later) : List(f64))
+    }
+  }
+}
+
+/// One less `inside`, never below zero.
+@[ checks ]
+def remainder(inside : f64) -> -F f64 {
+  run rest <- float64.sub(1f64, inside);
+  run negative <- float64.lt(rest, 0f64);
+  case negative {
+    true => 0f64,
+    false => rest
+  }
+}
+
+/// Whether `outside` passes `ceiling`.
+@[ checks ]
+def passes(outside : f64, ceiling : Ceiling) -> -F Bool {
+  case ceiling {
+    Unbounded => false,
+    At(most) => {
+      run past <- float64.gt(outside, most);
+      past
+    }
+  }
+}
+
+/// The ruling the tokens `reported` at the answer's position read to for a
+/// question whose options are `options`, refused when its outside mass
+/// passes `ceiling`. Each option holds the summed mass, the exponential of
+/// each log-probability, of the tokens that are its letter, divided by the
+/// mass on every option letter; the outside mass is one less that, never
+/// below zero. It is unread, in this order, for a log-probability that is
+/// NaN or above zero (`Endpoint`), for no mass on any option letter
+/// (`NoLetter`), for an outside mass past the ceiling (`Outside`), and as
+/// `readoutOf` refuses the vector.
+@[ checks ]
+def read(options : List(String), reported : List(Reported), ceiling : Ceiling) -> -F Ruling {
+  run empty <- zeroed(options);
+  run count <- size(String, options);
+  run held <- gather(reported, count, empty, 0f64);
+  case held {
+    Unlogged => Unread(Endpoint),
+    Held(masses, inside) => {
+      run some <- float64.gt(inside, 0f64);
+      case some {
+        false => Unread(NoLetter),
+        true => {
+          run outside <- remainder(inside);
+          run past <- passes(outside, ceiling);
+          case past {
+            true => Unread(Outside),
+            false => {
+              run shares <- normalised(masses, inside);
+              run reading <- readoutOf(shares, outside);
+              become ruling(reading)
+            }
+          }
+        }
       }
     }
   }
@@ -259,7 +436,7 @@ def rec lastHolds(xs : List(String)) -> -F List(Integer) {
 @[ runs("\"A\"") ]
 def firstMost : () => String ;
 def firstMost = thunk {
-  run reading <- readoutOf(Cons(750000, Cons(250000, Nil)), 0);
+  run reading <- readoutOf(Cons(0.75f64, Cons(0.25f64, Nil)), 0f64);
   become letterOf(reading)
 } ;
 
@@ -267,7 +444,7 @@ def firstMost = thunk {
 @[ runs("\"B\"") ]
 def lastMost : () => String ;
 def lastMost = thunk {
-  run reading <- readoutOf(Cons(250000, Cons(750000, Nil)), 0);
+  run reading <- readoutOf(Cons(0.25f64, Cons(0.75f64, Nil)), 0f64);
   become letterOf(reading)
 } ;
 
@@ -275,7 +452,7 @@ def lastMost = thunk {
 @[ runs("\"B\"") ]
 def middleMost : () => String ;
 def middleMost = thunk {
-  run reading <- readoutOf(Cons(250000, Cons(500000, Cons(250000, Nil))), 0);
+  run reading <- readoutOf(Cons(0.25f64, Cons(0.5f64, Cons(0.25f64, Nil))), 0f64);
   become letterOf(reading)
 } ;
 
@@ -283,7 +460,7 @@ def middleMost = thunk {
 @[ runs("\"A\"") ]
 def firstOfThree : () => String ;
 def firstOfThree = thunk {
-  run reading <- readoutOf(Cons(500000, Cons(250000, Cons(250000, Nil))), 0);
+  run reading <- readoutOf(Cons(0.5f64, Cons(0.25f64, Cons(0.25f64, Nil))), 0f64);
   become letterOf(reading)
 } ;
 
@@ -292,61 +469,73 @@ def firstOfThree = thunk {
 def lastOfAll : () => String ;
 def lastOfAll = thunk {
   run all <- lastHolds(letters);
-  run reading <- readoutOf(all, 0);
+  run reading <- readoutOf(all, 0f64);
   become letterOf(reading)
 } ;
 
 /// One option is too few.
 @[ runs("Refuses(Few)") ]
 def one : () => Reading ;
-def one = thunk { become readoutOf(Cons(1000000, Nil), 0) } ;
+def one = thunk { become readoutOf(Cons(1f64, Nil), 0f64) } ;
 
 /// Twenty-seven options are too many.
 @[ runs("Refuses(Many)") ]
 def twentySeven : () => Reading ;
 def twentySeven = thunk {
   run after <- zeroed(letters);
-  become readoutOf(Cons(1000000, after), 0)
+  become readoutOf(Cons(1f64, after), 0f64)
 } ;
 
-/// A sum off one is refused.
+/// A sum off one by more than the tolerance is refused.
 @[ runs("Refuses(Unsummed)") ]
 def offOne : () => Reading ;
-def offOne = thunk { become readoutOf(Cons(750000, Cons(250001, Nil)), 0) } ;
+def offOne = thunk { become readoutOf(Cons(0.75f64, Cons(0.250000002f64, Nil)), 0f64) } ;
+
+/// A sum off one by less than the tolerance is read: `A`.
+@[ runs("\"A\"") ]
+def nearOne : () => String ;
+def nearOne = thunk {
+  run reading <- readoutOf(Cons(0.75f64, Cons(0.2500000005f64, Nil)), 0f64);
+  become letterOf(reading)
+} ;
 
 /// Two halves share the greatest.
 @[ runs("Refuses(Shared)") ]
 def halves : () => Reading ;
-def halves = thunk { become readoutOf(Cons(500000, Cons(500000, Nil)), 0) } ;
+def halves = thunk { become readoutOf(Cons(0.5f64, Cons(0.5f64, Nil)), 0f64) } ;
 
 /// The first and the last share the greatest.
 @[ runs("Refuses(Shared)") ]
 def outerTie : () => Reading ;
-def outerTie = thunk { become readoutOf(Cons(400000, Cons(200000, Cons(400000, Nil))), 0) } ;
+def outerTie = thunk {
+  become readoutOf(Cons(0.4f64, Cons(0.2f64, Cons(0.4f64, Nil))), 0f64)
+} ;
 
 /// The last two share the greatest.
 @[ runs("Refuses(Shared)") ]
 def innerTie : () => Reading ;
-def innerTie = thunk { become readoutOf(Cons(200000, Cons(400000, Cons(400000, Nil))), 0) } ;
+def innerTie = thunk {
+  become readoutOf(Cons(0.2f64, Cons(0.4f64, Cons(0.4f64, Nil))), 0f64)
+} ;
 
 /// Two sharing a lesser value are not tied: `C`.
 @[ runs("\"C\"") ]
 def lesserTie : () => String ;
 def lesserTie = thunk {
-  run reading <- readoutOf(Cons(200000, Cons(200000, Cons(600000, Nil))), 0);
+  run reading <- readoutOf(Cons(0.2f64, Cons(0.2f64, Cons(0.6f64, Nil))), 0f64);
   become letterOf(reading)
 } ;
 
 /// The readout holds its probabilities and its outside mass as given.
-@[ runs("Reads(ReadAs(\"B\", Cons(250000, Cons(750000, Nil)), 500000))") ]
+@[ runs("Reads(ReadAs(\"B\", Cons(0.25f64, Cons(0.75f64, Nil)), 0.5f64))") ]
 def held : () => Reading ;
-def held = thunk { become readoutOf(Cons(250000, Cons(750000, Nil)), 500000) } ;
+def held = thunk { become readoutOf(Cons(0.25f64, Cons(0.75f64, Nil)), 0.5f64) } ;
 
 /// A readout's ruling is the ruling the record carries.
-@[ runs("Read(Cons(250000, Cons(750000, Nil)), 12500)") ]
+@[ runs("Read(Cons(0.25f64, Cons(0.75f64, Nil)), 0.0125f64)") ]
 def readRuling : () => Ruling ;
 def readRuling = thunk {
-  run reading <- readoutOf(Cons(250000, Cons(750000, Nil)), 12500);
+  run reading <- readoutOf(Cons(0.25f64, Cons(0.75f64, Nil)), 0.0125f64);
   become ruling(reading)
 } ;
 
@@ -354,7 +543,7 @@ def readRuling = thunk {
 @[ runs("Unread(Tied)") ]
 def tiedRuling : () => Ruling ;
 def tiedRuling = thunk {
-  run reading <- readoutOf(Cons(500000, Cons(500000, Nil)), 0);
+  run reading <- readoutOf(Cons(0.5f64, Cons(0.5f64, Nil)), 0f64);
   become ruling(reading)
 } ;
 
@@ -362,6 +551,124 @@ def tiedRuling = thunk {
 @[ runs("Unread(Endpoint)") ]
 def unsummedRuling : () => Ruling ;
 def unsummedRuling = thunk {
-  run reading <- readoutOf(Cons(750000, Cons(250001, Nil)), 0);
+  run reading <- readoutOf(Cons(0.75f64, Cons(0.250000002f64, Nil)), 0f64);
   become ruling(reading)
+} ;
+
+/// The three options of the test's question about the sky's colour.
+@[ checks ]
+def colours : List(String) ;
+def colours = Cons("green", Cons("blue", Cons("red", Nil))) ;
+
+/// The two options of the test's yes-or-no question.
+@[ checks ]
+def yesNo : List(String) ;
+def yesNo = Cons("yes", Cons("no", Nil)) ;
+
+/// `the_options_share_the_mass_on_their_letters`: `B` at 0.5 and ` B` at
+/// 0.1, one letter whose masses add; `A` at 0.2; the lowercase `b` at 0.05
+/// and the word `Blue` at 0.04, no letter; and `D` at 0.05, past the last of
+/// the three options. `A` holds 0.2 of the 0.8 on the option letters, `B`
+/// 0.6 of it and `C` none, and 0.2 is outside.
+@[ runs("Read(Cons(0.25f64, Cons(0.7499999999999999f64, Cons(0f64, Nil))), 0.19999999999999996f64)") ]
+def shared : () => Ruling ;
+def shared = thunk {
+  run half <- -0.6931471805599453f64;
+  run tenth <- -2.3025850929940455f64;
+  run fifth <- -1.6094379124341003f64;
+  run twentieth <- -2.995732273553991f64;
+  run twentyFifth <- -3.2188758248682006f64;
+  become read(
+    colours,
+    Cons(
+      Lettered(1, half),
+      Cons(
+        Lettered(1, tenth),
+        Cons(
+          Lettered(0, fifth),
+          Cons(
+            Unlettered(twentieth),
+            Cons(Lettered(3, twentieth), Cons(Unlettered(twentyFifth), Nil))
+          )
+        )
+      )
+    ),
+    Unbounded
+  )
+} ;
+
+/// An empty report holds no letter.
+@[ runs("Unread(NoLetter)") ]
+def empty : () => Ruling ;
+def empty = thunk { become read(yesNo, Nil, Unbounded) } ;
+
+/// A report of a word and a letter past the options holds no option letter.
+@[ runs("Unread(NoLetter)") ]
+def wordy : () => Ruling ;
+def wordy = thunk {
+  run word <- -0.1f64;
+  run past <- -2f64;
+  become read(yesNo, Cons(Unlettered(word), Cons(Lettered(2, past), Nil)), Unbounded)
+} ;
+
+/// A NaN is no log-probability.
+@[ runs("Unread(Endpoint)") ]
+def unloggedNan : () => Ruling ;
+def unloggedNan = thunk {
+  run first <- -0.1f64;
+  run nan <- float64.div(0f64, 0f64);
+  become read(yesNo, Cons(Lettered(0, first), Cons(Lettered(1, nan), Nil)), Unbounded)
+} ;
+
+/// Nor is a log-probability above zero.
+@[ runs("Unread(Endpoint)") ]
+def unloggedPositive : () => Ruling ;
+def unloggedPositive = thunk {
+  run first <- -0.1f64;
+  become read(yesNo, Cons(Lettered(0, first), Cons(Lettered(1, 0.5f64), Nil)), Unbounded)
+} ;
+
+/// Nor an infinity.
+@[ runs("Unread(Endpoint)") ]
+def unloggedInfinite : () => Ruling ;
+def unloggedInfinite = thunk {
+  run first <- -0.1f64;
+  run infinite <- float64.div(1f64, 0f64);
+  become read(yesNo, Cons(Lettered(0, first), Cons(Lettered(1, infinite), Nil)), Unbounded)
+} ;
+
+/// `A` at 0.25, `B` at 0.125 and the word `Hmm` at 0.5: 0.625 is outside.
+@[ checks ]
+def wide() -> -F List(Reported) {
+  run quarter <- -1.3862943611198906f64;
+  run eighth <- -2.0794415416798357f64;
+  run half <- -0.6931471805599453f64;
+  (Cons(
+    Lettered(0, quarter),
+    Cons(Lettered(1, eighth), Cons(Unlettered(half), Nil))
+  ) : List(Reported))
+}
+
+/// An outside mass of 0.625 passes a ceiling of 0.5.
+@[ runs("Unread(Outside)") ]
+def pastCeiling : () => Ruling ;
+def pastCeiling = thunk {
+  run reported <- wide();
+  become read(yesNo, reported, At(0.5f64))
+} ;
+
+/// And is read under a ceiling of 0.75, `A` holding the most.
+@[ runs("Read(Cons(0.6666666666666666f64, Cons(0.3333333333333334f64, Nil)), 0.625f64)") ]
+def underCeiling : () => Ruling ;
+def underCeiling = thunk {
+  run reported <- wide();
+  become read(yesNo, reported, At(0.75f64))
+} ;
+
+/// Two options sharing the most are tied.
+@[ runs("Unread(Tied)") ]
+def evenly : () => Ruling ;
+def evenly = thunk {
+  run half <- -0.6931471805599453f64;
+  become read(yesNo, Cons(Lettered(0, half), Cons(Lettered(1, half), Nil)), Unbounded)
 } ;

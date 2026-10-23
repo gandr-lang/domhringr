@@ -90,7 +90,7 @@ def landingRubric : Rubric ;
 def landingRubric = Written(
   "landing",
   Cons("note.txt", Nil),
-  #{low = 250000, high = 750000},
+  #{low = 0.25f64, high = 0.75f64},
   Cons(
     Asked(
       "landed",
@@ -125,15 +125,15 @@ def landingQuestions = Cons(911, Cons(912, Cons(913, Nil))) ;
 
 /// The table's ruling `read A A=0.9 B=0.1 outside=0`.
 @[ checks ]
-def met = (Read(Cons(900000, Cons(100000, Nil)), 0) : Ruling);
+def met = (Read(Cons(0.9f64, Cons(0.1f64, Nil)), 0f64) : Ruling);
 
 /// The table's ruling `read A A=0.6 B=0.4 outside=0`.
 @[ checks ]
-def undecided = (Read(Cons(600000, Cons(400000, Nil)), 0) : Ruling);
+def undecided = (Read(Cons(0.6f64, Cons(0.4f64, Nil)), 0f64) : Ruling);
 
 /// The table's ruling `read B A=0.1 B=0.9 outside=0`.
 @[ checks ]
-def unmet = (Read(Cons(100000, Cons(900000, Nil)), 0) : Ruling);
+def unmet = (Read(Cons(0.1f64, Cons(0.9f64, Nil)), 0f64) : Ruling);
 
 /// The first grading: an empty table, every question unread as malformed.
 @[ checks ]
@@ -201,12 +201,12 @@ def unlistedEvaluation : () => Evaluation ;
 def unlistedEvaluation = thunk { become ownerRules(unlisted) } ;
 
 /// `landed` met and `passed` undecided beside `tested` unread: refused.
-@[ runs("Evaluated(Verdict(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(900000, Cons(100000, Nil)), 0)), Cons(OnQuestion(912, Read(Cons(600000, Cons(400000, Nil)), 0)), Cons(OnQuestion(913, Unread(Malformed)), Nil)))), Cons(Met, Cons(Undecided, Cons(Refused, Nil))), Refused)") ]
+@[ runs("Evaluated(Verdict(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(0.9f64, Cons(0.1f64, Nil)), 0f64)), Cons(OnQuestion(912, Read(Cons(0.6f64, Cons(0.4f64, Nil)), 0f64)), Cons(OnQuestion(913, Unread(Malformed)), Nil)))), Cons(Met, Cons(Undecided, Cons(Refused, Nil))), Refused)") ]
 def partialEvaluation : () => Evaluation ;
 def partialEvaluation = thunk { become ownerRules(partial) } ;
 
 /// `tested` read as unmet: unmet, whatever the others say.
-@[ runs("Evaluated(Verdict(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(900000, Cons(100000, Nil)), 0)), Cons(OnQuestion(912, Read(Cons(600000, Cons(400000, Nil)), 0)), Cons(OnQuestion(913, Read(Cons(100000, Cons(900000, Nil)), 0)), Nil)))), Cons(Met, Cons(Undecided, Cons(Unmet, Nil))), Unmet)") ]
+@[ runs("Evaluated(Verdict(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(0.9f64, Cons(0.1f64, Nil)), 0f64)), Cons(OnQuestion(912, Read(Cons(0.6f64, Cons(0.4f64, Nil)), 0f64)), Cons(OnQuestion(913, Read(Cons(0.1f64, Cons(0.9f64, Nil)), 0f64)), Nil)))), Cons(Met, Cons(Undecided, Cons(Unmet, Nil))), Unmet)") ]
 def completeEvaluation : () => Evaluation ;
 def completeEvaluation = thunk { become ownerRules(complete) } ;
 
@@ -238,7 +238,7 @@ def gradedCurrent = thunk {
 
 /// Each grading's step marks every question with its grade, as the replay
 /// prints them.
-@[ runs("Some(Cons(StepAt(2, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(3, VerdictStep(2, 10, 903, 705, Cons(OnQuestion(911, Unread(Malformed)), Cons(OnQuestion(912, Unread(Malformed)), Cons(OnQuestion(913, Unread(Malformed)), Nil))))), Cons(StepAt(4, GradedStep(2, 3, 903, Cons(MarkedAs(911, Refused), Cons(MarkedAs(912, Refused), Cons(MarkedAs(913, Refused), Nil))), Refused)), Cons(StepAt(5, VerdictStep(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(900000, Cons(100000, Nil)), 0)), Cons(OnQuestion(912, Read(Cons(600000, Cons(400000, Nil)), 0)), Cons(OnQuestion(913, Unread(Malformed)), Nil))))), Cons(StepAt(6, GradedStep(2, 5, 903, Cons(MarkedAs(911, Met), Cons(MarkedAs(912, Undecided), Cons(MarkedAs(913, Refused), Nil))), Refused)), Cons(StepAt(7, VerdictStep(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(900000, Cons(100000, Nil)), 0)), Cons(OnQuestion(912, Read(Cons(600000, Cons(400000, Nil)), 0)), Cons(OnQuestion(913, Read(Cons(100000, Cons(900000, Nil)), 0)), Nil))))), Cons(StepAt(8, GradedStep(2, 7, 903, Cons(MarkedAs(911, Met), Cons(MarkedAs(912, Undecided), Cons(MarkedAs(913, Unmet), Nil))), Unmet)), Nil))))))))") ]
+@[ runs("Some(Cons(StepAt(2, DispatchStep(1, 20, BriefAt(\"domhringr://100/briefs/one\"))), Cons(StepAt(3, VerdictStep(2, 10, 903, 705, Cons(OnQuestion(911, Unread(Malformed)), Cons(OnQuestion(912, Unread(Malformed)), Cons(OnQuestion(913, Unread(Malformed)), Nil))))), Cons(StepAt(4, GradedStep(2, 3, 903, Cons(MarkedAs(911, Refused), Cons(MarkedAs(912, Refused), Cons(MarkedAs(913, Refused), Nil))), Refused)), Cons(StepAt(5, VerdictStep(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(0.9f64, Cons(0.1f64, Nil)), 0f64)), Cons(OnQuestion(912, Read(Cons(0.6f64, Cons(0.4f64, Nil)), 0f64)), Cons(OnQuestion(913, Unread(Malformed)), Nil))))), Cons(StepAt(6, GradedStep(2, 5, 903, Cons(MarkedAs(911, Met), Cons(MarkedAs(912, Undecided), Cons(MarkedAs(913, Refused), Nil))), Refused)), Cons(StepAt(7, VerdictStep(2, 10, 903, 705, Cons(OnQuestion(911, Read(Cons(0.9f64, Cons(0.1f64, Nil)), 0f64)), Cons(OnQuestion(912, Read(Cons(0.6f64, Cons(0.4f64, Nil)), 0f64)), Cons(OnQuestion(913, Read(Cons(0.1f64, Cons(0.9f64, Nil)), 0f64)), Nil))))), Cons(StepAt(8, GradedStep(2, 7, 903, Cons(MarkedAs(911, Met), Cons(MarkedAs(912, Undecided), Cons(MarkedAs(913, Unmet), Nil))), Unmet)), Nil))))))))") ]
 def gradedSteps : () => Maybe(List(Stepped)) ;
 def gradedSteps = thunk {
   run commits <- gradedCommits();
