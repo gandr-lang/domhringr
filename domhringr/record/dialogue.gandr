@@ -116,12 +116,12 @@ def before(a : Place, b : Place) -> -F Bool {
       PlacedAt(other, otherSeq, otherCommit) => {
         run earlier <- attempt < other;
         case earlier {
-          true => earlier,
+          true => true,
           false => {
             run same <- attempt == other;
             case same {
               true => seq < otherSeq,
-              false => same
+              false => false
             }
           }
         }

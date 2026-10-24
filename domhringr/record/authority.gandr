@@ -217,20 +217,20 @@ def merge(a : Past, b : Past) -> -F Past {
 def same(a : Grade, b : Grade) -> -F Bool {
   case a {
     Met => case b {
-      Met => 0 == 0,
-      _ => 0 == 1
+      Met => true,
+      _ => false
     },
     Unmet => case b {
-      Unmet => 0 == 0,
-      _ => 0 == 1
+      Unmet => true,
+      _ => false
     },
     Undecided => case b {
-      Undecided => 0 == 0,
-      _ => 0 == 1
+      Undecided => true,
+      _ => false
     },
     Refused => case b {
-      Refused => 0 == 0,
-      _ => 0 == 1
+      Refused => true,
+      _ => false
     }
   }
 }
@@ -240,8 +240,8 @@ def same(a : Grade, b : Grade) -> -F Bool {
 def unread(ruled : Ruled) -> -F Bool {
   case ruled {
     OnQuestion(question, ruling) => case ruling {
-      Read(probabilities, outside) => 0 == 1,
-      Unread(reason) => 0 == 0
+      Read(probabilities, outside) => false,
+      Unread(reason) => true
     }
   }
 }
@@ -252,21 +252,21 @@ def unread(ruled : Ruled) -> -F Bool {
 def rec answers(grades : List(Grade), rulings : List(Ruled)) -> -F Bool {
   case grades {
     Nil => case rulings {
-      Nil => 0 == 0,
-      Cons(ruled, rest) => 0 == 1
+      Nil => true,
+      Cons(ruled, rest) => false
     },
     Cons(grade, moreGrades) => case rulings {
-      Nil => 0 == 1,
+      Nil => false,
       Cons(ruled, moreRulings) => {
         run refused <- same(grade, Refused);
         run blank <- unread(ruled);
         case refused {
           true => case blank {
             true => become answers[<](moreGrades, moreRulings),
-            false => blank
+            false => false
           },
           false => case blank {
-            true => refused,
+            true => false,
             false => become answers[<](moreGrades, moreRulings)
           }
         }
