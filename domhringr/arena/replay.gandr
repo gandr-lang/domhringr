@@ -106,12 +106,12 @@ data Resolved : Type {
 @[ checks ]
 def action(kind : Kind) -> -F Maybe(Move) {
   case kind {
-    Dispatch(edition, seat, brief) => (Some(DispatchMove) : Maybe(Move)),
-    Report(dispatch, content, summary) => (Some(ReportMove) : Maybe(Move)),
-    Handoff(dispatch, to) => (Some(HandoffMove) : Maybe(Move)),
-    Retire(dispatch) => (Some(RetireMove) : Maybe(Move)),
-    Pause(dispatch) => (Some(PauseMove) : Maybe(Move)),
-    Verdict(dispatch, judge, rubric, transcript, answers) => (Some(VerdictMove) : Maybe(Move)),
+    Dispatch(edition, seat, brief) => Some(DispatchMove),
+    Report(dispatch, content, summary) => Some(ReportMove),
+    Handoff(dispatch, to) => Some(HandoffMove),
+    Retire(dispatch) => Some(RetireMove),
+    Pause(dispatch) => Some(PauseMove),
+    Verdict(dispatch, judge, rubric, transcript, answers) => Some(VerdictMove),
     Verified(
       dispatch,
       runner,
@@ -119,14 +119,14 @@ def action(kind : Kind) -> -F Maybe(Move) {
       step,
       output,
       status
-    ) => (Some(VerifiedMove) : Maybe(Move)),
-    Graded(verdict, grades, composed) => (Some(GradedMove) : Maybe(Move)),
+    ) => Some(VerifiedMove),
+    Graded(verdict, grades, composed) => Some(GradedMove),
     Decide(dispatch, operator, decision) => {
       run chosen <- choice(decision);
-      (Some(DecideMove(chosen)) : Maybe(Move))
+      Some(DecideMove(chosen))
     },
-    Landed(decided, merge) => (Some(LandedMove) : Maybe(Move)),
-    _ => (None : Maybe(Move))
+    Landed(decided, merge) => Some(LandedMove),
+    _ => None
   }
 }
 
@@ -163,13 +163,13 @@ def rec judging(verdict : Integer, judges : List(Judging)) -> -F Phase {
 @[ checks ]
 def rec rejudged(verdict : Integer, phase : Phase, judges : List(Judging)) -> -F List(Judging) {
   case judges {
-    Nil => (Cons(JudgingOf(verdict, phase), Nil) : List(Judging)),
+    Nil => Cons(JudgingOf(verdict, phase), Nil),
     Cons(held, rest) => case held {
       JudgingOf(of, was) => case of == verdict {
-        true => (Cons(JudgingOf(verdict, phase), rest) : List(Judging)),
+        true => Cons(JudgingOf(verdict, phase), rest),
         false => {
           run later <- rejudged[<](verdict, phase, rest);
-          (Cons(held, later) : List(Judging))
+          Cons(held, later)
         }
       }
     }
@@ -209,10 +209,10 @@ def movedOn(on : Channel, plays : Plays, phase : Phase) -> -F Plays {
 @[ checks ]
 def rec relatedKind(commit : Integer, related : List(Related)) -> -F Maybe(Kind) {
   case related {
-    Nil => (None : Maybe(Kind)),
+    Nil => None,
     Cons(entry, rest) => case entry {
       RelatedAt(held, kind) => case held == commit {
-        true => (Some(kind) : Maybe(Kind)),
+        true => Some(kind),
         false => become relatedKind[<](commit, rest)
       }
     }
@@ -352,7 +352,7 @@ def rec admit(
                       dispatch,
                       edition,
                       later,
-                      (Cons(RelatedAt(commit, kind), related) : List(Related)),
+                      Cons(RelatedAt(commit, kind), related),
                       recorded,
                       rest
                     )
@@ -381,9 +381,9 @@ def replay(attempt : Integer, moves : List(Attested)) -> -F Replay {
           true => become admit(
             commit,
             edition,
-            PlaysAt(SlotFresh, (Nil : List(Judging)), DecisionFresh),
-            (Nil : List(Related)),
-            Task((Nil : List(Stepped)), Undispatched),
+            PlaysAt(SlotFresh, Nil, DecisionFresh),
+            Nil,
+            Task(Nil, Undispatched),
             moves
           )
         },
@@ -398,9 +398,9 @@ def replay(attempt : Integer, moves : List(Attested)) -> -F Replay {
 def standingOf(replayed : Replay) -> -F Maybe(Current) {
   case replayed {
     Conformed(task) => case task {
-      Task(steps, current) => (Some(current) : Maybe(Current))
+      Task(steps, current) => Some(current)
     },
-    _ => (None : Maybe(Current))
+    _ => None
   }
 }
 
@@ -431,7 +431,7 @@ def reportAfterRetire = thunk {
   run late <- inFirst(3, 4, 20, Report(1, 701, "late"));
   become replay(
     1,
-    (Cons(opened, Cons(reported, Cons(retired, Cons(late, Nil)))) : List(Attested))
+    Cons(opened, Cons(reported, Cons(retired, Cons(late, Nil))))
   )
 } ;
 
@@ -443,7 +443,7 @@ def landingUndecided : () => Replay ;
 def landingUndecided = thunk {
   run opened <- inFirst(0, 1, 10, dispatched);
   run landing <- inFirst(1, 2, 10, Landed(9, revision));
-  become replay(1, (Cons(opened, Cons(landing, Nil)) : List(Attested)))
+  become replay(1, Cons(opened, Cons(landing, Nil)))
 } ;
 
 /// A grading of no verdict sends another payload than the verdict its fresh
@@ -452,8 +452,8 @@ def landingUndecided = thunk {
 def gradingUnjudged : () => Replay ;
 def gradingUnjudged = thunk {
   run opened <- inFirst(0, 1, 10, dispatched);
-  run grading <- inFirst(1, 3, 10, Graded(2, (Nil : List(Grade)), Met));
-  become replay(1, (Cons(opened, Cons(grading, Nil)) : List(Attested)))
+  run grading <- inFirst(1, 3, 10, Graded(2, Nil, Met));
+  become replay(1, Cons(opened, Cons(grading, Nil)))
 } ;
 
 /// A second grading of one verdict resumes its ended judge's channel.
@@ -461,12 +461,12 @@ def gradingUnjudged = thunk {
 def gradedTwice : () => Replay ;
 def gradedTwice = thunk {
   run opened <- inFirst(0, 1, 10, dispatched);
-  run judged <- inFirst(1, 2, 10, Verdict(1, 10, 903, 705, (Nil : List(Ruled))));
-  run grading <- inFirst(2, 3, 10, Graded(2, (Nil : List(Grade)), Met));
-  run again <- inFirst(3, 3, 10, Graded(2, (Nil : List(Grade)), Met));
+  run judged <- inFirst(1, 2, 10, Verdict(1, 10, 903, 705, Nil));
+  run grading <- inFirst(2, 3, 10, Graded(2, Nil, Met));
+  run again <- inFirst(3, 3, 10, Graded(2, Nil, Met));
   become replay(
     1,
-    (Cons(opened, Cons(judged, Cons(grading, Cons(again, Nil)))) : List(Attested))
+    Cons(opened, Cons(judged, Cons(grading, Cons(again, Nil))))
   )
 } ;
 
@@ -477,7 +477,7 @@ def decidedTwice = thunk {
   run opened <- inFirst(0, 1, 10, dispatched);
   run decided <- inFirst(1, 2, 10, Decide(1, 10, Land));
   run again <- inFirst(2, 2, 10, Decide(1, 10, Land));
-  become replay(1, (Cons(opened, Cons(decided, Cons(again, Nil))) : List(Attested)))
+  become replay(1, Cons(opened, Cons(decided, Cons(again, Nil))))
 } ;
 
 /// A second landing of one decision resumes the ended decision channel.
@@ -490,7 +490,7 @@ def landedTwice = thunk {
   run again <- inFirst(3, 3, 10, Landed(2, revision));
   become replay(
     1,
-    (Cons(opened, Cons(decided, Cons(landing, Cons(again, Nil)))) : List(Attested))
+    Cons(opened, Cons(decided, Cons(landing, Cons(again, Nil))))
   )
 } ;
 
@@ -500,7 +500,7 @@ def reworkDecided : () => Maybe(Current) ;
 def reworkDecided = thunk {
   run opened <- inFirst(0, 1, 10, dispatched);
   run decided <- inFirst(1, 2, 10, Decide(1, 10, Rework("again")));
-  run replayed <- replay(1, (Cons(opened, Cons(decided, Nil)) : List(Attested)));
+  run replayed <- replay(1, Cons(opened, Cons(decided, Nil)));
   become standingOf(replayed)
 } ;
 
@@ -511,7 +511,7 @@ def reworkLanded = thunk {
   run opened <- inFirst(0, 1, 10, dispatched);
   run decided <- inFirst(1, 2, 10, Decide(1, 10, Rework("again")));
   run landing <- inFirst(2, 3, 10, Landed(2, revision));
-  become replay(1, (Cons(opened, Cons(decided, Cons(landing, Nil))) : List(Attested)))
+  become replay(1, Cons(opened, Cons(decided, Cons(landing, Nil))))
 } ;
 
 /// A decision to abandon conforms, the attempt decided.
@@ -520,7 +520,7 @@ def abandonDecided : () => Maybe(Current) ;
 def abandonDecided = thunk {
   run opened <- inFirst(0, 1, 10, dispatched);
   run decided <- inFirst(1, 2, 10, Decide(1, 10, Abandon));
-  run replayed <- replay(1, (Cons(opened, Cons(decided, Nil)) : List(Attested)));
+  run replayed <- replay(1, Cons(opened, Cons(decided, Nil)));
   become standingOf(replayed)
 } ;
 
@@ -531,7 +531,7 @@ def abandonLanded = thunk {
   run opened <- inFirst(0, 1, 10, dispatched);
   run decided <- inFirst(1, 2, 10, Decide(1, 10, Abandon));
   run landing <- inFirst(2, 3, 10, Landed(2, revision));
-  become replay(1, (Cons(opened, Cons(decided, Cons(landing, Nil))) : List(Attested)))
+  become replay(1, Cons(opened, Cons(decided, Cons(landing, Nil))))
 } ;
 
 /// A dispatch naming edition 99 is refused at sequence 0 by the edition's
@@ -540,7 +540,7 @@ def abandonLanded = thunk {
 def unknownEdition : () => Replay ;
 def unknownEdition = thunk {
   run opened <- inFirst(0, 1, 10, Dispatch(99, 20, BriefHashed(5)));
-  become replay(1, (Cons(opened, Nil) : List(Attested)))
+  become replay(1, Cons(opened, Nil))
 } ;
 
 /// An attempt opened by a report has no dispatch at sequence zero.
@@ -548,7 +548,7 @@ def unknownEdition = thunk {
 def openedByReport : () => Replay ;
 def openedByReport = thunk {
   run reported <- inFirst(0, 2, 20, Report(1, 701, "first"));
-  become replay(1, (Cons(reported, Nil) : List(Attested)))
+  become replay(1, Cons(reported, Nil))
 } ;
 
 /// A report on another dispatch names no move of this one: the monitor
@@ -558,13 +558,13 @@ def foreignReport : () => Replay ;
 def foreignReport = thunk {
   run opened <- inFirst(0, 1, 10, dispatched);
   run foreign <- inFirst(1, 2, 20, Report(8, 701, "foreign"));
-  become replay(1, (Cons(opened, Cons(foreign, Nil)) : List(Attested)))
+  become replay(1, Cons(opened, Cons(foreign, Nil)))
 } ;
 
 /// An attempt with no attested move is absent.
 @[ runs("Absent(1)") ]
 def noMoves : () => Replay ;
-def noMoves = thunk { become replay(1, (Nil : List(Attested))) } ;
+def noMoves = thunk { become replay(1, Nil) } ;
 
 /// A receipt outside the task's moves in the range is no move.
 @[ runs("RefusedMove(1, 1, NotMove)") ]
@@ -572,7 +572,7 @@ def noted : () => Replay ;
 def noted = thunk {
   run opened <- inFirst(0, 1, 10, dispatched);
   run note <- inFirst(1, 2, 10, Note("aside"));
-  become replay(1, (Cons(opened, Cons(note, Nil)) : List(Attested)))
+  become replay(1, Cons(opened, Cons(note, Nil)))
 } ;
 
 /// `proved_attempts_replay_every_standing`: the fixture's second attempt,
@@ -590,17 +590,17 @@ def lifecycle() -> -F List(Attested) {
     5,
     16,
     10,
-    Verdict(11, 10, 903, 705, (Cons(OnQuestion(901, Unread(Tied)), Nil) : List(Ruled)))
+    Verdict(11, 10, 903, 705, Cons(OnQuestion(901, Unread(Tied)), Nil))
   );
   run graded <- inSecond(
     6,
     17,
     10,
-    Graded(16, (Cons(Refused, Nil) : List(Grade)), Refused)
+    Graded(16, Cons(Refused, Nil), Refused)
   );
   run decided <- inSecond(7, 18, 10, Decide(11, 10, Land));
   run landing <- inSecond(8, 19, 10, Landed(18, revision));
-  (Cons(
+  Cons(
     opened,
     Cons(
       held,
@@ -612,20 +612,20 @@ def lifecycle() -> -F List(Attested) {
         )
       )
     )
-  ) : List(Attested))
+  )
 }
 
 /// The first `count` moves of a list.
 @[ checks ]
 def rec prefix(count : Integer, moves : List(Attested)) -> -F List(Attested) {
   case count == 0 {
-    true => (Nil : List(Attested)),
+    true => Nil,
     false => case moves {
       Nil => moves,
       Cons(move, rest) => {
         run fewer <- count - 1;
         run later <- prefix[<](fewer, rest);
-        (Cons(move, later) : List(Attested))
+        Cons(move, later)
       }
     }
   }
@@ -692,5 +692,5 @@ def pausedUnderOne : () => Replay ;
 def pausedUnderOne = thunk {
   run held <- inSecond(1, 12, 20, Pause(11));
   run opened <- inSecond(0, 11, 10, Dispatch(1, 20, BriefHashed(5)));
-  become replay(2, (Cons(opened, Cons(held, Nil)) : List(Attested)))
+  become replay(2, Cons(opened, Cons(held, Nil)))
 } ;

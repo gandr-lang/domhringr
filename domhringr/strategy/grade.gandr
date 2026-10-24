@@ -72,11 +72,11 @@ def grade(band : Band, ruling : Ruling) -> -F Grade {
 @[ checks ]
 def rec grades(band : Band, rulings : List(Ruling)) -> -F List(Grade) {
   case rulings {
-    Nil => (Nil : List(Grade)),
+    Nil => Nil,
     Cons(ruling, rest) => {
       run graded <- grade(band, ruling);
       run later <- grades[<](band, rest);
-      (Cons(graded, later) : List(Grade))
+      Cons(graded, later)
     }
   }
 }

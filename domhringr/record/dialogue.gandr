@@ -59,7 +59,7 @@ data Derivation : Type {
 @[ checks ]
 def answering(step : Step) -> -F Maybe(Integer) {
   case step {
-    DispatchStep(edition, seat, brief) => (None : Maybe(Integer)),
+    DispatchStep(edition, seat, brief) => None,
     ReportStep(dispatch, author, content, summary) => Some(dispatch),
     HandoffStep(dispatch, giver, to) => Some(dispatch),
     RetireStep(dispatch, author) => Some(dispatch),
@@ -76,7 +76,7 @@ def answering(step : Step) -> -F Maybe(Integer) {
 @[ checks ]
 def rec positionOf(dispatch : Integer, positions : List(Position)) -> -F Maybe(Position) {
   case positions {
-    Nil => (None : Maybe(Position)),
+    Nil => None,
     Cons(position, rest) => case position {
       Began(began, attempt, last) => case began == dispatch {
         true => Some(position),
@@ -94,13 +94,13 @@ def rec standAt(
   positions : List(Position)
 ) -> -F List(Position) {
   case positions {
-    Nil => (Nil : List(Position)),
+    Nil => Nil,
     Cons(position, rest) => {
       run later <- standAt[<](dispatch, last, rest);
       case position {
         Began(began, attempt, was) => case began == dispatch {
-          true => (Cons(Began(began, attempt, last), later) : List(Position)),
-          false => (Cons(position, later) : List(Position))
+          true => Cons(Began(began, attempt, last), later),
+          false => Cons(position, later)
         }
       }
     }
@@ -134,14 +134,14 @@ def before(a : Place, b : Place) -> -F Bool {
 @[ checks ]
 def rec inPlace(move : Place, places : List(Place)) -> -F List(Place) {
   case places {
-    Nil => (Cons(move, Nil) : List(Place)),
+    Nil => Cons(move, Nil),
     Cons(held, rest) => {
       run first <- before(move, held);
       case first {
-        true => (Cons(move, places) : List(Place)),
+        true => Cons(move, places),
         false => {
           run later <- inPlace[<](move, rest);
-          (Cons(held, later) : List(Place))
+          Cons(held, later)
         }
       }
     }
@@ -167,7 +167,7 @@ def rec placeSteps(
           become placeSteps[<](
             rest,
             next,
-            (Cons(Began(commit, next, 0), positions) : List(Position)),
+            Cons(Began(commit, next, 0), positions),
             more
           )
         },
@@ -197,7 +197,7 @@ def derive(steps : List(Stepped)) -> -F Derivation {
 @[ checks ]
 def dialogueOf(folded : Folded) -> -F Maybe(Derivation) {
   case stepsOf(folded) {
-    None => (None : Maybe(Derivation)),
+    None => None,
     Some(steps) => {
       run derived <- derive(steps);
       Some(derived)
@@ -219,7 +219,7 @@ def concurrentCommits() -> -F List(Commit) {
   run verified <- child(6, 10, 4, Verified(3, 10, 904, "check", 706, Exited(0)));
   run byOwner <- merged(7, 10, 5, 6, Dispatch(1, 20, briefOne));
   run byMember <- merged(8, 80, 5, 6, Dispatch(1, 20, briefOne));
-  (Cons(
+  Cons(
     opened,
     Cons(
       granted,
@@ -228,7 +228,7 @@ def concurrentCommits() -> -F List(Commit) {
         Cons(reported, Cons(retired, Cons(verified, Cons(byOwner, Cons(byMember, Nil)))))
       )
     )
-  ) : List(Commit))
+  )
 }
 
 /// Each move takes its own place: the first attempt's four, then each

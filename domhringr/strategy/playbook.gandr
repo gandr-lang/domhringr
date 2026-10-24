@@ -68,12 +68,12 @@ data Ran : Type {
 @[ checks ]
 def rec askedOnce(question : Integer, questions : List(Integer)) -> -F List(Integer) {
   case questions {
-    Nil => (Cons(question, Nil) : List(Integer)),
+    Nil => Cons(question, Nil),
     Cons(held, rest) => case held == question {
       true => questions,
       false => {
         run later <- askedOnce[<](question, rest);
-        (Cons(held, later) : List(Integer))
+        Cons(held, later)
       }
     }
   }
@@ -84,16 +84,16 @@ def rec askedOnce(question : Integer, questions : List(Integer)) -> -F List(Inte
 @[ checks ]
 def rec added(rubric : Integer, question : Integer, gradings : List(Grading)) -> -F List(Grading) {
   case gradings {
-    Nil => (Cons(GradingOf(rubric, Cons(question, Nil)), Nil) : List(Grading)),
+    Nil => Cons(GradingOf(rubric, Cons(question, Nil)), Nil),
     Cons(grading, rest) => case grading {
       GradingOf(held, questions) => case held == rubric {
         true => {
           run asked <- askedOnce(question, questions);
-          (Cons(GradingOf(held, asked), rest) : List(Grading))
+          Cons(GradingOf(held, asked), rest)
         },
         false => {
           run later <- added[<](rubric, question, rest);
-          (Cons(grading, later) : List(Grading))
+          Cons(grading, later)
         }
       }
     }
@@ -121,7 +121,7 @@ def rec gradingsAfter(checks : List(Check), gradings : List(Grading)) -> -F List
 @[ checks ]
 def gradings(playbook : Playbook) -> -F List(Grading) {
   case playbook {
-    PlaybookOf(name, checks) => become gradingsAfter(checks, (Nil : List(Grading)))
+    PlaybookOf(name, checks) => become gradingsAfter(checks, Nil)
   }
 }
 
@@ -129,12 +129,12 @@ def gradings(playbook : Playbook) -> -F List(Grading) {
 @[ checks ]
 def rec verifierSteps(checks : List(Check)) -> -F List(String) {
   case checks {
-    Nil => (Nil : List(String)),
+    Nil => Nil,
     Cons(check, rest) => case check {
       QuestionCheck(id, rubric, question) => become verifierSteps[<](rest),
       VerifierCheck(id) => {
         run later <- verifierSteps[<](rest);
-        (Cons(id, later) : List(String))
+        Cons(id, later)
       }
     }
   }
@@ -152,13 +152,13 @@ def rec verifiedEach(
   runs : List(Ran)
 ) -> -F List(Kind) {
   case steps {
-    Nil => (Nil : List(Kind)),
+    Nil => Nil,
     Cons(id, rest) => case runs {
-      Nil => (Nil : List(Kind)),
+      Nil => Nil,
       Cons(ran, more) => case ran {
         RanAs(output, status) => {
           run later <- verifiedEach[<](dispatch, runner, hash, rest, more);
-          (Cons(Verified(dispatch, runner, hash, id, output, status), later) : List(Kind))
+          Cons(Verified(dispatch, runner, hash, id, output, status), later)
         }
       }
     }
@@ -275,11 +275,11 @@ def ranCommits() -> -F List(Commit) {
   run verified <- verifications(landingPlaybook, 904, 2, 10, landingRuns);
   run asked <- gradings(landingPlaybook);
   case verified {
-    Nil => (Nil : List(Commit)),
+    Nil => Nil,
     Cons(note, rest) => case rest {
-      Nil => (Nil : List(Commit)),
+      Nil => Nil,
       Cons(failing, after) => case asked {
-        Nil => (Nil : List(Commit)),
+        Nil => Nil,
         Cons(grading, more) => {
           run evaluation <- gradingEvaluated(grading, landingRubric, 2, 10, 705, partial);
           case evaluation {
@@ -288,10 +288,10 @@ def ranCommits() -> -F List(Commit) {
               run failed <- child(4, 10, 3, failing);
               run ruled <- child(5, 10, 4, verdict);
               run gradedBy <- child(6, 10, 5, Graded(5, grades, composed));
-              (Cons(
+              Cons(
                 opened,
                 Cons(dispatched, Cons(noted, Cons(failed, Cons(ruled, Cons(gradedBy, Nil)))))
-              ) : List(Commit))
+              )
             }
           }
         }

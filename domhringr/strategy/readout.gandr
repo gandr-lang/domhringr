@@ -245,10 +245,10 @@ def letterOf(reading : Reading) -> -F String {
 @[ checks ]
 def rec zeroed(xs : List(String)) -> -F List(f64) {
   case xs {
-    Nil => (Nil : List(f64)),
+    Nil => Nil,
     Cons(x, rest) => {
       run later <- zeroed[<](rest);
-      (Cons(0f64, later) : List(f64))
+      Cons(0f64, later)
     }
   }
 }
@@ -257,12 +257,12 @@ def rec zeroed(xs : List(String)) -> -F List(f64) {
 @[ checks ]
 def rec lastHolds(xs : List(String)) -> -F List(f64) {
   case xs {
-    Nil => (Nil : List(f64)),
+    Nil => Nil,
     Cons(x, rest) => case rest {
-      Nil => (Cons(1f64, Nil) : List(f64)),
+      Nil => Cons(1f64, Nil),
       Cons(y, more) => {
         run later <- lastHolds[<](rest);
-        (Cons(0f64, later) : List(f64))
+        Cons(0f64, later)
       }
     }
   }
@@ -323,17 +323,17 @@ data Masses : Type {
 @[ checks ]
 def rec addAt(xs : List(f64), place : Integer, mass : f64) -> -F List(f64) {
   case xs {
-    Nil => (Nil : List(f64)),
+    Nil => Nil,
     Cons(x, rest) => {
       run here <- place == 0;
       case here {
         true => {
           run added <- float64.add(x, mass);
-          (Cons(added, rest) : List(f64))
+          Cons(added, rest)
         },
         false => {
           run later <- addAt[<](rest, place - 1, mass);
-          (Cons(x, later) : List(f64))
+          Cons(x, later)
         }
       }
     }
@@ -387,11 +387,11 @@ def rec gather(
 @[ checks ]
 def rec normalised(masses : List(f64), inside : f64) -> -F List(f64) {
   case masses {
-    Nil => (Nil : List(f64)),
+    Nil => Nil,
     Cons(held, rest) => {
       run share <- float64.div(held, inside);
       run later <- normalised[<](rest, inside);
-      (Cons(share, later) : List(f64))
+      Cons(share, later)
     }
   }
 }
@@ -667,10 +667,10 @@ def wide() -> -F List(Reported) {
   run quarter <- -1.3862943611198906f64;
   run eighth <- -2.0794415416798357f64;
   run half <- -0.6931471805599453f64;
-  (Cons(
+  Cons(
     Token("A", quarter),
     Cons(Token("B", eighth), Cons(Token("Hmm", half), Nil))
-  ) : List(Reported))
+  )
 }
 
 /// An outside mass of 0.625 passes a ceiling of 0.5.
