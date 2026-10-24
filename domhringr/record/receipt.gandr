@@ -8,11 +8,9 @@
 // Every key, commit id, hash, digest and fence is an integer the exemplar
 // states: the fragment computes no hash and checks no signature. A proof is
 // the statement of who signed it naming whom, which the fold compares with
-// the key it is checked under. A path, a DNS name and a label are each an
-// integer key with their text beside it: the fold keeps names in the order
-// the Rust crate's maps keep, and no admitted form orders two strings (gandr
-// #2333), so a name is ordered and compared by its key, and an exemplar
-// numbers names in their text's order.
+// the key it is checked under. A path, a DNS name and a label are each their
+// text: the fold keeps names in the order the Rust crate's maps keep, the
+// texts' byte order, which `<` on strings is.
 
 // Lists, and the rubric the grades come from.
 import "../strategy/rubric.gandr" ;
@@ -42,10 +40,11 @@ data EndpointAddr : Type {
   EndpointAt : (key : Integer, port : Integer) --> EndpointAddr;
 }
 
-/// A path, a DNS name or a label: the key it is compared by, and its text.
+/// A path, a DNS name or a label: its text, by which it is compared and
+/// ordered.
 @[ checks ]
 data Name : Type {
-  Named : (key : Integer, text : String) --> Name;
+  Named : (text : String) --> Name;
 }
 
 /// What a path is bound to: an anchor, written as its text, an endpoint by
