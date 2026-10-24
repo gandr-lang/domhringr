@@ -1188,6 +1188,7 @@ version = "0.0.0"
 dependencies = [
  "gandr-kernel-conversion-trace",
  "gandr-kernel-strata",
+ "gandr-theory-path-orders",
  "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
  "quenchant-shape",
 ]
@@ -1232,6 +1233,7 @@ dependencies = [
 name = "gandr-theory-cell-complexes"
 version = "0.0.0"
 dependencies = [
+ "gandr-theory-path-orders",
  "gandr-theory-spec-combinators",
  "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
  "quenchant-shape",
@@ -1273,8 +1275,16 @@ dependencies = [
 name = "gandr-theory-levitation"
 version = "0.0.0"
 dependencies = [
+ "gandr-theory-path-orders",
  "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
  "quenchant-shape",
+]
+
+[[package]]
+name = "gandr-theory-path-orders"
+version = "0.0.0"
+dependencies = [
+ "quenchant-anodized 0.0.0 (git+https://github.com/gandr-lang/quenchant?rev=8b8d0702d69409549e855606a85492c777e05fc9)",
 ]
 
 [[package]]

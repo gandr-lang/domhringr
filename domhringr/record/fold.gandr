@@ -188,10 +188,10 @@ data Task : Type {
   Task : (steps : List(Stepped), current : Current) --> Task;
 }
 
-/// What a peer makes of a tree. Members, admitted commits and claims are
-/// held in key order; bindings, introductions, the book and the indexes in
-/// the order of their keys; notes, attestations and refusals in canonical
-/// order.
+/// What a peer makes of a tree. Members, admitted commits and the book are
+/// held in key order; claims, bindings and introductions in the order of
+/// their names; the indexes in the order of their keys; notes, attestations
+/// and refusals in canonical order.
 @[ checks ]
 data View : Type {
   View : (
@@ -1205,11 +1205,11 @@ def admission(
   }
 }
 
-/// The key a path, a name or a label is compared by.
+/// The text a path, a name or a label is compared and ordered by.
 @[ checks ]
-def keyOf(name : Name) -> -F Integer {
+def textOf(name : Name) -> -F String {
   case name {
-    Named(key, text) => key
+    Named(text) => text
   }
 }
 
@@ -1221,11 +1221,11 @@ def rec rebind(binding : Binding, bindings : List(Binding)) -> -F List(Binding) 
       Nil => (Cons(binding, Nil) : List(Binding)),
       Cons(held, rest) => case held {
         BoundBy(heldPath, heldAuthor, heldTarget) => {
-          run key <- keyOf(path);
-          run heldKey <- keyOf(heldPath);
-          case key < heldKey {
+          run text <- textOf(path);
+          run heldText <- textOf(heldPath);
+          case text < heldText {
             true => (Cons(binding, bindings) : List(Binding)),
-            false => case key == heldKey {
+            false => case text == heldText {
               true => (Cons(binding, rest) : List(Binding)),
               false => {
                 run later <- rebind[<](binding, rest);
@@ -1245,11 +1245,11 @@ def rec claim(domain : Name, claims : List(Name)) -> -F List(Name) {
   case claims {
     Nil => (Cons(domain, Nil) : List(Name)),
     Cons(held, rest) => {
-      run key <- keyOf(domain);
-      run heldKey <- keyOf(held);
-      case key < heldKey {
+      run text <- textOf(domain);
+      run heldText <- textOf(held);
+      case text < heldText {
         true => (Cons(domain, claims) : List(Name)),
-        false => case key == heldKey {
+        false => case text == heldText {
           true => claims,
           false => {
             run later <- claim[<](domain, rest);
@@ -1272,11 +1272,11 @@ def rec reintroduce(
       Nil => (Cons(introduction, Nil) : List(Introduction)),
       Cons(held, rest) => case held {
         IntroducedBy(heldLabel, heldAuthor, heldTree) => {
-          run key <- keyOf(label);
-          run heldKey <- keyOf(heldLabel);
-          case key < heldKey {
+          run text <- textOf(label);
+          run heldText <- textOf(heldLabel);
+          case text < heldText {
             true => (Cons(introduction, introductions) : List(Introduction)),
-            false => case key == heldKey {
+            false => case text == heldText {
               true => (Cons(introduction, rest) : List(Introduction)),
               false => {
                 run later <- reintroduce[<](introduction, rest);
@@ -2293,16 +2293,16 @@ def grantedRefused = thunk {
 @[ checks ]
 def rebindCommits() -> -F List(Commit) {
   run opened <- rooted(1, 10, Open(Signed(100, 10)));
-  run first <- child(2, 10, 1, Bind(Named(1, "x"), ToAnchor("domhringr://100/.commit/1")));
-  run second <- child(3, 10, 2, Bind(Named(1, "x"), ToDatum("rebound")));
-  run left <- child(4, 10, 1, Bind(Named(2, "y"), ToDatum("left")));
-  run right <- child(5, 10, 1, Bind(Named(2, "y"), ToDatum("right")));
+  run first <- child(2, 10, 1, Bind(Named("x"), ToAnchor("domhringr://100/.commit/1")));
+  run second <- child(3, 10, 2, Bind(Named("x"), ToDatum("rebound")));
+  run left <- child(4, 10, 1, Bind(Named("y"), ToDatum("left")));
+  run right <- child(5, 10, 1, Bind(Named("y"), ToDatum("right")));
   (Cons(opened, Cons(first, Cons(second, Cons(left, Cons(right, Nil))))) : List(Commit))
 }
 
 /// The rebind descending from the bind wins, and of two concurrent binds the
 /// one placed later.
-@[ runs("Some(Cons(BoundBy(Named(1, \"x\"), 10, ToDatum(\"rebound\")), Cons(BoundBy(Named(2, \"y\"), 10, ToDatum(\"right\")), Nil)))") ]
+@[ runs("Some(Cons(BoundBy(Named(\"x\"), 10, ToDatum(\"rebound\")), Cons(BoundBy(Named(\"y\"), 10, ToDatum(\"right\")), Nil)))") ]
 def rebound : () => Maybe(List(Binding)) ;
 def rebound = thunk {
   run commits <- rebindCommits();
@@ -2315,8 +2315,8 @@ def rebound = thunk {
 @[ checks ]
 def squatCommits() -> -F List(Commit) {
   run opened <- rooted(1, 10, Open(Signed(100, 10)));
-  run bound <- child(2, 10, 1, Bind(Named(1, "x"), ToAnchor("domhringr://100/.commit/1")));
-  run squat <- child(3, 20, 2, Bind(Named(1, "x"), ToDatum("squat")));
+  run bound <- child(2, 10, 1, Bind(Named("x"), ToAnchor("domhringr://100/.commit/1")));
+  run squat <- child(3, 20, 2, Bind(Named("x"), ToDatum("squat")));
   (Cons(opened, Cons(bound, Cons(squat, Nil))) : List(Commit))
 }
 
@@ -2330,7 +2330,7 @@ def squatRefused = thunk {
 } ;
 
 /// The path stays as the owner bound it, and nothing else is bound.
-@[ runs("Some(Cons(BoundBy(Named(1, \"x\"), 10, ToAnchor(\"domhringr://100/.commit/1\")), Nil))") ]
+@[ runs("Some(Cons(BoundBy(Named(\"x\"), 10, ToAnchor(\"domhringr://100/.commit/1\")), Nil))") ]
 def squatBindings : () => Maybe(List(Binding)) ;
 def squatBindings = thunk {
   run commits <- squatCommits();
@@ -2346,9 +2346,9 @@ def claimCommits() -> -F List(Commit) {
   run opened <- rooted(1, 10, Open(Signed(100, 10)));
   run granted <- child(2, 10, 1, Grant(20));
   run noted <- child(3, 20, 2, Note("member"));
-  run byMember <- child(4, 20, 3, Claim(Named(2, "member.test")));
-  run byStranger <- child(5, 50, 3, Claim(Named(3, "stranger.test")));
-  run byOwner <- child(6, 10, 3, Claim(Named(1, "example.test")));
+  run byMember <- child(4, 20, 3, Claim(Named("member.test")));
+  run byStranger <- child(5, 50, 3, Claim(Named("stranger.test")));
+  run byOwner <- child(6, 10, 3, Claim(Named("example.test")));
   (Cons(
     opened,
     Cons(granted, Cons(noted, Cons(byMember, Cons(byStranger, Cons(byOwner, Nil)))))
@@ -2356,7 +2356,7 @@ def claimCommits() -> -F List(Commit) {
 }
 
 /// The owner's claim alone is admitted.
-@[ runs("Some(Cons(Named(1, \"example.test\"), Nil))") ]
+@[ runs("Some(Cons(Named(\"example.test\"), Nil))") ]
 def claimed : () => Maybe(List(Name)) ;
 def claimed = thunk {
   run commits <- claimCommits();
@@ -2388,11 +2388,11 @@ def claimNotes = thunk {
 @[ checks ]
 def introductionCommits() -> -F List(Commit) {
   run opened <- rooted(1, 10, Open(Signed(100, 10)));
-  run introduced <- child(2, 10, 1, Introduce(200, Named(1, "b")));
-  run reintroduced <- child(3, 10, 2, Introduce(260, Named(1, "b")));
+  run introduced <- child(2, 10, 1, Introduce(200, Named("b")));
+  run reintroduced <- child(3, 10, 2, Introduce(260, Named("b")));
   run granted <- child(4, 10, 3, Grant(20));
-  run byMember <- child(5, 20, 4, Introduce(270, Named(2, "my friend")));
-  run byStranger <- child(6, 50, 5, Introduce(270, Named(1, "b")));
+  run byMember <- child(5, 20, 4, Introduce(270, Named("my friend")));
+  run byStranger <- child(6, 50, 5, Introduce(270, Named("b")));
   (Cons(
     opened,
     Cons(introduced, Cons(reintroduced, Cons(granted, Cons(byMember, Cons(byStranger, Nil)))))
@@ -2401,7 +2401,7 @@ def introductionCommits() -> -F List(Commit) {
 
 /// The later introduction of `b` rebinds it, and a member introduces under
 /// its grant.
-@[ runs("Some(Cons(IntroducedBy(Named(1, \"b\"), 10, 260), Cons(IntroducedBy(Named(2, \"my friend\"), 20, 270), Nil)))") ]
+@[ runs("Some(Cons(IntroducedBy(Named(\"b\"), 10, 260), Cons(IntroducedBy(Named(\"my friend\"), 20, 270), Nil)))") ]
 def introduced : () => Maybe(List(Introduction)) ;
 def introduced = thunk {
   run commits <- introductionCommits();
