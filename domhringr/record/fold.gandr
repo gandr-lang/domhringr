@@ -677,7 +677,7 @@ def verifies(proof : Proof, key : Integer, peer : Integer) -> -F Bool {
   case proof {
     Signed(by, names) => case by == key {
       true => names == peer,
-      false => by == key
+      false => false
     }
   }
 }
@@ -1153,7 +1153,7 @@ def authorizes(owner : Integer, author : Integer, grantees : List(Integer)) -> -
 @[ checks ]
 def presents(authorized : Bool, author : Integer, seats : List(Integer)) -> -F Bool {
   case authorized {
-    true => authorized,
+    true => true,
     false => become member(author, seats)
   }
 }
@@ -1811,14 +1811,14 @@ data Opening : Type {
 def opens(tree : Integer, commit : Commit) -> -F Bool {
   case commit {
     Committed(id, author, parents, blob) => case blob {
-      Garbled => id < id,
+      Garbled => false,
       Decoded(receipt) => case receipt {
         Receipt(named, operation, kind) => case kind {
           Open(proof) => case named == tree {
             true => become verifies(proof, tree, author),
-            false => named == tree
+            false => false
           },
-          _ => id < id
+          _ => false
         }
       }
     }
