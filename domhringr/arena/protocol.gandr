@@ -528,34 +528,34 @@ def rec played(
 @[ runs("Broke(0, ReportMove, WrongDirection)") ]
 def undispatchedReport : () => Played ;
 def undispatchedReport = thunk {
-  become played(1, SlotFresh, 0, (Cons(ReportMove, Nil) : List(Move)))
+  become played(1, SlotFresh, 0, Cons(ReportMove, Nil))
 } ;
 
 /// A dispatch, two reports and a retirement end the slot: `reportedTwice`.
 @[ runs("Reached(Ended)") ]
 def twiceRetired : () => Played ;
 def twiceRetired = thunk {
-  become played(1, SlotFresh, 0, (Cons(
+  become played(1, SlotFresh, 0, Cons(
     DispatchMove,
     Cons(ReportMove, Cons(ReportMove, Cons(RetireMove, Nil)))
-  ) : List(Move)))
+  ))
 } ;
 
 /// A report after the retirement resumes the ended slot.
 @[ runs("Broke(4, ReportMove, ResumeAfterEnd)") ]
 def lateReport : () => Played ;
 def lateReport = thunk {
-  become played(1, SlotFresh, 0, (Cons(
+  become played(1, SlotFresh, 0, Cons(
     DispatchMove,
     Cons(ReportMove, Cons(ReportMove, Cons(RetireMove, Cons(ReportMove, Nil))))
-  ) : List(Move)))
+  ))
 } ;
 
 /// A dispatch leaves the slot owing its first report.
 @[ runs("Reached(SlotOwed)") ]
 def unreported : () => Played ;
 def unreported = thunk {
-  become played(1, SlotFresh, 0, (Cons(DispatchMove, Nil) : List(Move)))
+  become played(1, SlotFresh, 0, Cons(DispatchMove, Nil))
 } ;
 
 /// A retirement before the first report takes a label the slot does not
@@ -563,14 +563,14 @@ def unreported = thunk {
 @[ runs("Broke(1, RetireMove, WrongLabel)") ]
 def earlyRetire : () => Played ;
 def earlyRetire = thunk {
-  become played(1, SlotFresh, 0, (Cons(DispatchMove, Cons(RetireMove, Nil)) : List(Move)))
+  become played(1, SlotFresh, 0, Cons(DispatchMove, Cons(RetireMove, Nil)))
 } ;
 
 /// A handoff before the first report likewise.
 @[ runs("Broke(1, HandoffMove, WrongLabel)") ]
 def earlyHandoff : () => Played ;
 def earlyHandoff = thunk {
-  become played(1, SlotFresh, 0, (Cons(DispatchMove, Cons(HandoffMove, Nil)) : List(Move)))
+  become played(1, SlotFresh, 0, Cons(DispatchMove, Cons(HandoffMove, Nil)))
 } ;
 
 /// A dispatch, a report and a handoff end the slot: `handedOff`.
@@ -581,7 +581,7 @@ def handoffEnds = thunk {
     1,
     SlotFresh,
     0,
-    (Cons(DispatchMove, Cons(ReportMove, Cons(HandoffMove, Nil))) : List(Move))
+    Cons(DispatchMove, Cons(ReportMove, Cons(HandoffMove, Nil)))
   )
 } ;
 
@@ -589,10 +589,10 @@ def handoffEnds = thunk {
 @[ runs("Broke(3, HandoffMove, ResumeAfterEnd)") ]
 def secondHandoff : () => Played ;
 def secondHandoff = thunk {
-  become played(1, SlotFresh, 0, (Cons(
+  become played(1, SlotFresh, 0, Cons(
     DispatchMove,
     Cons(ReportMove, Cons(HandoffMove, Cons(HandoffMove, Nil)))
-  ) : List(Move)))
+  ))
 } ;
 
 /// A second dispatch on an open slot goes the other way from the
@@ -600,14 +600,14 @@ def secondHandoff = thunk {
 @[ runs("Broke(1, DispatchMove, WrongDirection)") ]
 def secondDispatch : () => Played ;
 def secondDispatch = thunk {
-  become played(1, SlotFresh, 0, (Cons(DispatchMove, Cons(DispatchMove, Nil)) : List(Move)))
+  become played(1, SlotFresh, 0, Cons(DispatchMove, Cons(DispatchMove, Nil)))
 } ;
 
 /// `pause_is_certified_and_old_runs_transport`: edition 1 offers no pause.
 @[ runs("Broke(1, PauseMove, WrongLabel)") ]
 def pauseUnoffered : () => Played ;
 def pauseUnoffered = thunk {
-  become played(1, SlotFresh, 0, (Cons(DispatchMove, Cons(PauseMove, Nil)) : List(Move)))
+  become played(1, SlotFresh, 0, Cons(DispatchMove, Cons(PauseMove, Nil)))
 } ;
 
 /// Edition 2 pauses before and after the report and retires:
@@ -615,10 +615,10 @@ def pauseUnoffered = thunk {
 @[ runs("Reached(Ended)") ]
 def pausedRetired : () => Played ;
 def pausedRetired = thunk {
-  become played(2, SlotFresh, 0, (Cons(
+  become played(2, SlotFresh, 0, Cons(
     DispatchMove,
     Cons(PauseMove, Cons(ReportMove, Cons(PauseMove, Cons(RetireMove, Nil))))
-  ) : List(Move)))
+  ))
 } ;
 
 /// A pause before the first report keeps the report owed.
@@ -629,7 +629,7 @@ def pauseKeepsOwed = thunk {
     2,
     SlotFresh,
     0,
-    (Cons(DispatchMove, Cons(PauseMove, Cons(RetireMove, Nil))) : List(Move))
+    Cons(DispatchMove, Cons(PauseMove, Cons(RetireMove, Nil)))
   )
 } ;
 
@@ -637,10 +637,10 @@ def pauseKeepsOwed = thunk {
 @[ runs("Broke(3, PauseMove, ResumeAfterEnd)") ]
 def pauseAfterEnd : () => Played ;
 def pauseAfterEnd = thunk {
-  become played(2, SlotFresh, 0, (Cons(
+  become played(2, SlotFresh, 0, Cons(
     DispatchMove,
     Cons(ReportMove, Cons(RetireMove, Cons(PauseMove, Nil)))
-  ) : List(Move)))
+  ))
 } ;
 
 /// `unknown_editions_never_replay_as_known_protocols`: under edition 0 the
@@ -648,49 +648,49 @@ def pauseAfterEnd = thunk {
 @[ runs("Broke(0, DispatchMove, UnknownEdition)") ]
 def zeroDispatch : () => Played ;
 def zeroDispatch = thunk {
-  become played(0, SlotFresh, 0, (Cons(DispatchMove, Nil) : List(Move)))
+  become played(0, SlotFresh, 0, Cons(DispatchMove, Nil))
 } ;
 
 /// Every slot move under an unknown edition is refused alike: a pause.
 @[ runs("Broke(0, PauseMove, UnknownEdition)") ]
 def largestPause : () => Played ;
 def largestPause = thunk {
-  become played(18446744073709551615, SlotOwed, 0, (Cons(PauseMove, Nil) : List(Move)))
+  become played(18446744073709551615, SlotOwed, 0, Cons(PauseMove, Nil))
 } ;
 
 /// A report.
 @[ runs("Broke(0, ReportMove, UnknownEdition)") ]
 def largestReport : () => Played ;
 def largestReport = thunk {
-  become played(18446744073709551615, SlotOwed, 0, (Cons(ReportMove, Nil) : List(Move)))
+  become played(18446744073709551615, SlotOwed, 0, Cons(ReportMove, Nil))
 } ;
 
 /// A retirement.
 @[ runs("Broke(0, RetireMove, UnknownEdition)") ]
 def largestRetire : () => Played ;
 def largestRetire = thunk {
-  become played(18446744073709551615, SlotOpen, 0, (Cons(RetireMove, Nil) : List(Move)))
+  become played(18446744073709551615, SlotOpen, 0, Cons(RetireMove, Nil))
 } ;
 
 /// The other channels share the dispatch's edition: a verdict.
 @[ runs("Broke(0, VerdictMove, UnknownEdition)") ]
 def zeroVerdict : () => Played ;
 def zeroVerdict = thunk {
-  become played(0, JudgeFresh, 0, (Cons(VerdictMove, Nil) : List(Move)))
+  become played(0, JudgeFresh, 0, Cons(VerdictMove, Nil))
 } ;
 
 /// A verification.
 @[ runs("Broke(0, VerifiedMove, UnknownEdition)") ]
 def zeroVerified : () => Played ;
 def zeroVerified = thunk {
-  become played(0, RunnerOpen, 0, (Cons(VerifiedMove, Nil) : List(Move)))
+  become played(0, RunnerOpen, 0, Cons(VerifiedMove, Nil))
 } ;
 
 /// A decision to land.
 @[ runs("Broke(0, DecideMove(ToLand), UnknownEdition)") ]
 def zeroDecide : () => Played ;
 def zeroDecide = thunk {
-  become played(0, DecisionFresh, 0, (Cons(DecideMove(ToLand), Nil) : List(Move)))
+  become played(0, DecisionFresh, 0, Cons(DecideMove(ToLand), Nil))
 } ;
 
 /// `task_channels_replay_with_their_duals`: a verdict and its grading end
@@ -698,14 +698,14 @@ def zeroDecide = thunk {
 @[ runs("Reached(Ended)") ]
 def judged : () => Played ;
 def judged = thunk {
-  become played(1, JudgeFresh, 0, (Cons(VerdictMove, Cons(GradedMove, Nil)) : List(Move)))
+  become played(1, JudgeFresh, 0, Cons(VerdictMove, Cons(GradedMove, Nil)))
 } ;
 
 /// Two verifications leave the runner's channel open for a third.
 @[ runs("Reached(RunnerOpen)") ]
 def verifiedTwice : () => Played ;
 def verifiedTwice = thunk {
-  become played(1, RunnerOpen, 0, (Cons(VerifiedMove, Cons(VerifiedMove, Nil)) : List(Move)))
+  become played(1, RunnerOpen, 0, Cons(VerifiedMove, Cons(VerifiedMove, Nil)))
 } ;
 
 /// A decision to land and its landing end the operator's channel:
@@ -717,7 +717,7 @@ def landingEnds = thunk {
     1,
     DecisionFresh,
     0,
-    (Cons(DecideMove(ToLand), Cons(LandedMove, Nil)) : List(Move))
+    Cons(DecideMove(ToLand), Cons(LandedMove, Nil))
   )
 } ;
 
@@ -725,21 +725,21 @@ def landingEnds = thunk {
 @[ runs("Reached(Ended)") ]
 def reworkEnds : () => Played ;
 def reworkEnds = thunk {
-  become played(1, DecisionFresh, 0, (Cons(DecideMove(ToRework), Nil) : List(Move)))
+  become played(1, DecisionFresh, 0, Cons(DecideMove(ToRework), Nil))
 } ;
 
 /// A decision to abandon likewise: `abandoned`.
 @[ runs("Reached(Ended)") ]
 def abandonEnds : () => Played ;
 def abandonEnds = thunk {
-  become played(1, DecisionFresh, 0, (Cons(DecideMove(ToAbandon), Nil) : List(Move)))
+  become played(1, DecisionFresh, 0, Cons(DecideMove(ToAbandon), Nil))
 } ;
 
 /// Under edition 2 the judge's play is the same: `gradedPaused`.
 @[ runs("Reached(Ended)") ]
 def judgedPaused : () => Played ;
 def judgedPaused = thunk {
-  become played(2, JudgeFresh, 0, (Cons(VerdictMove, Cons(GradedMove, Nil)) : List(Move)))
+  become played(2, JudgeFresh, 0, Cons(VerdictMove, Cons(GradedMove, Nil)))
 } ;
 
 /// Under edition 2 the operator's landing is the same: `landedPaused`.
@@ -750,7 +750,7 @@ def landingPaused = thunk {
     2,
     DecisionFresh,
     0,
-    (Cons(DecideMove(ToLand), Cons(LandedMove, Nil)) : List(Move))
+    Cons(DecideMove(ToLand), Cons(LandedMove, Nil))
   )
 } ;
 
@@ -759,14 +759,14 @@ def landingPaused = thunk {
 @[ runs("Broke(0, GradedMove, WrongPayloadIdentity)") ]
 def ungradedVerdict : () => Played ;
 def ungradedVerdict = thunk {
-  become played(1, JudgeFresh, 0, (Cons(GradedMove, Nil) : List(Move)))
+  become played(1, JudgeFresh, 0, Cons(GradedMove, Nil))
 } ;
 
 /// A landing with no decision goes the other way from the choice owed.
 @[ runs("Broke(0, LandedMove, WrongDirection)") ]
 def undecidedLanding : () => Played ;
 def undecidedLanding = thunk {
-  become played(1, DecisionFresh, 0, (Cons(LandedMove, Nil) : List(Move)))
+  become played(1, DecisionFresh, 0, Cons(LandedMove, Nil))
 } ;
 
 /// A second grading resumes the ended judge's channel.
@@ -777,7 +777,7 @@ def secondGrading = thunk {
     1,
     JudgeFresh,
     0,
-    (Cons(VerdictMove, Cons(GradedMove, Cons(GradedMove, Nil))) : List(Move))
+    Cons(VerdictMove, Cons(GradedMove, Cons(GradedMove, Nil)))
   )
 } ;
 
@@ -790,7 +790,7 @@ def secondDecision = thunk {
     1,
     DecisionFresh,
     0,
-    (Cons(DecideMove(ToLand), Cons(DecideMove(ToRework), Nil)) : List(Move))
+    Cons(DecideMove(ToLand), Cons(DecideMove(ToRework), Nil))
   )
 } ;
 
@@ -798,10 +798,10 @@ def secondDecision = thunk {
 @[ runs("Broke(2, LandedMove, ResumeAfterEnd)") ]
 def secondLanding : () => Played ;
 def secondLanding = thunk {
-  become played(1, DecisionFresh, 0, (Cons(
+  become played(1, DecisionFresh, 0, Cons(
     DecideMove(ToLand),
     Cons(LandedMove, Cons(LandedMove, Nil))
-  ) : List(Move)))
+  ))
 } ;
 
 /// A landing after a rework resumes the channel the rework ended.
@@ -812,7 +812,7 @@ def reworkLanding = thunk {
     1,
     DecisionFresh,
     0,
-    (Cons(DecideMove(ToRework), Cons(LandedMove, Nil)) : List(Move))
+    Cons(DecideMove(ToRework), Cons(LandedMove, Nil))
   )
 } ;
 
@@ -824,7 +824,7 @@ def abandonLanding = thunk {
     1,
     DecisionFresh,
     0,
-    (Cons(DecideMove(ToAbandon), Cons(DecideMove(ToLand), Nil)) : List(Move))
+    Cons(DecideMove(ToAbandon), Cons(DecideMove(ToLand), Nil))
   )
 } ;
 
@@ -838,7 +838,7 @@ def verdictOnSlot = thunk {
     1,
     SlotFresh,
     0,
-    (Cons(DispatchMove, Cons(ReportMove, Cons(VerdictMove, Nil))) : List(Move))
+    Cons(DispatchMove, Cons(ReportMove, Cons(VerdictMove, Nil)))
   )
 } ;
 
@@ -846,7 +846,7 @@ def verdictOnSlot = thunk {
 @[ runs("Broke(0, ReportMove, WrongDirection)") ]
 def reportToJudge : () => Played ;
 def reportToJudge = thunk {
-  become played(1, JudgeFresh, 0, (Cons(ReportMove, Nil) : List(Move)))
+  become played(1, JudgeFresh, 0, Cons(ReportMove, Nil))
 } ;
 
 /// A grading on a runner's channel sends another payload than its
@@ -854,7 +854,7 @@ def reportToJudge = thunk {
 @[ runs("Broke(0, GradedMove, WrongPayloadIdentity)") ]
 def gradedByRunner : () => Played ;
 def gradedByRunner = thunk {
-  become played(1, RunnerOpen, 0, (Cons(GradedMove, Nil) : List(Move)))
+  become played(1, RunnerOpen, 0, Cons(GradedMove, Nil))
 } ;
 
 /// A report on the decision channel takes a label the operator's choice
@@ -862,7 +862,7 @@ def gradedByRunner = thunk {
 @[ runs("Broke(0, ReportMove, WrongLabel)") ]
 def reportToDecision : () => Played ;
 def reportToDecision = thunk {
-  become played(1, DecisionFresh, 0, (Cons(ReportMove, Nil) : List(Move)))
+  become played(1, DecisionFresh, 0, Cons(ReportMove, Nil))
 } ;
 
 /// A verdict where a decision to land owes its landing sends another
@@ -874,6 +874,6 @@ def verdictForLanding = thunk {
     1,
     DecisionFresh,
     0,
-    (Cons(DecideMove(ToLand), Cons(VerdictMove, Nil)) : List(Move))
+    Cons(DecideMove(ToLand), Cons(VerdictMove, Nil))
   )
 } ;

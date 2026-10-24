@@ -89,11 +89,11 @@ def rec size(a : Type, xs : List(a)) -> -F Integer {
 @[ checks ]
 def rec names(questions : List(Question)) -> -F List(String) {
   case questions {
-    Nil => (Nil : List(String)),
+    Nil => Nil,
     Cons(question, rest) => {
       run later <- names[<](rest);
       case question {
-        Asked(name, instructions, holds, fails) => (Cons(name, later) : List(String))
+        Asked(name, instructions, holds, fails) => Cons(name, later)
       }
     }
   }

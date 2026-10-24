@@ -39,10 +39,10 @@ import "../arena/protocol.gandr" ;
 @[ checks ]
 def rec append(a : Type, xs : List(a), x : a) -> -F List(a) {
   case xs {
-    Nil => (Cons(x, Nil) : List(a)),
+    Nil => Cons(x, Nil),
     Cons(y, rest) => {
       run later <- append[<](a, rest, x);
-      (Cons(y, later) : List(a))
+      Cons(y, later)
     }
   }
 }
@@ -283,10 +283,10 @@ data Ledger : Type {
 @[ checks ]
 def rec pastOf(commit : Integer, pasts : List(Carried)) -> -F Maybe(Carried) {
   case pasts {
-    Nil => (None : Maybe(Carried)),
+    Nil => None,
     Cons(carried, rest) => case carried {
       CarriedBy(held, past) => case held == commit {
-        true => (Some(carried) : Maybe(Carried)),
+        true => Some(carried),
         false => become pastOf[<](commit, rest)
       }
     }
@@ -315,10 +315,10 @@ def rec inherit(parents : List(Integer), pasts : List(Carried)) -> -F Past {
 @[ checks ]
 def rec fenced(operation : Integer, fences : List(Fenced)) -> -F Maybe(Integer) {
   case fences {
-    Nil => (None : Maybe(Integer)),
+    Nil => None,
     Cons(fence, rest) => case fence {
       FencedBy(held, commit) => case held == operation {
-        true => (Some(commit) : Maybe(Integer)),
+        true => Some(commit),
         false => become fenced[<](operation, rest)
       }
     }
@@ -329,10 +329,10 @@ def rec fenced(operation : Integer, fences : List(Fenced)) -> -F Maybe(Integer) 
 @[ checks ]
 def rec slotOf(dispatch : Integer, slots : List(SlotPlay)) -> -F Maybe(SlotPlay) {
   case slots {
-    Nil => (None : Maybe(SlotPlay)),
+    Nil => None,
     Cons(play, rest) => case play {
       SlotOf(held, edition, phase) => case held == dispatch {
-        true => (Some(play) : Maybe(SlotPlay)),
+        true => Some(play),
         false => become slotOf[<](dispatch, rest)
       }
     }
@@ -348,13 +348,13 @@ def rec setSlot(
   slots : List(SlotPlay)
 ) -> -F List(SlotPlay) {
   case slots {
-    Nil => (Cons(SlotOf(dispatch, edition, phase), Nil) : List(SlotPlay)),
+    Nil => Cons(SlotOf(dispatch, edition, phase), Nil),
     Cons(play, rest) => case play {
       SlotOf(held, was, before) => case held == dispatch {
-        true => (Cons(SlotOf(dispatch, edition, phase), rest) : List(SlotPlay)),
+        true => Cons(SlotOf(dispatch, edition, phase), rest),
         false => {
           run later <- setSlot[<](dispatch, edition, phase, rest);
-          (Cons(play, later) : List(SlotPlay))
+          Cons(play, later)
         }
       }
     }
@@ -370,12 +370,12 @@ def rec judgeOf(
   judges : List(JudgePlay)
 ) -> -F Maybe(JudgePlay) {
   case member(verdict, verdicts) {
-    false => (None : Maybe(JudgePlay)),
+    false => None,
     true => case judges {
-      Nil => (None : Maybe(JudgePlay)),
+      Nil => None,
       Cons(play, rest) => case play {
         JudgeOf(held, judge, dispatch, rubric, rulings, phase) => case held == verdict {
-          true => (Some(play) : Maybe(JudgePlay)),
+          true => Some(play),
           false => become judgeOf[<](verdict, verdicts, rest)
         }
       }
@@ -387,16 +387,16 @@ def rec judgeOf(
 @[ checks ]
 def rec setJudge(verdict : Integer, phase : Phase, judges : List(JudgePlay)) -> -F List(JudgePlay) {
   case judges {
-    Nil => (Nil : List(JudgePlay)),
+    Nil => Nil,
     Cons(play, rest) => case play {
       JudgeOf(held, judge, dispatch, rubric, rulings, before) => case held == verdict {
-        true => (Cons(
+        true => Cons(
           JudgeOf(held, judge, dispatch, rubric, rulings, phase),
           rest
-        ) : List(JudgePlay)),
+        ),
         false => {
           run later <- setJudge[<](verdict, phase, rest);
-          (Cons(play, later) : List(JudgePlay))
+          Cons(play, later)
         }
       }
     }
@@ -426,13 +426,13 @@ def rec setChoice(
   choices : List(DecisionPlay)
 ) -> -F List(DecisionPlay) {
   case choices {
-    Nil => (Cons(DecisionOf(dispatch, phase), Nil) : List(DecisionPlay)),
+    Nil => Cons(DecisionOf(dispatch, phase), Nil),
     Cons(play, rest) => case play {
       DecisionOf(held, before) => case held == dispatch {
-        true => (Cons(DecisionOf(dispatch, phase), rest) : List(DecisionPlay)),
+        true => Cons(DecisionOf(dispatch, phase), rest),
         false => {
           run later <- setChoice[<](dispatch, phase, rest);
-          (Cons(play, later) : List(DecisionPlay))
+          Cons(play, later)
         }
       }
     }
@@ -448,12 +448,12 @@ def rec decisionOf(
   decided : List(Decided)
 ) -> -F Maybe(Decided) {
   case member(decision, decisions) {
-    false => (None : Maybe(Decided)),
+    false => None,
     true => case decided {
-      Nil => (None : Maybe(Decided)),
+      Nil => None,
       Cons(record, rest) => case record {
         DecisionBy(held, dispatch, operator) => case held == decision {
-          true => (Some(record) : Maybe(Decided)),
+          true => Some(record),
           false => become decisionOf[<](decision, decisions, rest)
         }
       }
@@ -696,13 +696,13 @@ def choice(decision : Decision) -> -F Choice {
 @[ checks ]
 def rec marks(rulings : List(Ruled), grades : List(Grade)) -> -F List(Marked) {
   case rulings {
-    Nil => (Nil : List(Marked)),
+    Nil => Nil,
     Cons(ruled, rest) => case grades {
-      Nil => (Nil : List(Marked)),
+      Nil => Nil,
       Cons(grade, more) => case ruled {
         OnQuestion(question, ruling) => {
           run later <- marks[<](rest, more);
-          (Cons(MarkedAs(question, grade), later) : List(Marked))
+          Cons(MarkedAs(question, grade), later)
         }
       }
     }
@@ -1218,18 +1218,18 @@ def textOf(name : Name) -> -F String {
 def rec rebind(binding : Binding, bindings : List(Binding)) -> -F List(Binding) {
   case binding {
     BoundBy(path, author, target) => case bindings {
-      Nil => (Cons(binding, Nil) : List(Binding)),
+      Nil => Cons(binding, Nil),
       Cons(held, rest) => case held {
         BoundBy(heldPath, heldAuthor, heldTarget) => {
           run text <- textOf(path);
           run heldText <- textOf(heldPath);
           case text < heldText {
-            true => (Cons(binding, bindings) : List(Binding)),
+            true => Cons(binding, bindings),
             false => case text == heldText {
-              true => (Cons(binding, rest) : List(Binding)),
+              true => Cons(binding, rest),
               false => {
                 run later <- rebind[<](binding, rest);
-                (Cons(held, later) : List(Binding))
+                Cons(held, later)
               }
             }
           }
@@ -1243,17 +1243,17 @@ def rec rebind(binding : Binding, bindings : List(Binding)) -> -F List(Binding) 
 @[ checks ]
 def rec claim(domain : Name, claims : List(Name)) -> -F List(Name) {
   case claims {
-    Nil => (Cons(domain, Nil) : List(Name)),
+    Nil => Cons(domain, Nil),
     Cons(held, rest) => {
       run text <- textOf(domain);
       run heldText <- textOf(held);
       case text < heldText {
-        true => (Cons(domain, claims) : List(Name)),
+        true => Cons(domain, claims),
         false => case text == heldText {
           true => claims,
           false => {
             run later <- claim[<](domain, rest);
-            (Cons(held, later) : List(Name))
+            Cons(held, later)
           }
         }
       }
@@ -1269,18 +1269,18 @@ def rec reintroduce(
 ) -> -F List(Introduction) {
   case introduction {
     IntroducedBy(label, author, tree) => case introductions {
-      Nil => (Cons(introduction, Nil) : List(Introduction)),
+      Nil => Cons(introduction, Nil),
       Cons(held, rest) => case held {
         IntroducedBy(heldLabel, heldAuthor, heldTree) => {
           run text <- textOf(label);
           run heldText <- textOf(heldLabel);
           case text < heldText {
-            true => (Cons(introduction, introductions) : List(Introduction)),
+            true => Cons(introduction, introductions),
             false => case text == heldText {
-              true => (Cons(introduction, rest) : List(Introduction)),
+              true => Cons(introduction, rest),
               false => {
                 run later <- reintroduce[<](introduction, rest);
-                (Cons(held, later) : List(Introduction))
+                Cons(held, later)
               }
             }
           }
@@ -1295,15 +1295,15 @@ def rec reintroduce(
 def rec enter(presence : Presence, book : List(Presence)) -> -F List(Presence) {
   case presence {
     PresentAt(author, endpoint, since) => case book {
-      Nil => (Cons(presence, Nil) : List(Presence)),
+      Nil => Cons(presence, Nil),
       Cons(held, rest) => case held {
         PresentAt(heldAuthor, heldEndpoint, heldSince) => case author < heldAuthor {
-          true => (Cons(presence, book) : List(Presence)),
+          true => Cons(presence, book),
           false => case author == heldAuthor {
-            true => (Cons(presence, rest) : List(Presence)),
+            true => Cons(presence, rest),
             false => {
               run later <- enter[<](presence, rest);
-              (Cons(held, later) : List(Presence))
+              Cons(held, later)
             }
           }
         }
@@ -1322,7 +1322,7 @@ def rec leave(holder : Integer, book : List(Presence)) -> -F List(Presence) {
         true => rest,
         false => {
           run later <- leave[<](holder, rest);
-          (Cons(held, later) : List(Presence))
+          Cons(held, later)
         }
       }
     }
@@ -1334,15 +1334,15 @@ def rec leave(holder : Integer, book : List(Presence)) -> -F List(Presence) {
 def rec attest(attestation : Attestation, indexes : List(Attestation)) -> -F List(Attestation) {
   case attestation {
     AttestedBy(author, index, commit, parents) => case indexes {
-      Nil => (Cons(attestation, Nil) : List(Attestation)),
+      Nil => Cons(attestation, Nil),
       Cons(held, rest) => case held {
         AttestedBy(heldAuthor, heldIndex, heldCommit, heldParents) => case author < heldAuthor {
-          true => (Cons(attestation, indexes) : List(Attestation)),
+          true => Cons(attestation, indexes),
           false => case author == heldAuthor {
-            true => (Cons(attestation, rest) : List(Attestation)),
+            true => Cons(attestation, rest),
             false => {
               run later <- attest[<](attestation, rest);
-              (Cons(held, later) : List(Attestation))
+              Cons(held, later)
             }
           }
         }
@@ -1751,7 +1751,7 @@ def place(
           run past <- inherit(parents, pasts);
           case blob {
             Garbled => {
-              run next <- placing(ledger, id, past, (None : Maybe(Integer)));
+              run next <- placing(ledger, id, past, None);
               run seen <- refuse(view, id, Undecodable);
               Folding(next, seen)
             },
@@ -1762,12 +1762,12 @@ def place(
                 kind
               ) => case admission(tree, owner, open, bad, ledger, past, author, id, receipt) {
                 Refuse(refusal, kept) => {
-                  run next <- placing(kept, id, past, (None : Maybe(Integer)));
+                  run next <- placing(kept, id, past, None);
                   run seen <- refuse(view, id, refusal);
                   Folding(next, seen)
                 },
                 Admit(handed, kept, change) => {
-                  run next <- placing(kept, id, handed, (Some(operation) : Maybe(Integer)));
+                  run next <- placing(kept, id, handed, Some(operation));
                   run seen <- apply(view, id, author, parents, change);
                   Folding(next, seen)
                 }
@@ -1830,12 +1830,12 @@ def opens(tree : Integer, commit : Commit) -> -F Bool {
 @[ checks ]
 def rec openOf(tree : Integer, commits : List(Commit)) -> -F Maybe(Opening) {
   case commits {
-    Nil => (None : Maybe(Opening)),
+    Nil => None,
     Cons(commit, rest) => case commit {
       Committed(id, author, parents, blob) => case parents {
         Cons(parent, more) => become openOf[<](tree, rest),
         Nil => case opens(tree, commit) {
-          true => (Some(OpenedBy(id, author)) : Maybe(Opening)),
+          true => Some(OpenedBy(id, author)),
           false => become openOf[<](tree, rest)
         }
       }
@@ -1848,7 +1848,7 @@ def rec openOf(tree : Integer, commits : List(Commit)) -> -F Maybe(Opening) {
 @[ checks ]
 def rec forged(tree : Integer, commits : List(Commit)) -> -F List(Integer) {
   case commits {
-    Nil => (Nil : List(Integer)),
+    Nil => Nil,
     Cons(commit, rest) => {
       run later <- forged[<](tree, rest);
       case commit {
@@ -1905,7 +1905,7 @@ def fold(tree : Integer, commits : List(Commit)) -> -F Folded {
 @[ checks ]
 def ownerOf(folded : Folded) -> -F Maybe(Integer) {
   case folded {
-    Unopened => (None : Maybe(Integer)),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -1920,7 +1920,7 @@ def ownerOf(folded : Folded) -> -F Maybe(Integer) {
         task,
         admitted,
         refused
-      ) => (Some(owner) : Maybe(Integer))
+      ) => Some(owner)
     }
   }
 }
@@ -1929,7 +1929,7 @@ def ownerOf(folded : Folded) -> -F Maybe(Integer) {
 @[ checks ]
 def notesOf(folded : Folded) -> -F Maybe(List(Noted)) {
   case folded {
-    Unopened => (None : Maybe(List(Noted))),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -1944,7 +1944,7 @@ def notesOf(folded : Folded) -> -F Maybe(List(Noted)) {
         task,
         admitted,
         refused
-      ) => (Some(notes) : Maybe(List(Noted)))
+      ) => Some(notes)
     }
   }
 }
@@ -1953,7 +1953,7 @@ def notesOf(folded : Folded) -> -F Maybe(List(Noted)) {
 @[ checks ]
 def bindingsOf(folded : Folded) -> -F Maybe(List(Binding)) {
   case folded {
-    Unopened => (None : Maybe(List(Binding))),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -1968,7 +1968,7 @@ def bindingsOf(folded : Folded) -> -F Maybe(List(Binding)) {
         task,
         admitted,
         refused
-      ) => (Some(bindings) : Maybe(List(Binding)))
+      ) => Some(bindings)
     }
   }
 }
@@ -1977,7 +1977,7 @@ def bindingsOf(folded : Folded) -> -F Maybe(List(Binding)) {
 @[ checks ]
 def claimsOf(folded : Folded) -> -F Maybe(List(Name)) {
   case folded {
-    Unopened => (None : Maybe(List(Name))),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -1992,7 +1992,7 @@ def claimsOf(folded : Folded) -> -F Maybe(List(Name)) {
         task,
         admitted,
         refused
-      ) => (Some(claims) : Maybe(List(Name)))
+      ) => Some(claims)
     }
   }
 }
@@ -2001,7 +2001,7 @@ def claimsOf(folded : Folded) -> -F Maybe(List(Name)) {
 @[ checks ]
 def introductionsOf(folded : Folded) -> -F Maybe(List(Introduction)) {
   case folded {
-    Unopened => (None : Maybe(List(Introduction))),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -2016,7 +2016,7 @@ def introductionsOf(folded : Folded) -> -F Maybe(List(Introduction)) {
         task,
         admitted,
         refused
-      ) => (Some(introductions) : Maybe(List(Introduction)))
+      ) => Some(introductions)
     }
   }
 }
@@ -2025,7 +2025,7 @@ def introductionsOf(folded : Folded) -> -F Maybe(List(Introduction)) {
 @[ checks ]
 def bookOf(folded : Folded) -> -F Maybe(List(Presence)) {
   case folded {
-    Unopened => (None : Maybe(List(Presence))),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -2040,7 +2040,7 @@ def bookOf(folded : Folded) -> -F Maybe(List(Presence)) {
         task,
         admitted,
         refused
-      ) => (Some(book) : Maybe(List(Presence)))
+      ) => Some(book)
     }
   }
 }
@@ -2049,7 +2049,7 @@ def bookOf(folded : Folded) -> -F Maybe(List(Presence)) {
 @[ checks ]
 def attestationsOf(folded : Folded) -> -F Maybe(List(Attestation)) {
   case folded {
-    Unopened => (None : Maybe(List(Attestation))),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -2064,7 +2064,7 @@ def attestationsOf(folded : Folded) -> -F Maybe(List(Attestation)) {
         task,
         admitted,
         refused
-      ) => (Some(attestations) : Maybe(List(Attestation)))
+      ) => Some(attestations)
     }
   }
 }
@@ -2073,7 +2073,7 @@ def attestationsOf(folded : Folded) -> -F Maybe(List(Attestation)) {
 @[ checks ]
 def indexesOf(folded : Folded) -> -F Maybe(List(Attestation)) {
   case folded {
-    Unopened => (None : Maybe(List(Attestation))),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -2088,7 +2088,7 @@ def indexesOf(folded : Folded) -> -F Maybe(List(Attestation)) {
         task,
         admitted,
         refused
-      ) => (Some(indexes) : Maybe(List(Attestation)))
+      ) => Some(indexes)
     }
   }
 }
@@ -2097,7 +2097,7 @@ def indexesOf(folded : Folded) -> -F Maybe(List(Attestation)) {
 @[ checks ]
 def stepsOf(folded : Folded) -> -F Maybe(List(Stepped)) {
   case folded {
-    Unopened => (None : Maybe(List(Stepped))),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -2113,7 +2113,7 @@ def stepsOf(folded : Folded) -> -F Maybe(List(Stepped)) {
         admitted,
         refused
       ) => case task {
-        Task(steps, current) => (Some(steps) : Maybe(List(Stepped)))
+        Task(steps, current) => Some(steps)
       }
     }
   }
@@ -2123,7 +2123,7 @@ def stepsOf(folded : Folded) -> -F Maybe(List(Stepped)) {
 @[ checks ]
 def currentOf(folded : Folded) -> -F Maybe(Current) {
   case folded {
-    Unopened => (None : Maybe(Current)),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -2139,7 +2139,7 @@ def currentOf(folded : Folded) -> -F Maybe(Current) {
         admitted,
         refused
       ) => case task {
-        Task(steps, current) => (Some(current) : Maybe(Current))
+        Task(steps, current) => Some(current)
       }
     }
   }
@@ -2149,7 +2149,7 @@ def currentOf(folded : Folded) -> -F Maybe(Current) {
 @[ checks ]
 def admittedOf(folded : Folded) -> -F Maybe(List(Integer)) {
   case folded {
-    Unopened => (None : Maybe(List(Integer))),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -2164,7 +2164,7 @@ def admittedOf(folded : Folded) -> -F Maybe(List(Integer)) {
         task,
         admitted,
         refused
-      ) => (Some(admitted) : Maybe(List(Integer)))
+      ) => Some(admitted)
     }
   }
 }
@@ -2173,7 +2173,7 @@ def admittedOf(folded : Folded) -> -F Maybe(List(Integer)) {
 @[ checks ]
 def refusedOf(folded : Folded) -> -F Maybe(List(RefusedCommit)) {
   case folded {
-    Unopened => (None : Maybe(List(RefusedCommit))),
+    Unopened => None,
     Folded(view) => case view {
       View(
         owner,
@@ -2188,7 +2188,7 @@ def refusedOf(folded : Folded) -> -F Maybe(List(RefusedCommit)) {
         task,
         admitted,
         refused
-      ) => (Some(refused) : Maybe(List(RefusedCommit)))
+      ) => Some(refused)
     }
   }
 }
@@ -2266,7 +2266,7 @@ def grantedCommits() -> -F List(Commit) {
   run granted <- child(2, 10, 1, Grant(20));
   run after <- child(3, 20, 2, Note("after"));
   run beside <- child(4, 20, 1, Note("beside"));
-  (Cons(opened, Cons(granted, Cons(after, Cons(beside, Nil)))) : List(Commit))
+  Cons(opened, Cons(granted, Cons(after, Cons(beside, Nil))))
 }
 
 /// The note descending from the grant is admitted.
@@ -2297,7 +2297,7 @@ def rebindCommits() -> -F List(Commit) {
   run second <- child(3, 10, 2, Bind(Named("x"), ToDatum("rebound")));
   run left <- child(4, 10, 1, Bind(Named("y"), ToDatum("left")));
   run right <- child(5, 10, 1, Bind(Named("y"), ToDatum("right")));
-  (Cons(opened, Cons(first, Cons(second, Cons(left, Cons(right, Nil))))) : List(Commit))
+  Cons(opened, Cons(first, Cons(second, Cons(left, Cons(right, Nil)))))
 }
 
 /// The rebind descending from the bind wins, and of two concurrent binds the
@@ -2317,7 +2317,7 @@ def squatCommits() -> -F List(Commit) {
   run opened <- rooted(1, 10, Open(Signed(100, 10)));
   run bound <- child(2, 10, 1, Bind(Named("x"), ToAnchor("domhringr://100/.commit/1")));
   run squat <- child(3, 20, 2, Bind(Named("x"), ToDatum("squat")));
-  (Cons(opened, Cons(bound, Cons(squat, Nil))) : List(Commit))
+  Cons(opened, Cons(bound, Cons(squat, Nil)))
 }
 
 /// The non-member's bind is refused for want of authority.
@@ -2349,10 +2349,10 @@ def claimCommits() -> -F List(Commit) {
   run byMember <- child(4, 20, 3, Claim(Named("member.test")));
   run byStranger <- child(5, 50, 3, Claim(Named("stranger.test")));
   run byOwner <- child(6, 10, 3, Claim(Named("example.test")));
-  (Cons(
+  Cons(
     opened,
     Cons(granted, Cons(noted, Cons(byMember, Cons(byStranger, Cons(byOwner, Nil)))))
-  ) : List(Commit))
+  )
 }
 
 /// The owner's claim alone is admitted.
@@ -2393,10 +2393,10 @@ def introductionCommits() -> -F List(Commit) {
   run granted <- child(4, 10, 3, Grant(20));
   run byMember <- child(5, 20, 4, Introduce(270, Named("my friend")));
   run byStranger <- child(6, 50, 5, Introduce(270, Named("b")));
-  (Cons(
+  Cons(
     opened,
     Cons(introduced, Cons(reintroduced, Cons(granted, Cons(byMember, Cons(byStranger, Nil)))))
-  ) : List(Commit))
+  )
 }
 
 /// The later introduction of `b` rebinds it, and a member introduces under
@@ -2428,7 +2428,7 @@ def foreignCommits() -> -F List(Commit) {
   run presented <- child(3, 10, 2, Present(EndpointAt(500, 5), Signed(500, 10)));
   run stolen <- child(4, 20, 3, Present(EndpointAt(500, 7), Signed(500, 10)));
   run misproved <- child(5, 20, 4, Present(EndpointAt(500, 8), Signed(600, 20)));
-  (Cons(opened, Cons(granted, Cons(presented, Cons(stolen, Cons(misproved, Nil))))) : List(Commit))
+  Cons(opened, Cons(granted, Cons(presented, Cons(stolen, Cons(misproved, Nil)))))
 }
 
 /// Both of the member's presences are refused by name.
@@ -2459,10 +2459,10 @@ def withdrawCommits() -> -F List(Commit) {
   run byMember <- child(4, 20, 3, Withdraw(10));
   run byStranger <- child(5, 50, 3, Withdraw(10));
   run own <- child(6, 20, 3, Withdraw(20));
-  (Cons(
+  Cons(
     opened,
     Cons(granted, Cons(presented, Cons(byMember, Cons(byStranger, Cons(own, Nil)))))
-  ) : List(Commit))
+  )
 }
 
 /// A member's withdrawal of the owner's presence is refused by name, a
@@ -2502,7 +2502,7 @@ def withdrawnCommits() -> -F List(Commit) {
   run presented <- child(3, 10, 2, Present(EndpointAt(500, 5), Signed(500, 10)));
   run member <- child(4, 20, 3, Present(EndpointAt(600, 6), Signed(600, 20)));
   run withdrawn <- child(5, 10, 4, Withdraw(10));
-  (Cons(opened, Cons(granted, Cons(presented, Cons(member, Cons(withdrawn, Nil))))) : List(Commit))
+  Cons(opened, Cons(granted, Cons(presented, Cons(member, Cons(withdrawn, Nil)))))
 }
 
 /// The withdrawn presence is absent and the other stands.
@@ -2538,13 +2538,13 @@ def attestationCommits() -> -F List(Commit) {
   run theirs <- child(6, 20, 5, Indexed(3));
   run seated <- child(7, 80, 6, Indexed(4));
   run alien <- child(8, 90, 6, Indexed(5));
-  (Cons(
+  Cons(
     opened,
     Cons(
       granted,
       Cons(dispatched, Cons(first, Cons(second, Cons(theirs, Cons(seated, Cons(alien, Nil))))))
     )
-  ) : List(Commit))
+  )
 }
 
 /// Each author's last attestation, at the parents it was derived at.
@@ -2587,10 +2587,10 @@ def seatCommits() -> -F List(Commit) {
   run byStranger <- child(4, 50, 3, Report(3, 702, "mine"));
   run presented <- child(5, 20, 3, Present(EndpointAt(600, 9), Signed(600, 20)));
   run reported <- child(6, 20, 5, Report(3, 701, "done"));
-  (Cons(
+  Cons(
     opened,
     Cons(stray, Cons(dispatched, Cons(byStranger, Cons(presented, Cons(reported, Nil)))))
-  ) : List(Commit))
+  )
 }
 
 /// A dispatch by a non-member is refused for want of authority, and a report
@@ -2651,10 +2651,10 @@ def handoffCommits() -> -F List(Commit) {
   run repeated <- child(5, 50, 4, Handoff(2, 20));
   run late <- child(6, 50, 5, Report(2, 704, "late"));
   run retired <- child(7, 50, 6, Retire(2));
-  (Cons(
+  Cons(
     opened,
     Cons(dispatched, Cons(reported, Cons(handed, Cons(repeated, Cons(late, Cons(retired, Nil))))))
-  ) : List(Commit))
+  )
 }
 
 /// Every move after the handoff resumes an ended play.
@@ -2687,10 +2687,10 @@ def earlyCommits() -> -F List(Commit) {
   run byFormer <- child(5, 20, 4, Report(2, 704, "late"));
   run byOwner <- child(6, 10, 4, Handoff(2, 10));
   run reported <- child(7, 50, 4, Report(2, 701, "done"));
-  (Cons(
+  Cons(
     opened,
     Cons(dispatched, Cons(early, Cons(handed, Cons(byFormer, Cons(byOwner, Cons(reported, Nil))))))
-  ) : List(Commit))
+  )
 }
 
 /// The handoff before a report is refused at its selection; the refused
@@ -2721,7 +2721,7 @@ def retiredCommits() -> -F List(Commit) {
   run dispatched <- child(2, 10, 1, Dispatch(1, 20, briefOne));
   run retired <- child(3, 20, 2, Retire(2));
   run late <- child(4, 20, 3, Report(2, 704, "late"));
-  (Cons(opened, Cons(dispatched, Cons(retired, Cons(late, Nil)))) : List(Commit))
+  Cons(opened, Cons(dispatched, Cons(retired, Cons(late, Nil))))
 }
 
 /// The retirement is refused at its selection.
@@ -2753,10 +2753,10 @@ def supersededCommits() -> -F List(Commit) {
   run stale <- child(4, 20, 3, Report(2, 707, "stale"));
   run unknown <- child(5, 20, 2, Report(9999, 708, "unknown"));
   run concurrent <- child(6, 20, 2, Report(2, 709, "concurrent"));
-  (Cons(
+  Cons(
     opened,
     Cons(first, Cons(second, Cons(stale, Cons(unknown, Cons(concurrent, Nil)))))
-  ) : List(Commit))
+  )
 }
 
 /// The report after the later dispatch and the one on no dispatch are not
@@ -2807,7 +2807,7 @@ def editionCommits() -> -F List(Commit) {
   run pausedUnknown <- child(12, 20, 11, Pause(11));
   run reportedUnknown <- child(13, 20, 12, Report(11, 701, "done"));
   run retiredUnknown <- child(14, 20, 13, Retire(11));
-  (Cons(
+  Cons(
     opened,
     Cons(
       early,
@@ -2840,7 +2840,7 @@ def editionCommits() -> -F List(Commit) {
         )
       )
     )
-  ) : List(Commit))
+  )
 }
 
 /// The early report is not current; edition 1 offers no pause; every move
@@ -2876,10 +2876,10 @@ def judgeCommits() -> -F List(Commit) {
   run byOwner <- child(5, 10, 2, Verdict(2, 50, 903, 705, rulings));
   run retired <- child(6, 20, 3, Retire(2));
   run after <- child(7, 70, 6, Verdict(2, 70, 903, 705, rulings));
-  (Cons(
+  Cons(
     opened,
     Cons(dispatched, Cons(judged, Cons(forged, Cons(byOwner, Cons(retired, Cons(after, Nil))))))
-  ) : List(Commit))
+  )
 }
 
 /// A verdict signed by any key but its judge's, the owner's among them, is
@@ -2927,7 +2927,7 @@ def runnerCommits() -> -F List(Commit) {
   run failed <- child(7, 50, 6, Verified(2, 50, 904, "test", 706, Exited(1)));
   run second <- child(8, 10, 7, Dispatch(1, 20, briefOne));
   run stale <- child(9, 50, 8, Verified(2, 50, 904, "test", 706, Exited(0)));
-  (Cons(
+  Cons(
     opened,
     Cons(
       first,
@@ -2936,7 +2936,7 @@ def runnerCommits() -> -F List(Commit) {
         Cons(forged, Cons(byOwner, Cons(retired, Cons(failed, Cons(second, Cons(stale, Nil))))))
       )
     )
-  ) : List(Commit))
+  )
 }
 
 /// A verification signed by any key but its runner's, the owner's among
@@ -2977,7 +2977,7 @@ def gradingCommits() -> -F List(Commit) {
   run unreadMet <- child(10, 50, 3, Graded(3, Cons(Met, Cons(Met, Nil)), Met));
   run second <- child(11, 10, 3, Dispatch(1, 20, briefOne));
   run stale <- child(12, 50, 11, Graded(3, Cons(Met, Cons(Refused, Nil)), Refused));
-  (Cons(
+  Cons(
     opened,
     Cons(
       dispatched,
@@ -2998,7 +2998,7 @@ def gradingCommits() -> -F List(Commit) {
         )
       )
     )
-  ) : List(Commit))
+  )
 }
 
 /// A grading by a key but the verdict's judge, whose grades do not answer
@@ -3034,13 +3034,13 @@ def composedCommits() -> -F List(Commit) {
   run asUnmet <- child(5, 50, 4, Graded(3, Cons(Met, Cons(Refused, Nil)), Unmet));
   run asUndecided <- child(6, 50, 5, Graded(3, Cons(Met, Cons(Refused, Nil)), Undecided));
   run admitted <- child(7, 50, 6, Graded(3, Cons(Met, Cons(Refused, Nil)), Refused));
-  (Cons(
+  Cons(
     opened,
     Cons(
       dispatched,
       Cons(judged, Cons(asMet, Cons(asUnmet, Cons(asUndecided, Cons(admitted, Nil)))))
     )
-  ) : List(Commit))
+  )
 }
 
 /// Each misstated composition is refused.
@@ -3074,7 +3074,7 @@ def secondCommits() -> -F List(Commit) {
   run secondDecision <- child(7, 10, 6, Decide(2, 10, Land));
   run firstLanding <- merged(8, 10, 6, 7, Landed(6, revision));
   run secondLanding <- child(9, 10, 8, Landed(6, revision));
-  (Cons(
+  Cons(
     opened,
     Cons(
       dispatched,
@@ -3089,7 +3089,7 @@ def secondCommits() -> -F List(Commit) {
         )
       )
     )
-  ) : List(Commit))
+  )
 }
 
 /// A second grading resumes an ended judge channel, a second decision meets
@@ -3118,7 +3118,7 @@ def decisionCommits() -> -F List(Commit) {
   run unknown <- child(8, 10, 3, Decide(9999, 10, Land));
   run second <- child(9, 10, 4, Dispatch(1, 20, briefOne));
   run stale <- child(10, 10, 9, Decide(3, 10, Abandon));
-  (Cons(
+  Cons(
     opened,
     Cons(
       granted,
@@ -3133,7 +3133,7 @@ def decisionCommits() -> -F List(Commit) {
         )
       )
     )
-  ) : List(Commit))
+  )
 }
 
 /// The seat and the stranger hold no operator role, the member signs for
@@ -3164,7 +3164,7 @@ def landingCommits() -> -F List(Commit) {
   run concurrent <- child(9, 10, 3, Landed(4, revision));
   run second <- child(10, 10, 5, Dispatch(1, 20, briefOne));
   run stale <- child(11, 10, 10, Landed(4, revision));
-  (Cons(
+  Cons(
     opened,
     Cons(
       granted,
@@ -3182,7 +3182,7 @@ def landingCommits() -> -F List(Commit) {
         )
       )
     )
-  ) : List(Commit))
+  )
 }
 
 /// A landing by anyone but the deciding operator is refused; one with no
@@ -3235,13 +3235,13 @@ def lifecycleCommits() -> -F List(Commit) {
   run judged <- child(5, 50, 4, Verdict(2, 50, 903, 705, rulings));
   run grading <- child(6, 50, 5, Graded(5, Cons(Met, Cons(Refused, Nil)), Refused));
   run reverifying <- child(7, 50, 6, Verified(2, 50, 904, "test", 706, Exited(1)));
-  (Cons(
+  Cons(
     opened,
     Cons(
       first,
       Cons(reported, Cons(verifying, Cons(judged, Cons(grading, Cons(reverifying, Nil)))))
     )
-  ) : List(Commit))
+  )
 }
 
 /// A later verification ranks below the grading.
@@ -3277,7 +3277,7 @@ def duplicateCommits() -> -F List(Commit) {
   run opened <- rooted(1, 10, Open(Signed(100, 10)));
   run first <- fencedChild(2, 10, 1, 77, Note("first"));
   run again <- fencedChild(3, 10, 2, 77, Note("again"));
-  (Cons(opened, Cons(first, Cons(again, Nil))) : List(Commit))
+  Cons(opened, Cons(first, Cons(again, Nil)))
 }
 
 /// The ancestor keeps the operation.
@@ -3333,7 +3333,7 @@ def opensCommits() -> -F List(Commit) {
   run byA <- rooted(1, 10, Open(Signed(100, 10)));
   run byB <- rooted(2, 20, Open(Signed(100, 20)));
   run reopened <- child(3, 10, 1, Open(Signed(100, 10)));
-  (Cons(byA, Cons(byB, Cons(reopened, Nil))) : List(Commit))
+  Cons(byA, Cons(byB, Cons(reopened, Nil)))
 }
 
 /// The root Open placed first names the owner.

@@ -44,12 +44,12 @@ data Evaluation : Type {
 @[ checks ]
 def rec answered(questions : List(Integer), rulings : List(Ruling)) -> -F List(Ruled) {
   case questions {
-    Nil => (Nil : List(Ruled)),
+    Nil => Nil,
     Cons(question, rest) => case rulings {
-      Nil => (Nil : List(Ruled)),
+      Nil => Nil,
       Cons(ruling, more) => {
         run later <- answered[<](rest, more);
-        (Cons(OnQuestion(question, ruling), later) : List(Ruled))
+        Cons(OnQuestion(question, ruling), later)
       }
     }
   }
@@ -176,7 +176,7 @@ def gradedCommits() -> -F List(Commit) {
           run gradedSecond <- child(6, 10, 5, Graded(5, secondGrades, secondComposed));
           run ruledThird <- child(7, 10, 6, thirdVerdict);
           run gradedThird <- child(8, 10, 7, Graded(7, thirdGrades, thirdComposed));
-          (Cons(
+          Cons(
             opened,
             Cons(
               dispatched,
@@ -188,7 +188,7 @@ def gradedCommits() -> -F List(Commit) {
                 )
               )
             )
-          ) : List(Commit))
+          )
         }
       }
     }

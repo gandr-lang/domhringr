@@ -70,14 +70,14 @@ def rec member(x : Integer, xs : List(Integer)) -> -F Bool {
 @[ checks ]
 def rec insert(x : Integer, xs : List(Integer)) -> -F List(Integer) {
   case xs {
-    Nil => (Cons(x, Nil) : List(Integer)),
+    Nil => Cons(x, Nil),
     Cons(y, rest) => case x < y {
-      true => (Cons(x, xs) : List(Integer)),
+      true => Cons(x, xs),
       false => case x == y {
         true => xs,
         false => {
           run later <- insert[<](x, rest);
-          (Cons(y, later) : List(Integer))
+          Cons(y, later)
         }
       }
     }
