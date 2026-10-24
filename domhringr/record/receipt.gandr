@@ -9,9 +9,10 @@
 // states: the fragment computes no hash and checks no signature. A proof is
 // the statement of who signed it naming whom, which the fold compares with
 // the key it is checked under. A path, a DNS name and a label are each an
-// integer key with their text beside it: no admitted form compares two
-// strings (gandr #1832), so a name is compared by its key, and an exemplar
-// numbers names in their text's order, the order the Rust crate's maps keep.
+// integer key with their text beside it: the fold keeps names in the order
+// the Rust crate's maps keep, and no admitted form orders two strings (gandr
+// #2333), so a name is ordered and compared by its key, and an exemplar
+// numbers names in their text's order.
 
 // Lists, and the rubric the grades come from.
 import "../strategy/rubric.gandr" ;

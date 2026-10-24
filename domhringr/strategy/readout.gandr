@@ -12,10 +12,10 @@
 // `Tied`, a vector the readout refuses otherwise an `Endpoint` that answered
 // no distribution.
 //
-// The host reads a reported token's text as a letter: trimmed of whitespace,
-// it is one uppercase letter or none. No admitted form compares two strings
-// yet (gandr #1832), so `read` takes each token as its letter's place from
-// `A`, or as no letter.
+// A reported token is its text as the host trims it of whitespace, so `B` and
+// ` B` are one letter: no admitted form trims a string. `read` compares that
+// text with each option's letter, so a lowercase letter, a word and a letter
+// past the last option are no option's.
 
 // Lists, and the element at an index.
 import "./rubric.gandr" ;
@@ -268,13 +268,38 @@ def rec lastHolds(xs : List(String)) -> -F List(f64) {
   }
 }
 
-/// A token reported at the answer's position, with its natural
-/// log-probability: an uppercase letter, by its place counted from `A` at
-/// zero, or no letter.
+/// A token reported at the answer's position, trimmed of whitespace, with its
+/// natural log-probability.
 @[ checks ]
 data Reported : Type {
-  Lettered : (place : Integer, logprob : f64) --> Reported;
-  Unlettered : (logprob : f64) --> Reported;
+  Token : (text : String, logprob : f64) --> Reported;
+}
+
+/// Where a token's text stands among the letters: at a place counted from
+/// `A` at zero, or at none.
+@[ checks ]
+data Placing : Type {
+  Placed : (place : Integer) --> Placing;
+  Unplaced : Placing;
+}
+
+/// Where `text` stands among `xs`, the first of them at `index`: the place of
+/// the first it equals, or none.
+@[ checks ]
+def rec placeOf(text : String, xs : List(String), index : Integer) -> -F Placing {
+  case xs {
+    Nil => Unplaced,
+    Cons(x, rest) => {
+      run same <- x == text;
+      case same {
+        true => Placed(index),
+        false => {
+          run next <- index + 1;
+          become placeOf[<](text, rest, next)
+        }
+      }
+    }
+  }
 }
 
 /// The most mass a judge admits outside the option letters: any, or at
@@ -316,10 +341,10 @@ def rec addAt(xs : List(f64), place : Integer, mass : f64) -> -F List(f64) {
 }
 
 /// The masses `reported` adds, in the order reported, to `masses`, one per
-/// option, and to `inside`, the mass already on the option letters. A
-/// letter whose place is past the last of `count` options adds nothing; a
-/// log-probability that is NaN or above zero, wherever it stands, leaves no
-/// masses.
+/// option, and to `inside`, the mass already on the option letters. A token
+/// that is no letter, or a letter whose place is past the last of `count`
+/// options, adds nothing; a log-probability that is NaN or above zero,
+/// wherever it stands, leaves no masses.
 @[ checks ]
 def rec gather(
   reported : List(Reported),
@@ -330,26 +355,25 @@ def rec gather(
   case reported {
     Nil => Held(masses, inside),
     Cons(token, rest) => case token {
-      Unlettered(logprob) => {
-        run logged <- float64.le(logprob, 0f64);
-        case logged {
-          false => Unlogged,
-          true => become gather[<](rest, count, masses, inside)
-        }
-      },
-      Lettered(place, logprob) => {
+      Token(text, logprob) => {
         run logged <- float64.le(logprob, 0f64);
         case logged {
           false => Unlogged,
           true => {
-            run option <- place < count;
-            case option {
-              false => become gather[<](rest, count, masses, inside),
-              true => {
-                run mass <- float64.exp(logprob);
-                run added <- addAt(masses, place, mass);
-                run within <- float64.add(inside, mass);
-                become gather[<](rest, count, added, within)
+            run placing <- placeOf(text, letters, 0);
+            case placing {
+              Unplaced => become gather[<](rest, count, masses, inside),
+              Placed(place) => {
+                run option <- place < count;
+                case option {
+                  false => become gather[<](rest, count, masses, inside),
+                  true => {
+                    run mass <- float64.exp(logprob);
+                    run added <- addAt(masses, place, mass);
+                    run within <- float64.add(inside, mass);
+                    become gather[<](rest, count, added, within)
+                  }
+                }
               }
             }
           }
@@ -565,11 +589,11 @@ def colours = Cons("green", Cons("blue", Cons("red", Nil))) ;
 def yesNo : List(String) ;
 def yesNo = Cons("yes", Cons("no", Nil)) ;
 
-/// `the_options_share_the_mass_on_their_letters`: `B` at 0.5 and ` B` at
-/// 0.1, one letter whose masses add; `A` at 0.2; the lowercase `b` at 0.05
-/// and the word `Blue` at 0.04, no letter; and `D` at 0.05, past the last of
-/// the three options. `A` holds 0.2 of the 0.8 on the option letters, `B`
-/// 0.6 of it and `C` none, and 0.2 is outside.
+/// `the_options_share_the_mass_on_their_letters`: `B` at 0.5 and ` B`, which
+/// the host trims to `B`, at 0.1, one letter whose masses add; `A` at 0.2;
+/// the lowercase `b` at 0.05 and the word `Blue` at 0.04, no letter; and `D`
+/// at 0.05, past the last of the three options. `A` holds 0.2 of the 0.8 on
+/// the option letters, `B` 0.6 of it and `C` none, and 0.2 is outside.
 @[ runs("Read(Cons(0.25f64, Cons(0.7499999999999999f64, Cons(0f64, Nil))), 0.19999999999999996f64)") ]
 def shared : () => Ruling ;
 def shared = thunk {
@@ -581,14 +605,14 @@ def shared = thunk {
   become read(
     colours,
     Cons(
-      Lettered(1, half),
+      Token("B", half),
       Cons(
-        Lettered(1, tenth),
+        Token("B", tenth),
         Cons(
-          Lettered(0, fifth),
+          Token("A", fifth),
           Cons(
-            Unlettered(twentieth),
-            Cons(Lettered(3, twentieth), Cons(Unlettered(twentyFifth), Nil))
+            Token("b", twentieth),
+            Cons(Token("D", twentieth), Cons(Token("Blue", twentyFifth), Nil))
           )
         )
       )
@@ -608,7 +632,7 @@ def wordy : () => Ruling ;
 def wordy = thunk {
   run word <- -0.1f64;
   run past <- -2f64;
-  become read(yesNo, Cons(Unlettered(word), Cons(Lettered(2, past), Nil)), Unbounded)
+  become read(yesNo, Cons(Token("Yes", word), Cons(Token("C", past), Nil)), Unbounded)
 } ;
 
 /// A NaN is no log-probability.
@@ -617,7 +641,7 @@ def unloggedNan : () => Ruling ;
 def unloggedNan = thunk {
   run first <- -0.1f64;
   run nan <- float64.div(0f64, 0f64);
-  become read(yesNo, Cons(Lettered(0, first), Cons(Lettered(1, nan), Nil)), Unbounded)
+  become read(yesNo, Cons(Token("A", first), Cons(Token("B", nan), Nil)), Unbounded)
 } ;
 
 /// Nor is a log-probability above zero.
@@ -625,7 +649,7 @@ def unloggedNan = thunk {
 def unloggedPositive : () => Ruling ;
 def unloggedPositive = thunk {
   run first <- -0.1f64;
-  become read(yesNo, Cons(Lettered(0, first), Cons(Lettered(1, 0.5f64), Nil)), Unbounded)
+  become read(yesNo, Cons(Token("A", first), Cons(Token("B", 0.5f64), Nil)), Unbounded)
 } ;
 
 /// Nor an infinity.
@@ -634,7 +658,7 @@ def unloggedInfinite : () => Ruling ;
 def unloggedInfinite = thunk {
   run first <- -0.1f64;
   run infinite <- float64.div(1f64, 0f64);
-  become read(yesNo, Cons(Lettered(0, first), Cons(Lettered(1, infinite), Nil)), Unbounded)
+  become read(yesNo, Cons(Token("A", first), Cons(Token("B", infinite), Nil)), Unbounded)
 } ;
 
 /// `A` at 0.25, `B` at 0.125 and the word `Hmm` at 0.5: 0.625 is outside.
@@ -644,8 +668,8 @@ def wide() -> -F List(Reported) {
   run eighth <- -2.0794415416798357f64;
   run half <- -0.6931471805599453f64;
   (Cons(
-    Lettered(0, quarter),
-    Cons(Lettered(1, eighth), Cons(Unlettered(half), Nil))
+    Token("A", quarter),
+    Cons(Token("B", eighth), Cons(Token("Hmm", half), Nil))
   ) : List(Reported))
 }
 
@@ -670,5 +694,5 @@ def underCeiling = thunk {
 def evenly : () => Ruling ;
 def evenly = thunk {
   run half <- -0.6931471805599453f64;
-  become read(yesNo, Cons(Lettered(0, half), Cons(Lettered(1, half), Nil)), Unbounded)
+  become read(yesNo, Cons(Token("A", half), Cons(Token("B", half), Nil)), Unbounded)
 } ;

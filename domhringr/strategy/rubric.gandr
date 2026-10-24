@@ -115,6 +115,24 @@ def rec nth(a : Type, xs : List(a), i : Integer, fallback : a) -> -F a {
   }
 }
 
+/// Whether one of `questions` is named `name`, as a fixture pair's
+/// `isolates` file must name one of its rubric's questions.
+@[ checks ]
+def rec asks(name : String, questions : List(Question)) -> -F Bool {
+  case questions {
+    Nil => false,
+    Cons(question, rest) => case question {
+      Asked(asked, instructions, holds, fails) => {
+        run same <- asked == name;
+        case same {
+          true => true,
+          false => become asks[<](name, rest)
+        }
+      }
+    }
+  }
+}
+
 /// The band every rubric of the set grades against, `low = 0.2` and
 /// `high = 0.8`.
 @[ checks ]
@@ -261,23 +279,28 @@ def codeNames = thunk { run questions <- questionsOf(code); become names(questio
 def docsNames : () => List(String) ;
 def docsNames = thunk { run questions <- questionsOf(docs); become names(questions) } ;
 
-/// The question `rubrics/fixtures/code/isolates` names is `code`'s sixth,
-/// found by its position: no admitted form compares two strings (gandr #1832).
-@[ runs("\"test-names\"") ]
-def codeIsolates : () => String ;
+/// The question `rubrics/fixtures/code/isolates` names is one `code` asks.
+@[ runs("+{.0 = unit}") ]
+def codeIsolates : () => Bool ;
 def codeIsolates = thunk {
   run questions <- questionsOf(code);
-  run named <- names(questions);
-  become nth(String, named, 5, "")
+  become asks("test-names", questions)
 } ;
 
-/// The question `rubrics/fixtures/docs/isolates` names is `docs`'s fourth.
-@[ runs("\"present-tense\"") ]
-def docsIsolates : () => String ;
+/// The question `rubrics/fixtures/docs/isolates` names is one `docs` asks.
+@[ runs("+{.0 = unit}") ]
+def docsIsolates : () => Bool ;
 def docsIsolates = thunk {
   run questions <- questionsOf(docs);
-  run named <- names(questions);
-  become nth(String, named, 3, "")
+  become asks("present-tense", questions)
+} ;
+
+/// A question of `docs` is none `code` asks.
+@[ runs("+{.1 = unit}") ]
+def codeAsksNoDocsQuestion : () => Bool ;
+def codeAsksNoDocsQuestion = thunk {
+  run questions <- questionsOf(code);
+  become asks("present-tense", questions)
 } ;
 
 /// The set's band is one a rubric may hold.
