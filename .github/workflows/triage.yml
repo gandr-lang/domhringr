@@ -1,0 +1,51 @@
+# <critical>
+# MUST preserve anchor-first CI: maximal sharing, no copied orchestration.
+# New functionality MUST reuse template anchors or add anchors for likely reuse.
+# MUST parameterize differences; performance exceptions require measured evidence.
+# Share exceptional logic through actions; preserve parallelism, caches, and gates.
+# </critical>
+# Lists we produce are displayed collapsed: in `<details>` under a one-line
+# summary of what, how many and the verdict.
+name: triage
+
+# Every issue is filed with a `kind:` and an `area:` label
+# (gandr-lang/gandr#2538, `tracker.md` § tracker-issues). On every opened,
+# labelled or unlabelled issue, `.config/triage/triage.sh` reads its labels
+# as they stand and adds `needs:triage` while either is missing, removing it
+# once both are; the board report lists the issues carrying it. The rule's
+# cases live with gandr's copy (`check:issues`).
+on:
+  issues:
+    types: [opened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+# One group per issue: a newer event replaces a pending run, and every run
+# reads the labels as they stand, so the last run settles the label.
+concurrency:
+  group: triage-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    name: flag an issue missing its kind or area
+    # ci.yml's runner: arm64 wherever the architecture does not matter.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # The script runs from the default branch.
+      - name: git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          ref: ${{ github.event.repository.default_branch }}
+      - name: add or remove needs:triage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: .config/triage/triage.sh "$ISSUE"
