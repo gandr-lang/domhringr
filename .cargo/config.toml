@@ -5,4 +5,13 @@
 build-dist = ["build", "--config=.cargo/config.dist.toml", "--profile=dist"]
 check-dist = ["check", "--config=.cargo/config.dist.toml", "--profile=dist"]
 
+# The tree's link on Linux, whatever a host configuration says (gandr-lang/gandr#4221).
+# Cargo joins a host's `rustflags` with these, the tree's last, so the
+# tree's `--ld-path` outranks a host's: clang takes the last one it reads,
+# and no `mold` or `wild` links the tree's builds under parallel lanes.
+# A task that sets `RUSTFLAGS` drops every `rustflags` array and keeps `linker`.
+[target.x86_64-unknown-linux-gnu]
+linker = "/usr/bin/clang"
+rustflags = ["-Ctarget-cpu=native", "-Clink-arg=--ld-path=/usr/bin/ld.lld", "-Clink-arg=-Wl,--compress-debug-sections=zstd"]
+
 [unstable]
