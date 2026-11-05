@@ -46,7 +46,7 @@ includes = [".config/mise/tasks"]
 [tools]
 # Release-only rendering; formatting never reads Git history.
 "github:orhun/git-cliff" = "2.14.2"
-"cargo:dylint-link" = "6.0.4"
+"cargo:dylint-link" = "6.3.2"
 "github:aubepkg/aube" = "2.2.4"
 "github:crate-ci/typos" = "v1.50.0"
 "github:max-sixty/worktrunk" = "v0.80.0"
@@ -69,7 +69,7 @@ node = "26.8.1"
 # The dylint release ships Linux-only binaries, so the pins stay cargo: for
 # macOS workstations; CI's native binstall fetches the Linux assets.
 [tools."cargo:cargo-dylint"]
-version = "6.0.4"
+version = "6.3.2"
 
 # sizelint publishes no release binaries; the one remaining source build.
 [tools."cargo:sizelint"]

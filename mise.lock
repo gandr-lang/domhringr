@@ -3,14 +3,14 @@
 lockfile_version = 3
 
 [[tools."cargo:cargo-dylint"]]
-version = "6.0.4"
+version = "6.3.2"
 backend = "cargo:cargo-dylint"
-specifiers = ["6.0.4"]
+specifiers = ["6.3.2"]
 
 [[tools."cargo:dylint-link"]]
-version = "6.0.4"
+version = "6.3.2"
 backend = "cargo:dylint-link"
-specifiers = ["6.0.4"]
+specifiers = ["6.3.2"]
 
 [[tools."cargo:sizelint"]]
 version = "0.1.5"
@@ -56,53 +56,6 @@ url_api = "https://api.github.com/repos/aubepkg/aube/releases/assets/538190348"
 checksum = "sha256:b6ace0276285c6a0e0f0f2850f45bdcc4e51e1cc11fa005457c6fb83998a6d23"
 url = "https://github.com/aubepkg/aube/releases/download/v2.2.4/aube-v2.2.4-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/aubepkg/aube/releases/assets/538150861"
-
-[[tools."github:colbymchenry/codegraph"]]
-version = "1.6.0"
-backend = "github:colbymchenry/codegraph"
-specifiers = ["1.6.0"]
-
-[tools."github:colbymchenry/codegraph"."platforms.linux-arm64"]
-checksum = "sha256:6dc935a7b8f1a61e688a578b98ea34680eb2e36d7b91db079d64f4011f1a668f"
-url = "https://github.com/colbymchenry/codegraph/releases/download/v1.6.0/codegraph-linux-arm64.tar.gz"
-url_api = "https://api.github.com/repos/colbymchenry/codegraph/releases/assets/531072898"
-provenance = "github-attestations"
-
-[tools."github:colbymchenry/codegraph"."platforms.linux-arm64-musl"]
-checksum = "sha256:6dc935a7b8f1a61e688a578b98ea34680eb2e36d7b91db079d64f4011f1a668f"
-url = "https://github.com/colbymchenry/codegraph/releases/download/v1.6.0/codegraph-linux-arm64.tar.gz"
-url_api = "https://api.github.com/repos/colbymchenry/codegraph/releases/assets/531072898"
-provenance = "github-attestations"
-
-[tools."github:colbymchenry/codegraph"."platforms.linux-x64"]
-checksum = "sha256:de3391f79ed42622d937e6cd5b7642a7ea8bb7d1473607e80b879ba73ef216b0"
-url = "https://github.com/colbymchenry/codegraph/releases/download/v1.6.0/codegraph-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/colbymchenry/codegraph/releases/assets/531072897"
-provenance = "github-attestations"
-
-[tools."github:colbymchenry/codegraph"."platforms.linux-x64-musl"]
-checksum = "sha256:de3391f79ed42622d937e6cd5b7642a7ea8bb7d1473607e80b879ba73ef216b0"
-url = "https://github.com/colbymchenry/codegraph/releases/download/v1.6.0/codegraph-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/colbymchenry/codegraph/releases/assets/531072897"
-provenance = "github-attestations"
-
-[tools."github:colbymchenry/codegraph"."platforms.macos-arm64"]
-checksum = "sha256:1c73033512d55f67be04717e81532e8beaf7be6fb8531f51a179fa23064ad480"
-url = "https://github.com/colbymchenry/codegraph/releases/download/v1.6.0/codegraph-darwin-arm64.tar.gz"
-url_api = "https://api.github.com/repos/colbymchenry/codegraph/releases/assets/531072896"
-provenance = "github-attestations"
-
-[tools."github:colbymchenry/codegraph"."platforms.macos-x64"]
-checksum = "sha256:cb86a2b62ee676b62a56bf8423600e7d867e752e57f323cdc98c0f6236efd908"
-url = "https://github.com/colbymchenry/codegraph/releases/download/v1.6.0/codegraph-darwin-x64.tar.gz"
-url_api = "https://api.github.com/repos/colbymchenry/codegraph/releases/assets/531072894"
-provenance = "github-attestations"
-
-[tools."github:colbymchenry/codegraph"."platforms.windows-x64"]
-checksum = "sha256:cd76c3c3391f2d40abef12b142151950b6d77abc2d8429e648f89eaa90f5b68a"
-url = "https://github.com/colbymchenry/codegraph/releases/download/v1.6.0/codegraph-win32-x64.zip"
-url_api = "https://api.github.com/repos/colbymchenry/codegraph/releases/assets/531072961"
-provenance = "github-attestations"
 
 [[tools."github:crate-ci/typos"]]
 version = "1.50.0"
@@ -196,47 +149,6 @@ provenance = "github-attestations"
 checksum = "sha256:3b1704f9c44d2a5f29af84c18dc5529c2cefab75697bdfdf69074cced1c0533b"
 url = "https://github.com/j178/prek/releases/download/v0.5.0/prek-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/j178/prek/releases/assets/531708991"
-provenance = "github-attestations"
-
-[[tools."github:jdx/pitchfork"]]
-version = "2.29.0"
-backend = "github:jdx/pitchfork"
-specifiers = ["2.29.0"]
-
-[tools."github:jdx/pitchfork"."platforms.linux-arm64"]
-checksum = "sha256:dfea08ac9b4a8b2a3f4c9ce94c5faba9a1996634a22bdc6fd17510affe9dca71"
-url = "https://github.com/jdx/pitchfork/releases/download/v2.29.0/pitchfork-aarch64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/jdx/pitchfork/releases/assets/599253285"
-provenance = "github-attestations"
-
-[tools."github:jdx/pitchfork"."platforms.linux-arm64-musl"]
-checksum = "sha256:dfea08ac9b4a8b2a3f4c9ce94c5faba9a1996634a22bdc6fd17510affe9dca71"
-url = "https://github.com/jdx/pitchfork/releases/download/v2.29.0/pitchfork-aarch64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/jdx/pitchfork/releases/assets/599253285"
-provenance = "github-attestations"
-
-[tools."github:jdx/pitchfork"."platforms.linux-x64"]
-checksum = "sha256:80d48f7077f8612c7684777aef346b93d3ecca296d4d9b392b2fb5e50a4f891d"
-url = "https://github.com/jdx/pitchfork/releases/download/v2.29.0/pitchfork-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/jdx/pitchfork/releases/assets/599252450"
-provenance = "github-attestations"
-
-[tools."github:jdx/pitchfork"."platforms.linux-x64-musl"]
-checksum = "sha256:80d48f7077f8612c7684777aef346b93d3ecca296d4d9b392b2fb5e50a4f891d"
-url = "https://github.com/jdx/pitchfork/releases/download/v2.29.0/pitchfork-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/jdx/pitchfork/releases/assets/599252450"
-provenance = "github-attestations"
-
-[tools."github:jdx/pitchfork"."platforms.macos-arm64"]
-checksum = "sha256:06adf144e4a48dad55806706a7b0fe1a8dfc901726c5c8939e54fbc2bcabb04e"
-url = "https://github.com/jdx/pitchfork/releases/download/v2.29.0/pitchfork-aarch64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/jdx/pitchfork/releases/assets/599256238"
-provenance = "github-attestations"
-
-[tools."github:jdx/pitchfork"."platforms.windows-x64"]
-checksum = "sha256:9747f3679f5c7ff4091bb3fe14c80ab92c9b15c212f37cd0193aa6e2da1631c1"
-url = "https://github.com/jdx/pitchfork/releases/download/v2.29.0/pitchfork-x86_64-pc-windows-msvc.zip"
-url_api = "https://api.github.com/repos/jdx/pitchfork/releases/assets/599271230"
 provenance = "github-attestations"
 
 [[tools."github:koalaman/shellcheck"]]
@@ -768,82 +680,6 @@ aube = { path = ".mise/locks/npm-oxfmt/0.65.0", digest = "sha256:875f746f68ebd84
 backend = "npm:oxfmt"
 specifiers = ["0.65.0"]
 
-[[tools.restate]]
-version = "1.7.13"
-backend = "github:restatedev/restate"
-specifiers = ["1.7.13"]
-
-[tools.restate.options]
-matching = "restate-cli"
-
-[tools.restate."platforms.linux-arm64"]
-checksum = "sha256:8d5461030cb50757adf1fdde2b1be52b8f1fe68a60d0cc21384d07424497f9c5"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-cli-aarch64-unknown-linux-musl.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723344"
-
-[tools.restate."platforms.linux-arm64-musl"]
-checksum = "sha256:8d5461030cb50757adf1fdde2b1be52b8f1fe68a60d0cc21384d07424497f9c5"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-cli-aarch64-unknown-linux-musl.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723344"
-
-[tools.restate."platforms.linux-x64"]
-checksum = "sha256:cbb87a846d6d4d426ea512dd148a031745b697f410f0eee4f02b84188b01f55a"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-cli-x86_64-unknown-linux-musl.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723366"
-
-[tools.restate."platforms.linux-x64-musl"]
-checksum = "sha256:cbb87a846d6d4d426ea512dd148a031745b697f410f0eee4f02b84188b01f55a"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-cli-x86_64-unknown-linux-musl.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723366"
-
-[tools.restate."platforms.macos-arm64"]
-checksum = "sha256:16945a0fd2f6da84a12abef981ede385ae5571ae121df59c2ef22a4add508f3d"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-cli-aarch64-apple-darwin.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723341"
-
-[tools.restate."platforms.macos-x64"]
-checksum = "sha256:7ce31c136a4db646771ce459aca4a6b80d1966c878d67c1b64529d4ca2193ca8"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-cli-x86_64-apple-darwin.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723363"
-
-[[tools.restate-server]]
-version = "1.7.13"
-backend = "github:restatedev/restate"
-specifiers = ["1.7.13"]
-
-[tools.restate-server.options]
-matching = "restate-server"
-
-[tools.restate-server."platforms.linux-arm64"]
-checksum = "sha256:c0218d5ae5052cc2c6f842bbcfa57fd10240cfe30795c381850c452fbcef2b61"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-server-aarch64-unknown-linux-musl.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723394"
-
-[tools.restate-server."platforms.linux-arm64-musl"]
-checksum = "sha256:c0218d5ae5052cc2c6f842bbcfa57fd10240cfe30795c381850c452fbcef2b61"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-server-aarch64-unknown-linux-musl.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723394"
-
-[tools.restate-server."platforms.linux-x64"]
-checksum = "sha256:5429b216b68f3fa52b7f0e6627a2c2a86fc0c75d19b1e152cd2e7dcd8bab4c82"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-server-x86_64-unknown-linux-musl.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723433"
-
-[tools.restate-server."platforms.linux-x64-musl"]
-checksum = "sha256:5429b216b68f3fa52b7f0e6627a2c2a86fc0c75d19b1e152cd2e7dcd8bab4c82"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-server-x86_64-unknown-linux-musl.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723433"
-
-[tools.restate-server."platforms.macos-arm64"]
-checksum = "sha256:503c9a74eaad9b3579a373a5cd558b6910b179d17d87c2a75307cd975d1a299d"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-server-aarch64-apple-darwin.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723387"
-
-[tools.restate-server."platforms.macos-x64"]
-checksum = "sha256:8bebb7787f003530e4959631111505b5003c87470e8ce3c070b6d02aff73ca89"
-url = "https://github.com/restatedev/restate/releases/download/v1.7.13/restate-server-x86_64-apple-darwin.tar.xz"
-url_api = "https://api.github.com/repos/restatedev/restate/releases/assets/603723419"
-
 [[tools.rust]]
 version = "nightly-2026-06-25"
 backend = "core:rust"
@@ -852,3 +688,50 @@ specifiers = ["nightly-2026-06-25"]
 [tools.rust.options]
 components = "clippy,llvm-tools,rust-src,rustc-dev,rustfmt"
 profile = "minimal"
+
+[[tools.yq]]
+version = "4.54.1"
+backend = "aqua:mikefarah/yq"
+specifiers = ["4.54.1"]
+
+[tools.yq."platforms.linux-arm64"]
+checksum = "sha256:189088da0c6429ec5178dfaab1a114805f6cab0b61b165ab236efedf1d57a71b"
+url = "https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_arm64"
+url_api = "https://api.github.com/repos/mikefarah/yq/releases/assets/597222603"
+provenance = "cosign"
+
+[tools.yq."platforms.linux-arm64-musl"]
+checksum = "sha256:189088da0c6429ec5178dfaab1a114805f6cab0b61b165ab236efedf1d57a71b"
+url = "https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_arm64"
+url_api = "https://api.github.com/repos/mikefarah/yq/releases/assets/597222603"
+provenance = "cosign"
+
+[tools.yq."platforms.linux-x64"]
+checksum = "sha256:8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f"
+url = "https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64"
+url_api = "https://api.github.com/repos/mikefarah/yq/releases/assets/597222595"
+provenance = "cosign"
+
+[tools.yq."platforms.linux-x64-musl"]
+checksum = "sha256:8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f"
+url = "https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64"
+url_api = "https://api.github.com/repos/mikefarah/yq/releases/assets/597222595"
+provenance = "cosign"
+
+[tools.yq."platforms.macos-arm64"]
+checksum = "sha256:fee511a181bd8b3e6b7da98842b41973bfac8cd3bcd341ed29a584620b5b2844"
+url = "https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_darwin_arm64"
+url_api = "https://api.github.com/repos/mikefarah/yq/releases/assets/597222609"
+provenance = "cosign"
+
+[tools.yq."platforms.macos-x64"]
+checksum = "sha256:3a812fce205a4d67014fb71b7fa297092210e580df3d8f52dddc2cf3a599c22b"
+url = "https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_darwin_amd64"
+url_api = "https://api.github.com/repos/mikefarah/yq/releases/assets/597222619"
+provenance = "cosign"
+
+[tools.yq."platforms.windows-x64"]
+checksum = "sha256:b645f47ebb3a0d2fbab52998550bbd0a1706f23b5ca5f5b48e638c580bb70928"
+url = "https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_windows_amd64.exe"
+url_api = "https://api.github.com/repos/mikefarah/yq/releases/assets/597222575"
+provenance = "cosign"
