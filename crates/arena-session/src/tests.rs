@@ -266,7 +266,7 @@ fn unknown_editions_never_replay_as_known_protocols()
                 refused.reason,
                 crate::Reason::Unknown(crate::UnknownEdition(edition))
             );
-            assert!(play.moves().is_empty());
+            assert_eq!(play.moves(), []);
         }
         for (channel, movement) in [
             (Channel::Judge, Movement::Verdict),

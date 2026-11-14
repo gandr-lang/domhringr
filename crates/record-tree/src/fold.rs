@@ -4202,7 +4202,7 @@ mod tests
                         domhringr_arena_session::Movement::Landed,
                         gandr_core_session::Refusal::ResumeAfterEnd,
                     );
-                    assert!(landings.is_empty());
+                    assert_eq!(landings, []);
                 }
                 assert_eq!(
                     view.refused()

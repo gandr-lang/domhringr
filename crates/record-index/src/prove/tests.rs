@@ -180,7 +180,7 @@ fn a_proving_reader_reads_what_the_store_holds()
         }
         let subject = Subject::Evidence(testing::evidence());
         let named = super::named(&mut proving, keyed, subject).await.unwrap();
-        assert!(!named.is_empty());
+        assert_ne!(named, []);
         assert_eq!(
             super::named(&mut local, keyed, subject).await.unwrap(),
             named

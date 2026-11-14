@@ -1396,12 +1396,12 @@ rm -rf "$work"
             let attested = store
                 .load(keyed, domhringr_record_index::derive::root(claim.index))
                 .unwrap();
-            assert!(
+            assert_eq!(
                 domhringr_record_index::check::check(&peer, world.project, claim, &attested)
                     .await
                     .unwrap()
-                    .0
-                    .is_empty()
+                    .0,
+                Vec::<domhringr_record_index::check::Finding>::new()
             );
             let whole = domhringr_record_index::derive::Deriver::default()
                 .project(&peer, world.project, &view, &store)

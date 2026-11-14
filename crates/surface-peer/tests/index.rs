@@ -451,7 +451,10 @@ mod tests
             let server = Running::serve(&a, OsStr::new(&port));
             let _sync =
                 finish(peer(&b).args(["sync", &project, "--peer", &aid[1], "--at", &contact]));
-            assert!(finish(peer(&b).args(["heads", &task])).is_empty());
+            assert_eq!(
+                finish(peer(&b).args(["heads", &task])),
+                Vec::<String>::new()
+            );
             Self {
                 root,
                 project,
@@ -724,7 +727,10 @@ mod tests
         let port = contact.rsplit(':').next().unwrap();
         let server = Running::serve(&a, OsStr::new(port));
         let _synced = finish(peer(&b).args(["sync", &project, "--peer", &owner, "--at", &contact]));
-        assert!(finish(peer(&b).args(["heads", &task])).is_empty());
+        assert_eq!(
+            finish(peer(&b).args(["heads", &task])),
+            Vec::<String>::new()
+        );
         let answer = finish(peer(&b).args([
             "provenance",
             &project,
@@ -962,7 +968,7 @@ mod tests
                     _ => panic!("stage"),
                 }
                 let view = holder.view(tree).await.unwrap();
-                assert!(view.refused().is_empty());
+                assert_eq!(view.refused(), []);
                 let expected = view.task().current().to_string();
                 let prefix = if matches!(stage, "rework" | "abandon") {
                     "decided"
@@ -1146,7 +1152,10 @@ mod tests
             let _synced =
                 finish(peer(&b).args(["sync", &project, "--peer", &owner, "--at", &contact]));
             let output = run(peer(&b).args(["index", "replay", &project, "one", "--at", &contact]));
-            assert!(finish(peer(&b).args(["heads", &task])).is_empty());
+            assert_eq!(
+                finish(peer(&b).args(["heads", &task])),
+                Vec::<String>::new()
+            );
             if forgery == "omitted" {
                 assert!(output.status.success(), "{output:?}");
                 let actual = String::from_utf8(output.stdout).unwrap();
