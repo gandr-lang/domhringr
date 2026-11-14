@@ -728,9 +728,9 @@ url = "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15
 url_api = "https://api.github.com/repos/BurntSushi/ripgrep/releases/assets/478119643"
 
 [[tools.rust]]
-version = "nightly-2026-06-25"
+version = "nightly-2026-10-01"
 backend = "core:rust"
-specifiers = ["nightly-2026-06-25"]
+specifiers = ["nightly-2026-10-01"]
 
 [tools.rust.options]
 components = "clippy,llvm-tools,rust-src,rustc-dev,rustfmt"
