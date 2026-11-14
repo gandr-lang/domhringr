@@ -110,8 +110,8 @@
 //! - the operating system's resolver through the standard library: it resolves
 //!   addresses and returns no TXT records.
 //!
-//! Reversal: iroh no longer exporting its resolver, or a witness that needs
-//! record types or DNSSEC validation the resolver does not expose.
+//! Reversal: an iroh release that does not export its resolver, or a witness
+//! that needs record types or DNSSEC validation the resolver does not expose.
 //!
 //! **A content hash is `blake3` 1.8 with no features.** It names a brief, a
 //! playbook, a rubric and a question; it is the hash sedimentree names commits

@@ -255,7 +255,7 @@
 //! fresh dispatch starts an unchecked attempt.
 //!
 //! - the latest of any kind: a verifier run after a landing would read the task
-//!   as no longer landed.
+//!   as not landed.
 //! - one standing per kind: a reader would rebuild the lifecycle the fold
 //!   already orders.
 //!

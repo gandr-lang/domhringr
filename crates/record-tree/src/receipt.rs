@@ -261,7 +261,7 @@
 //! - probabilities as decimal text: a second canonical form of each number, and
 //!   a parser in the decoder.
 //! - fixed-point integers: a rounding step between the readout and the record,
-//!   and a sum that no longer reads back exactly.
+//!   and a sum that does not read back exactly.
 //!
 //! Reversal: a change to the readout's form — another number of options, a
 //! log-probability — which needs a new kind.
