@@ -341,7 +341,11 @@ fi
 # (`.config/mise/linux-tests`): no firewall keys on a binary inside the
 # container, so no dialogue stalls an unattended run. `--native` runs it on
 # the host instead, signed as `build:tests` describes. CI's macOS lane (`CI`
-# set) and every other host run it natively.
+# set) and every other host run it natively. Before a native run,
+# `.config/mise/peer-probe` syncs a tree between two signed peers at 127.0.0.1
+# and at the host's own interface address. A host whose firewall holds that
+# flow stops the run there, named, instead of failing each peer test on a QUIC
+# timeout (gandr-lang/gandr#7503).
 [test]
 description = "Build, sign, and run tests with nextest arguments"
 usage = '''
@@ -359,6 +363,7 @@ fi
 mise run build:tests -- ${args[@]+"${args[@]}"}
 target=$(cargo metadata --manifest-path Cargo.toml --locked --no-deps --format-version 1 | jq -r '.target_directory')
 export DOMHRINGR_EDITION_ONE="$target/debug/domhringr-peer-edition-one"
+.config/mise/peer-probe "$target/debug/domhringr-peer"
 cargo nextest run --workspace --locked ${args[@]+"${args[@]}"}
 '''
 

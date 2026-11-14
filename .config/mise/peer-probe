@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# The probe before a native test run (gandr-lang/gandr#7503). One signed
+# `domhringr-peer` serves a tree. A second peer syncs it at 127.0.0.1, and a
+# third syncs it at the host's own interface address.
+#
+# The peer tests reach a seat at the addresses of its presence. These are the
+# host's interface addresses, not loopback. A host that holds a flow to such an
+# address fails those tests on a QUIC timeout. The probe names that fault of
+# the host before the run starts.
+#
+# On macOS the application firewall lets loopback pass. It holds each inbound
+# flow at an interface address for a signed executable with no rule of its own.
+# The rule for `org.gandr-lang.domhringr.test` is the host's configuration.
+#
+#   peer-probe <domhringr-peer>
+#
+# The probe exits 0 when each sync ends within the bound. It exits 1 with one
+# line that names the host and the path that fails. DOMHRINGR_PROBE_SECONDS
+# sets the bound, 10 seconds by default.
+set -euo pipefail
+peer=${1:?peer-probe takes the domhringr-peer executable}
+bound=${DOMHRINGR_PROBE_SECONDS:-10}
+host=$(hostname -s 2> /dev/null || hostname)
+work=$(mktemp -d)
+server=
+trap 'if [[ -n $server ]]; then kill "$server" 2> /dev/null || true; fi; rm -rf "$work"' EXIT
+
+# Print the address of the host's default route, or nothing on a host with no
+# such route.
+interface_address() {
+  if [[ $(uname -s) == Darwin ]]; then
+    local interface
+    interface=$(route -n get default 2> /dev/null | awk '/interface:/ {print $2}')
+    if [[ -n $interface ]]; then ipconfig getifaddr "$interface" 2> /dev/null || true; fi
+  elif command -v ip > /dev/null; then
+    ip -4 route get 1.1.1.1 2> /dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") {print $(i + 1); exit}}'
+  fi
+}
+
+fail() {
+  echo "peer-probe: $host: $*" >&2
+  exit 1
+}
+
+"$peer" --relay off --state "$work/owner" id > "$work/ids"
+endpoint=$(sed -n 1p "$work/ids")
+owner=$(sed -n 2p "$work/ids")
+tree=$("$peer" --relay off --state "$work/owner" open)
+
+# Serve the owner's state on a free port. A port that another socket takes
+# first gets one more try on another port.
+for attempt in 1 2 3; do
+  port=$((49152 + RANDOM % 16000))
+  "$peer" --relay off --state "$work/owner" serve --port "$port" > "$work/serve.out" 2> "$work/serve.err" &
+  server=$!
+  for _ in $(seq 1 $((bound * 10))); do
+    if grep -qx listening "$work/serve.out" 2> /dev/null || ! kill -0 "$server" 2> /dev/null; then break; fi
+    sleep 0.1
+  done
+  if grep -qx listening "$work/serve.out"; then break; fi
+  kill "$server" 2> /dev/null || true
+  server=
+  if ! grep -q 'Address already in use' "$work/serve.err" || [[ $attempt == 3 ]]; then
+    fail "domhringr-peer serves on no local port: $(sed -n 1p "$work/serve.err")"
+  fi
+done
+
+# Exit 0 when a fresh reader syncs the tree at the address `$1` within the
+# bound, and 1 when it does not.
+synced() {
+  local reader=$work/reader-$1 sync
+  "$peer" --relay off --state "$reader" sync "$tree" --peer "$owner" --at "$endpoint@$1:$port" \
+    > /dev/null 2> "$work/sync.err" &
+  sync=$!
+  for _ in $(seq 1 $((bound * 10))); do
+    if ! kill -0 "$sync" 2> /dev/null; then
+      wait "$sync"
+      return
+    fi
+    sleep 0.1
+  done
+  kill "$sync" 2> /dev/null || true
+  return 1
+}
+
+if ! synced 127.0.0.1; then
+  fail "a signed domhringr-peer does not reach its own listener at 127.0.0.1 within $bound s. The host's loopback path fails, and each peer test times out on it."
+fi
+address=$(interface_address)
+if [[ -z $address ]]; then
+  echo "peer-probe: $host: no interface address, so the probe reaches 127.0.0.1 alone"
+  exit 0
+fi
+if ! synced "$address"; then
+  if [[ $(uname -s) == Darwin ]]; then
+    fail "a signed domhringr-peer reaches its own listener at 127.0.0.1, and not at $address within $bound s. The application firewall holds the flow, and the peer tests time out on it. Give org.gandr-lang.domhringr.test an allow rule in the host's configuration."
+  fi
+  fail "a signed domhringr-peer reaches its own listener at 127.0.0.1, and not at $address within $bound s. A firewall of the host holds the flow, and the peer tests time out on it."
+fi
+echo "peer-probe: $host: a signed domhringr-peer reaches its own listener at 127.0.0.1 and at $address"
