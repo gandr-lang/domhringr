@@ -1,0 +1,71 @@
+[
+  {
+    "name": "gandr #7041: a home directory of macOS in a comment",
+    "line": "// built in /Users/alice/Development/gandr",
+    "refused": true
+  },
+  {
+    "name": "gandr #7041: a home directory of Linux in a doc",
+    "line": "Run `/home/bob/.cargo/bin/gandr` once.",
+    "refused": true
+  },
+  {
+    "name": "gandr #7041: a home directory at the end of a line",
+    "line": "cd /Users/alice",
+    "refused": true
+  },
+  {
+    "name": "gandr #7041: a home directory in quotes",
+    "line": "let path = \"/home/bob/.config/gandr\";",
+    "refused": true
+  },
+  {
+    "name": "gandr #7041: a home directory after an equals sign",
+    "line": "XDG_CACHE_HOME=/home/bob/.cache",
+    "refused": true
+  },
+  {
+    "name": "gandr #7041: the root's home directory",
+    "line": "cp out /root/.cache/gandr",
+    "refused": true
+  },
+  {
+    "name": "gandr #7041: a home directory of Windows",
+    "line": "C:\\Users\\carol\\AppData\\Local\\gandr",
+    "refused": true
+  },
+  {
+    "name": "gandr #7041: a placeholder among real names on one line",
+    "line": "/home/user/a and /home/dave/b",
+    "refused": true
+  },
+  {
+    "name": "the placeholder of the XDG tests",
+    "line": "Some(PathBuf::from(\"/home/user/.config/gandr/config.toml\"))",
+    "refused": false
+  },
+  { "name": "the placeholder of macOS", "line": "/Users/user/Library", "refused": false },
+  {
+    "name": "the placeholder of the unmet fixture of the public-private-stance rubric",
+    "line": "cd /home/ada/src/domhringr && mise exec -- cargo nextest run",
+    "refused": false
+  },
+  {
+    "name": "a path under the home of the reader",
+    "line": "~/.config/gandr/config.toml",
+    "refused": false
+  },
+  { "name": "a path through $HOME", "line": "$HOME/Development/gandr", "refused": false },
+  { "name": "a temporary path", "line": "/tmp/gandr-run/out.json", "refused": false },
+  {
+    "name": "a URL with a home segment",
+    "line": "https://example.org/home/page/",
+    "refused": false
+  },
+  { "name": "a relative path with a home segment", "line": "src/home/user.rs", "refused": false },
+  {
+    "name": "a word that starts like a home directory",
+    "line": "/homework/notes and /rooted/tree",
+    "refused": false
+  }
+]

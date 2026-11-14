@@ -371,6 +371,18 @@ fi
 echo 'conflict marker check OK: no conflict markers in tracked files'
 """
 
+# No line of the tree holds the path of a home directory, which names an
+# account of a host on a public surface. The rule, the patterns, the
+# placeholders, the cases and the script are gandr's (gandr #7041). One `rg`
+# reads every file that git does not ignore, after the cases of
+# `.config/local-paths/` read as recorded. A placeholder name of
+# `placeholders` stands. `check` runs it with the other checks.
+["check:local-paths"]
+description = "No line of the tree holds the path of a home directory"
+tools.jq = "1.8.1"
+tools.ripgrep = "15.2.0"
+run = ".config/local-paths/check.bash"
+
 # Workflow tools are build-time policy, never package dependencies. Check
 # Cargo's resolved metadata, including renamed and transitive dependencies,
 # so a future publishable package cannot acquire an unpublished tool edge.
