@@ -9,9 +9,12 @@
 description = "Every gate"
 depends = ["check:*"]
 
+# The workspace members alone: `--all` also formats the path dependencies, so
+# it holds the gandr sibling to this tree's rustfmt. The sibling's own gate
+# holds its layout under its own toolchain.
 ["check:fmt"]
 description = "rustfmt, unchanged"
-run = "cargo fmt --all --check"
+run = "cargo fmt --check"
 
 ["check:clippy"]
 description = "The clippy half of the lint wall"
@@ -321,10 +324,14 @@ target=$(cargo metadata --manifest-path Cargo.toml --locked --no-deps --format-v
 cargo build --package domhringr-surface-peer --bin domhringr-peer --no-default-features --locked
 cp "$target/debug/domhringr-peer" "$target/debug/domhringr-peer-edition-one"
 # macOS ships bash 3.2, where an empty "${args[@]}" is unbound under set -u.
-cargo nextest run --workspace --locked --no-run ${args[@]+"${args[@]}"}
+# Cargo's build directory decides where each test executable goes, so the
+# build's own artifact messages name the executables to sign; cargo renders
+# its diagnostics on standard error as before.
+executables=$(cargo nextest run --workspace --locked --no-run --cargo-message-format json-render-diagnostics ${args[@]+"${args[@]}"} \
+  | jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable')
 if [[ -n "${CODESIGN_IDENTITY:-}" && "$(uname -s)" == "Darwin" ]]; then
-  find "$target/debug" "$target/debug/deps" -maxdepth 1 -type f -perm -u+x ! -name '*.*' \
-    -exec codesign --force --sign "$CODESIGN_IDENTITY" --identifier org.gandr-lang.domhringr.test {} +
+  { find "$target/debug" -maxdepth 1 -type f -perm -u+x ! -name '*.*'; printf '%s\n' "$executables"; } \
+    | sort -u | xargs codesign --force --sign "$CODESIGN_IDENTITY" --identifier org.gandr-lang.domhringr.test
 elif [[ "$(uname -s)" == "Darwin" ]]; then
   echo "test: CODESIGN_IDENTITY is unset; skipping code signing. Firewall prompts may recur; see check:tests in .config/mise/tasks/mise-tasks-check.toml." >&2
 fi
@@ -421,12 +428,14 @@ fi
 # its own so the wall's parallel tasks never share a lock or flags with it.
 # `gandr check` settles every declaration, running each exemplar and comparing
 # its value; `gandr fmt --check` holds each source to the layout the formatter
-# writes.
+# writes. The sibling's lints are capped at warn, as Cargo caps the lints of
+# each dependency at a pin: gandr's own gate judges them under gandr's own
+# toolchain, and a compile error still fails here.
 ["check:gandr"]
 description = "The gandr sources under domhringr/, checked, run and formatted by the sibling's driver"
 dir = "{{config_root}}/vendor/gandr"
 env.CARGO_TARGET_DIR = "{{config_root}}/target/gandr"
-env.RUSTFLAGS = ""
+env.RUSTFLAGS = "--cap-lints=warn"
 run = [
   "cargo build --quiet --locked --release --package gandr-lang --bin gandr",
   "{{config_root}}/target/gandr/release/gandr check {{config_root}}/domhringr",
