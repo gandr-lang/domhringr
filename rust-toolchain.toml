@@ -12,7 +12,7 @@
 
 # Factory consumes the policy at its reviewed Git revision.
 [toolchain]
-channel = "nightly-2026-06-25"
+channel = "nightly-2026-10-01"
 # `rust-src`: `cargo build-dist` rebuilds std (`.cargo/config.dist.toml`).
 components = ["rustc-dev", "llvm-tools", "clippy", "rustfmt", "rust-src"]
 profile = "minimal"

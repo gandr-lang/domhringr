@@ -496,7 +496,7 @@
 //! refused: no chunk is stored under <chunk-digest>` for a chunk neither side
 //! holds — and exits 1; `--local` reads the local store alone.
 //!
-//! - a header line before the bytes: the output would no longer be the value,
+//! - a header line before the bytes: the output would be more than the value,
 //!   and a reader comparing it would strip it first.
 //!
 //! Reversal: a value too large to hold in memory, which needs the read streamed

@@ -36,7 +36,7 @@ fn an_entry_agrees_with_the_fold_at_every_standing()
         for head in &fixture.standings {
             let heads = Heads::from_iter([*head]);
             let view = peer.view_at(testing::tree(), &heads).await.unwrap();
-            assert!(view.refused().is_empty());
+            assert_eq!(view.refused(), []);
             let expected = view.task().current();
             let standing = match *expected {
                 Current::Undispatched => 0_u8,
@@ -134,8 +134,8 @@ fn an_entry_agrees_with_the_fold_at_every_standing()
         let [alpha, unheld, zeta] =
             ["alpha", "unheld", "zeta"].map(|name| &contents.0[&name.parse::<TaskName>().unwrap()]);
         // Only the first name of a tree carries its provenance.
-        assert!(!alpha.namings.is_empty());
-        assert!(zeta.namings.is_empty());
+        assert_ne!(alpha.namings, []);
+        assert_eq!(zeta.namings, []);
         assert_eq!(alpha.plays, zeta.plays);
         assert_eq!(unheld.standing, Standing::Unheld);
         assert!(unheld.plays.is_empty() && unheld.heads.iter().next().is_none());

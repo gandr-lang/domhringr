@@ -274,7 +274,7 @@ struct Seat
 /// - hypothesis: L3 — an operator wakes a seat serving in-process: the seat
 ///   announces the link, replies woken, presents itself, acts through a program
 ///   and reports, and the operator fetches the report's content from the seat
-///   by its name; a wake to a dispatch it no longer holds is declined; a seat
+///   by its name; a wake to a dispatch it does not hold is declined; a seat
 ///   started over a store that holds a dispatch to it, unreported, acts on it
 ///   and reports unwoken.
 /// - witness: `seat::tests::a_woken_seat_presents_acts_and_reports`

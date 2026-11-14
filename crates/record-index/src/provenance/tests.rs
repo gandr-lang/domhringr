@@ -221,25 +221,25 @@ fn a_digest_named_twice_has_two_records()
             // A revision of the digest's bytes is another subject.
             let mut bytes = [0; 32];
             bytes.copy_from_slice(digest.as_ref());
-            assert!(
+            assert_eq!(
                 prove::named(
                     &mut local,
                     keyed,
                     Subject::Revision(Revision::Sha256(bytes))
                 )
                 .await
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+                []
             );
-            assert!(
+            assert_eq!(
                 prove::named(
                     &mut local,
                     keyed,
                     Subject::Evidence(ManifestDigest::from([0; 32]))
                 )
                 .await
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+                []
             );
         }
     });

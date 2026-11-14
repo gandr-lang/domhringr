@@ -1355,7 +1355,8 @@ pub fn fold(
                             let mut play = Play::default();
                             let result =
                                 record_move(&mut play, edition, Movement::Dispatch, node.commit);
-                            // Keep unknown names so subsequent moves cannot fall back.
+                            // Keep unknown names so subsequent moves cannot
+                            // fall back.
                             drop(plays.insert(node.commit, (edition, play)));
                             result
                         },
@@ -1425,7 +1426,8 @@ pub fn fold(
                                     commit: node.commit,
                                     parents: node.attested_parents,
                                 };
-                                // Both the retention set and the latest claim own their frontier.
+                                // Both the retention set and the latest claim
+                                // own their frontier.
                                 view.attestations.push((node.author, attestation.clone()));
                                 drop(view.indexes.insert(node.author, attestation));
                                 None
@@ -4200,7 +4202,7 @@ mod tests
                         domhringr_arena_session::Movement::Landed,
                         gandr_core_session::Refusal::ResumeAfterEnd,
                     );
-                    assert!(landings.is_empty());
+                    assert_eq!(landings, []);
                 }
                 assert_eq!(
                     view.refused()
