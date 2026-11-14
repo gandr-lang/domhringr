@@ -446,12 +446,19 @@ run = [
 description = "Shared formatter and configuration wall"
 run = "treefmt --ci"
 
-# npm sidecars and mise.lock move together; a warm install can hide a digest
-# mismatch that fails cold CI bootstrap. --locked refuses that mismatch.
-# Name the npm pins so a workstation does not install unrelated global tools.
+# npm sidecars, the rust pin and mise.lock move together; a warm install can
+# hide a digest mismatch or a stale rust entry, which fail cold CI bootstrap.
+# --locked refuses both. Name the pins so a workstation does not install
+# unrelated global tools. `.config/mise/lockfile-cases.bash` holds a lock
+# whose rust entry is not the pin, and the install refuses it (#125).
 ["check:lockfile"]
-description = "Check npm-backed pins install from the committed lockfile"
-run = "mise install --locked npm:oxfmt npm:@commitlint/cli"
+description = "Check npm-backed pins and the rust pin install from the committed lockfile"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+mise install --locked npm:oxfmt npm:@commitlint/cli rust
+.config/mise/lockfile-cases.bash
+'''
 
 # The enforcing suite, instrumented into target/coverage so it never shares
 # the cached enforcing state. The edition-1 peer is the binary the suite
