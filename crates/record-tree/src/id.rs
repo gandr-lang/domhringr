@@ -172,7 +172,8 @@ impl fmt::Display for TreeId
     ) -> fmt::Result
     {
         // economy: iroh's encoder returns a fresh `String`; writing the
-        // characters in place needs a z-base-32 codec this crate does not carry.
+        // characters in place needs a z-base-32 codec this crate does not
+        // carry.
         f.write_str(&self.0.to_z32())
     }
 }

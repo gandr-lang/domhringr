@@ -742,8 +742,9 @@ impl Play
         ) {
             self.moves.push(Move::End);
         }
-        // economy: replay each canonical prefix because the upstream monitor has no
-        // cursor API; a resumable monitor removes this quadratic cost.
+        // economy: replay each canonical prefix because the upstream monitor
+        // has no cursor API; a resumable monitor removes this quadratic
+        // cost.
         match gandr_core_session::replay(session, &self.moves) {
             Ok(_) => Ok(Progress::Complete),
             Err(ReplayError::IncompleteRun { expected, .. }) => Ok(Progress::Open(expected)),

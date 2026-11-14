@@ -1968,7 +1968,8 @@ impl CanonicalValue for Receipt
             DISPATCH => {
                 let seat = opened.peer(reader)?;
                 let brief = Brief::decode_tokens(reader)?;
-                // Only an absent field denotes edition 1; malformed fields fail.
+                // Only an absent field denotes edition 1; malformed fields
+                // fail.
                 let edition = match reader.read_word() {
                     Ok(word) => Edition::from(u64::from(word)),
                     Err(ValueError::UnexpectedToken {
