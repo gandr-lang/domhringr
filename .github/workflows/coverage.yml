@@ -115,6 +115,16 @@ jobs:
         with:
           install-toolchain: ${{ needs.ci-image-ref.outputs.ref == '' }}
           cache-save: false
+      # The bare runner has no lld. Cargo's configured linker requires it.
+      - &install-lld
+        name: install lld on the bare runner
+        if: ${{ needs.ci-image-ref.outputs.ref == '' }}
+        run: sudo apt-get update && sudo apt-get install --yes lld
+      - &verify-lld
+        name: verify lld on the bare runner
+        if: ${{ needs.ci-image-ref.outputs.ref == '' }}
+        run: test -x /usr/bin/ld.lld
+
       - &install-policy-tools
         name: install mise-managed policy tools
         if: ${{ needs.ci-image-ref.outputs.ref == '' }}
@@ -218,6 +228,8 @@ jobs:
       - *read-sibling-pins
       - *checkout-gandr
       - *setup-rust
+      - *install-lld
+      - *verify-lld
       - *identify-coverage-state
       - *restore-coverage-state
       - *measure-coverage
