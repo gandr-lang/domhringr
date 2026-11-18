@@ -16,13 +16,14 @@ files.glob = ["prek.toml", "mise.toml", "mise.lock"]
 pass_filenames = false
 stages = ["pre-commit"]
 
-# npm sidecars and mise.lock must describe the same cold-install tree.
+# npm sidecars, the rust pin and mise.lock must describe the same cold-install
+# tree, so a change of the pin alone runs the check too (#125).
 [[repos.hooks]]
 id = "lockfile"
 name = "locked-install check"
 language = "system"
 entry = "mise run check:lockfile"
-files.glob = ["mise.toml", "mise.lock", ".mise/locks/**"]
+files.glob = ["mise.toml", "mise.lock", ".mise/locks/**", "rust-toolchain.toml"]
 pass_filenames = false
 stages = ["pre-commit"]
 

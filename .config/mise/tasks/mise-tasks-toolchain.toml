@@ -63,8 +63,12 @@ elif [ -f Cargo.toml ]; then
   perl -0777 -pi -e 's{(^\[workspace\.dependencies\.clippy_utils\]\n)(.*?)(?=^\[|\z)}{my ($head, $body) = ($1, $2); $body =~ s/^tag = ".*"$/tag = "rust-$ENV{WORKFLOW_STABLE}"/m; "$head$body"}gmse' Cargo.toml
 fi
 perl -pi -e 's/^channel = .*/channel = "$ENV{WORKFLOW_CHANNEL}"/' rust-toolchain.toml
+# mise reads the rust pin from rust-toolchain.toml and holds it in mise.lock,
+# and CI installs it with --locked. The install writes the entry of the new
+# pin, so the lock moves with the pin (#125).
+mise install rust
 
-echo "pinned channel $channel; workflow revision ${revision:-local-library}"
+echo "pinned channel $channel, and its entry in mise.lock; workflow revision ${revision:-local-library}"
 echo 'clear ~/.dylint_drivers and target/dylint, then rerun the full gate wall'
 echo 'external consumers: mise run check'
 {% endraw %}
