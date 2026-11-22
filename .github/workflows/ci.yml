@@ -127,7 +127,7 @@ jobs:
         # The pinned mise must read mise.lock's format version 2; an older one
         # warns and resolves every tool unlocked. The CI image parses this
         # step for the version it bakes, so the two cannot drift.
-        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
         with:
           version: 2026.10.3
           cache: true
